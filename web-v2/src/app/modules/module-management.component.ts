@@ -8,6 +8,7 @@ import { CatalogModule, CatalogNode, CoreRuntimeApiService, CoreRuntimeState, Mo
 
 const STATE_TEXT: Record<string, string> = {
   NOT_INSTALLED: 'Не встановлено', INSTALLED: 'Встановлено', ACTIVE: 'Активний', INACTIVE: 'Вимкнено', FAILED: 'Збій',
+  SYSTEM: 'Системний компонент',
 };
 
 const REASON_TEXT: Record<string, string> = {
@@ -52,6 +53,12 @@ const REASON_TEXT: Record<string, string> = {
           @if (module.requires_gpu) { <span class="text-xs rounded px-2 py-0.5 bg-amber-100 text-amber-800">{{ 'Потрібен GPU' | t }}</span> }
           @if (module.target === 'isolated_lab') { <span class="text-xs rounded px-2 py-0.5 bg-sky-100 text-sky-800">{{ 'Лише окрема nonproduction VM' | t }}</span> }
         </div>
+        @if (module.system) {
+          <p class="text-sm" [attr.data-testid]="'system-health-' + module.module_id">
+            {{ (module.health === 'RUNNING' ? 'Працює' : 'Недоступний') | t }} ·
+            <span class="text-slate-500">{{ 'Розгортається й оновлюється разом із релізом Vertep' | t }}</span>
+          </p>
+        } @else {
         <table class="w-full text-sm">
           <thead><tr class="text-left text-slate-500"><th class="py-1">{{ 'Вузол' | t }}</th><th>{{ 'Розміщення' | t }}</th><th>{{ 'Готовність' | t }}</th></tr></thead>
           <tbody>
@@ -84,7 +91,11 @@ const REASON_TEXT: Record<string, string> = {
           }
           </tbody>
         </table>
-        @if (isAdmin()) {
+        }
+        @if (moduleError()?.module === module.module_id) {
+          <div class="rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-800" role="alert" [attr.data-testid]="'module-action-error-' + module.module_id">{{ moduleError()!.message }}</div>
+        }
+        @if (isAdmin() && !module.system) {
           <div class="flex flex-wrap gap-2 text-sm">
             @if (module.state === 'NOT_INSTALLED' && module.bundled) {
               <button class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50" [disabled]="busy()" (click)="run('install', { bundled: module.module_id })" [attr.data-testid]="'install-' + module.module_id">{{ 'Встановити' | t }}</button>
@@ -173,18 +184,29 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
     this.choices.set({ ...this.choices(), [module.module_id]: checked ? [...current, nodeId] : current });
   }
 
-  private act(request: Observable<unknown>): void {
+  /** The answer appears in the card the administrator acted on, not above the list (out of view). */
+  moduleError = signal<{ module: string; message: string } | null>(null);
+
+  private act(request: Observable<unknown>, moduleId?: string): void {
     this.busy.set(true);
     this.error.set(null);
+    this.moduleError.set(null);
     request.subscribe({
       next: () => { this.busy.set(false); this.load(); },
-      error: (error: Error) => { this.busy.set(false); this.error.set(error.message); this.load(); },
+      error: (error: Error) => {
+        this.busy.set(false);
+        if (moduleId) this.moduleError.set({ module: moduleId, message: error.message });
+        else this.error.set(error.message);
+        this.load();
+      },
     });
   }
 
-  run(action: string, body: Record<string, unknown>): void { this.act(this.api.lifecycle(action, body)); }
-  savePlacement(module: CatalogModule): void { this.act(this.api.placement(module.module_id, this.selected(module.module_id))); }
-  approve(module: CatalogModule): void { this.act(this.api.approve(module.module_id, module.permissions)); }
+  run(action: string, body: Record<string, unknown>): void {
+    this.act(this.api.lifecycle(action, body), String(body['module_id'] ?? body['bundled'] ?? '') || undefined);
+  }
+  savePlacement(module: CatalogModule): void { this.act(this.api.placement(module.module_id, this.selected(module.module_id)), module.module_id); }
+  approve(module: CatalogModule): void { this.act(this.api.approve(module.module_id, module.permissions), module.module_id); }
   prepareCore(role: string): void {
     const active = this.core()?.active_roles || [];
     this.act(this.runtime.prepare([...new Set([...active, role])]));

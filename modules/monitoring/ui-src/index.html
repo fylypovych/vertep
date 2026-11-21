@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Моніторинг - Vertep</title>
+    <!-- vertep:styles -->
+    <!-- vertep:chartjs -->
+</head>
+<body class="bg-slate-50 min-h-screen p-6">
+    <div class="max-w-7xl mx-auto">
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-2xl font-bold text-slate-900">Моніторинг системи</h1>
+            <div class="flex gap-2">
+                <button id="refreshBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Оновити</button>
+                <button id="createAlertBtn" class="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700">Новий алерт</button>
+            </div>
+        </div>
+
+        <!-- History retention (#503): 3 days by default, the administrator may extend it -->
+        <div class="bg-white rounded-lg shadow p-4 mb-6 flex items-center gap-3" id="retentionPanel">
+            <label for="retentionDays" class="text-sm text-slate-700">Зберігати історію, днів</label>
+            <input id="retentionDays" type="number" min="3" step="1" class="w-24 px-2 py-1 border rounded">
+            <button id="retentionSave" class="px-3 py-1 bg-blue-600 text-white rounded">Зберегти</button>
+            <span id="retentionStatus" class="text-sm text-slate-500"></span>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6" id="statsCards">
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <p class="text-sm text-slate-500">Онлайн вузли</p>
+                <p id="statNodes" class="text-3xl font-bold text-emerald-600">—</p>
+            </div>
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <p class="text-sm text-slate-500">Активні алерти</p>
+                <p id="statAlerts" class="text-3xl font-bold text-amber-600">—</p>
+            </div>
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <p class="text-sm text-slate-500">Критичні алерти</p>
+                <p id="statCritical" class="text-3xl font-bold text-red-600">—</p>
+            </div>
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <p class="text-sm text-slate-500">Помилки за годину</p>
+                <p id="statErrors" class="text-3xl font-bold text-slate-600">—</p>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="mb-4 border-b border-slate-200">
+            <nav class="flex gap-4" aria-label="Tabs">
+                <button class="tab-btn px-4 py-2 font-medium text-sm border-b-2 border-emerald-600 text-emerald-600" data-tab="metrics">Метрики</button>
+                <button class="tab-btn px-4 py-2 font-medium text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" data-tab="alerts">Алерти</button>
+                <button class="tab-btn px-4 py-2 font-medium text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" data-tab="health">Health Checks</button>
+                <button class="tab-btn px-4 py-2 font-medium text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" data-tab="logs">Логи</button>
+            </nav>
+        </div>
+
+        <!-- Metrics Tab -->
+        <div id="tabMetrics">
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold">Метрики в реальному часі</h2>
+                    <select id="metricFilter" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg">
+                        <option value="">Всі метрики</option>
+                    </select>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="metricsGrid">
+                </div>
+                <div id="metricChart" class="mt-6">
+                    <canvas id="chartCanvas" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alerts Tab -->
+        <div id="tabAlerts" class="hidden">
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold">Алерти</h2>
+                    <div class="flex gap-2">
+                        <label class="flex items-center gap-2 text-sm">
+                            <input type="checkbox" id="alertActiveOnly"> Тільки активні
+                        </label>
+                        <select id="alertSeverityFilter" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg">
+                            <option value="">Всі рівні</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="space-y-3" id="alertsList">
+                </div>
+            </div>
+        </div>
+
+        <!-- Health Tab -->
+        <div id="tabHealth" class="hidden">
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <h2 class="text-lg font-semibold mb-4">Health Checks</h2>
+                <div class="space-y-3" id="healthList">
+                </div>
+            </div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div id="tabLogs" class="hidden">
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold">Системні логи</h2>
+                    <div class="flex gap-2">
+                        <select id="logLevelFilter" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg">
+                            <option value="">Всі рівні</option>
+                            <option value="critical">Critical</option>
+                            <option value="error">Error</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                            <option value="debug">Debug</option>
+                        </select>
+                        <input type="text" id="logComponentFilter" placeholder="Фільтр по компоненту" class="px-3 py-1.5 text-sm border border-slate-200 rounded-lg">
+                    </div>
+                </div>
+                <div class="space-y-2 max-h-96 overflow-y-auto" id="logsList">
+                </div>
+            </div>
+        </div>
+
+        <!-- Alert Modal -->
+        <div id="alertModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4">
+                <h3 id="alertModalTitle" class="text-lg font-semibold text-slate-900 mb-4">Новий алерт</h3>
+                <form id="alertForm" class="space-y-4">
+                    <input type="hidden" name="id" id="alertId">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Назва *</label>
+                        <input name="name" id="alertName" required class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Рівень важливості *</label>
+                        <select name="severity" id="alertSeverity" required class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            <option value="info">Info</option>
+                            <option value="warning">Warning</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Умова спрацювання</label>
+                        <input name="condition" id="alertCondition" placeholder="наприклад: cpu_usage > 90" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Повідомлення</label>
+                        <textarea name="message" id="alertMessage" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" name="active" id="alertActive">
+                        <label for="alertActive" class="text-sm text-slate-700">Активувати одразу</label>
+                    </div>
+                    <div class="flex justify-end gap-2 pt-4">
+                        <button type="button" id="alertCancelBtn" class="px-4 py-2 text-slate-600 hover:text-slate-800">Скасувати</button>
+                        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Зберегти</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // The extension has no network of its own (CSP default-src 'none'); the panel relays
+    // requests to this module's Gateway API with the user's session (#493/#501).
+    const vertepFetch = (() => {
+      let next = 0;
+      const pending = new Map();
+      window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (event.source !== window.parent || !data || data.type !== 'vertep-module-response' || !pending.has(data.id)) return;
+        const resolve = pending.get(data.id);
+        pending.delete(data.id);
+        resolve({ ok: data.status >= 200 && data.status < 300, status: data.status, json: async () => data.body });
+      });
+      return (path, options = {}) => new Promise((resolve) => {
+        const id = ++next;
+        pending.set(id, resolve);
+        let body;
+        if (options.body !== undefined) { try { body = JSON.parse(options.body); } catch (error) { body = options.body; } }
+        window.parent.postMessage({ type: 'vertep-module-request', id, method: options.method || 'GET', path, body }, '*');
+      });
+    })();
+
+        const API = '/api/modules/monitoring/v1';
+        let metricsChart = null;
+        let currentMetricName = null;
+
+        async function fetchJSON(url, options = {}) {
+            const res = await vertepFetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
+            if (!res.ok) throw new Error((await res.json()).error || 'Request failed');
+            return res.json();
+        }
+
+        function showTab(tab) {
+            document.querySelectorAll('[id^="tab"]').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`tab${tab.charAt(0).toUpperCase() + tab.slice(1)}`).classList.remove('hidden');
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                const isActive = btn.dataset.tab === tab;
+                btn.classList.toggle('border-emerald-600', isActive);
+                btn.classList.toggle('text-emerald-600', isActive);
+                btn.classList.toggle('border-transparent', !isActive);
+                btn.classList.toggle('text-slate-500', !isActive);
+            });
+        }
+
+        function showModal(id) {
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        function hideModal(id) {
+            document.getElementById(id).classList.add('hidden');
+        }
+
+        async function loadRetention() {
+            const data = await fetchJSON(`${API}/settings/retention`);
+            document.getElementById('retentionDays').value = data.retention_days;
+        }
+
+        document.getElementById('retentionSave').addEventListener('click', async () => {
+            const status = document.getElementById('retentionStatus');
+            try {
+                const days = parseInt(document.getElementById('retentionDays').value, 10);
+                const data = await fetchJSON(`${API}/settings/retention`, { method: 'PUT', body: JSON.stringify({ retention_days: days }) });
+                status.textContent = `Збережено: ${data.retention_days}`;
+            } catch (error) {
+                status.textContent = error.message;
+            }
+        });
+
+        async function loadStats() {
+            const stats = await fetchJSON(`${API}/stats`);
+            document.getElementById('statNodes').textContent = stats.online_nodes || 0;
+            document.getElementById('statAlerts').textContent = stats.active_alerts || 0;
+            document.getElementById('statCritical').textContent = stats.critical_alerts || 0;
+            document.getElementById('statErrors').textContent = stats.recent_errors || 0;
+        }
+
+        async function loadMetrics() {
+            const metrics = await fetchJSON(`${API}/metrics/latest`);
+            const grid = document.getElementById('metricsGrid');
+            const filter = document.getElementById('metricFilter');
+            grid.innerHTML = '';
+            
+            // Group by name
+            const byName = {};
+            metrics.forEach(m => {
+                if (!byName[m.name]) byName[m.name] = [];
+                byName[m.name].push(m);
+            });
+
+            // Update filter options
+            const currentFilter = filter.value;
+            filter.innerHTML = '<option value="">Всі метрики</option>';
+            Object.keys(byName).sort().forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                filter.appendChild(opt);
+            });
+            filter.value = currentFilter;
+
+            Object.entries(byName).forEach(([name, items]) => {
+                if (currentFilter && currentFilter !== name) return;
+                const latest = items[0];
+                const card = document.createElement('div');
+                card.className = 'border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer';
+                card.innerHTML = `
+                    <h3 class="font-semibold text-slate-900">${name}</h3>
+                    <p class="text-2xl font-bold text-emerald-600 mt-1">${latest.value}</p>
+                    <p class="text-sm text-slate-500 mt-1">${latest.labels ? Object.entries(latest.labels).map(([k,v]) => `${k}=${v}`).join(', ') : 'без міток'}</p>
+                    <p class="text-xs text-slate-400 mt-2">${latest.node_id || 'global'} • ${new Date(latest.timestamp).toLocaleString()}</p>
+                `;
+                card.onclick = () => showMetricChart(name, items);
+                grid.appendChild(card);
+            });
+        }
+
+        function showMetricChart(name, items) {
+            currentMetricName = name;
+            const ctx = document.getElementById('chartCanvas').getContext('2d');
+            if (metricsChart) metricsChart.destroy();
+            
+            const sorted = items.slice().reverse().slice(-50);
+            metricsChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sorted.map(m => new Date(m.timestamp).toLocaleTimeString()),
+                    datasets: [{
+                        label: name,
+                        data: sorted.map(m => m.value),
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: false }
+                    }
+                }
+            });
+            document.getElementById('metricChart').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        async function loadAlerts() {
+            const activeOnly = document.getElementById('alertActiveOnly').checked;
+            const severity = document.getElementById('alertSeverityFilter').value;
+            const alerts = await fetchJSON(`${API}/alerts?active_only=${activeOnly}${severity ? '&severity=' + severity : ''}`);
+            const list = document.getElementById('alertsList');
+            list.innerHTML = '';
+            if (alerts.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-500 text-center py-4">Алертів не знайдено</p>';
+                return;
+            }
+            alerts.forEach(a => {
+                const severityColors = {
+                    critical: 'bg-red-100 text-red-700 border-red-200',
+                    warning: 'bg-amber-100 text-amber-700 border-amber-200',
+                    info: 'bg-blue-100 text-blue-700 border-blue-200'
+                };
+                const div = document.createElement('div');
+                div.className = `border rounded-lg p-4 ${severityColors[a.severity] || 'bg-slate-100 text-slate-700 border-slate-200'}`;
+                div.innerHTML = `
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <h4 class="font-semibold">${a.name}</h4>
+                            <p class="text-sm mt-1">${a.message || '—'}</p>
+                            <p class="text-xs mt-1 font-mono">${a.condition || 'без умови'}</p>
+                            <div class="flex gap-2 mt-2">
+                                <span class="px-2 py-0.5 text-xs rounded bg-white/50">${a.severity.toUpperCase()}</span>
+                                <span class="px-2 py-0.5 text-xs rounded ${a.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${a.active ? 'Активний' : 'Вирішено'}</span>
+                                ${a.fired_at ? `<span class="px-2 py-0.5 text-xs text-slate-500">спрацював: ${new Date(a.fired_at).toLocaleString()}</span>` : ''}
+                                ${a.resolved_at ? `<span class="px-2 py-0.5 text-xs text-slate-500">вирішено: ${new Date(a.resolved_at).toLocaleString()}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            ${a.active ? `<button class="text-sm text-white bg-red-600 hover:bg-red-700 px-3 py-1 rounded" onclick="resolveAlert('${a.id}')">Вирішити</button>` : ''}
+                            <button class="text-sm text-slate-600 hover:text-slate-800 px-3 py-1 rounded" onclick="editAlert('${a.id}')">Редагувати</button>
+                        </div>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function loadHealth() {
+            const health = await fetchJSON(`${API}/health-checks`);
+            const list = document.getElementById('healthList');
+            list.innerHTML = '';
+            if (health.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-500 text-center py-4">Health checks не знайдено</p>';
+                return;
+            }
+            health.forEach(h => {
+                const statusColors = {
+                    healthy: 'bg-emerald-100 text-emerald-700',
+                    degraded: 'bg-amber-100 text-amber-700',
+                    unhealthy: 'bg-red-100 text-red-700'
+                };
+                const div = document.createElement('div');
+                div.className = 'flex items-center justify-between p-4 border border-slate-200 rounded-lg';
+                div.innerHTML = `
+                    <div>
+                        <h4 class="font-semibold">${h.component}</h4>
+                        <p class="text-sm text-slate-500">${h.message || '—'}</p>
+                        <p class="text-xs text-slate-400 mt-1">Перевірено: ${new Date(h.checked_at).toLocaleString()}</p>
+                    </div>
+                    <span class="px-3 py-1 text-sm font-medium rounded ${statusColors[h.status] || 'bg-slate-100 text-slate-500'}">${h.status.toUpperCase()}</span>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function loadLogs() {
+            const level = document.getElementById('logLevelFilter').value;
+            const component = document.getElementById('logComponentFilter').value;
+            const logs = await fetchJSON(`${API}/logs${level ? '?level=' + level : ''}${component ? (level ? '&' : '?') + 'component=' + component : ''}&limit=200`);
+            const list = document.getElementById('logsList');
+            list.innerHTML = '';
+            if (logs.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-500 text-center py-4">Логів не знайдено</p>';
+                return;
+            }
+            logs.forEach(l => {
+                const levelColors = {
+                    critical: 'bg-red-100 text-red-700',
+                    error: 'bg-red-50 text-red-600',
+                    warning: 'bg-amber-50 text-amber-600',
+                    info: 'bg-blue-50 text-blue-600',
+                    debug: 'bg-slate-50 text-slate-500'
+                };
+                const div = document.createElement('div');
+                div.className = `px-3 py-2 text-sm font-mono rounded ${levelColors[l.level] || ''}`;
+                div.innerHTML = `
+                    <span class="text-slate-400">[${new Date(l.timestamp).toLocaleTimeString()}]</span>
+                    <span class="mx-2 font-medium">${l.level.toUpperCase()}</span>
+                    <span class="text-slate-500">${l.component}:</span>
+                    <span>${l.message}</span>
+                    ${l.context && Object.keys(l.context).length ? `<pre class="text-xs mt-1">${JSON.stringify(l.context, null, 2)}</pre>` : ''}
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        // Tab handlers
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.onclick = () => showTab(btn.dataset.tab);
+        });
+
+        // Alert handlers
+        document.getElementById('createAlertBtn').onclick = () => {
+            document.getElementById('alertForm').reset();
+            document.getElementById('alertId').value = '';
+            document.getElementById('alertModalTitle').textContent = 'Новий алерт';
+            document.getElementById('alertActive').checked = false;
+            showModal('alertModal');
+        };
+
+        document.getElementById('alertCancelBtn').onclick = () => hideModal('alertModal');
+
+        document.getElementById('alertForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = {
+                name: form.name.value,
+                severity: form.severity.value,
+                condition: form.condition.value,
+                message: form.message.value,
+                active: form.active.checked,
+            };
+            const id = form.id.value;
+            if (id) {
+                data.id = id;
+                await fetchJSON(`${API}/alerts/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+            } else {
+                data.id = 'alert_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+                await fetchJSON(`${API}/alerts`, { method: 'POST', body: JSON.stringify(data) });
+            }
+            hideModal('alertModal');
+            loadAlerts();
+        };
+
+        window.resolveAlert = async (id) => {
+            await fetchJSON(`${API}/alerts/${id}/resolve`, { method: 'POST' });
+            loadAlerts();
+        };
+
+        window.editAlert = async (id) => {
+            const alert = await fetchJSON(`${API}/alerts/${id}`);
+            document.getElementById('alertId').value = alert.id;
+            document.getElementById('alertName').value = alert.name;
+            document.getElementById('alertSeverity').value = alert.severity;
+            document.getElementById('alertCondition').value = alert.condition;
+            document.getElementById('alertMessage').value = alert.message;
+            document.getElementById('alertActive').checked = alert.active;
+            document.getElementById('alertModalTitle').textContent = 'Редагувати алерт';
+            showModal('alertModal');
+        };
+
+        // Filters
+        document.getElementById('metricFilter').onchange = loadMetrics;
+        document.getElementById('alertActiveOnly').onchange = loadAlerts;
+        document.getElementById('alertSeverityFilter').onchange = loadAlerts;
+        document.getElementById('logLevelFilter').onchange = loadLogs;
+        document.getElementById('logComponentFilter').oninput = loadLogs;
+
+        // Refresh
+        document.getElementById('refreshBtn').onclick = async () => {
+            await loadStats();
+            loadMetrics();
+            loadAlerts();
+            loadHealth();
+            loadLogs();
+        };
+
+        // Auto-refresh every 30 seconds
+        setInterval(async () => {
+            await loadStats();
+            loadMetrics();
+            loadAlerts();
+            loadHealth();
+        }, 30000);
+
+        // Initial load
+        loadRetention().catch(() => {});
+        loadStats();
+        loadMetrics();
+        loadAlerts();
+        loadHealth();
+        loadLogs();
+    </script>
+</body>
+</html>

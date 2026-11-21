@@ -1,5 +1,5 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { map, Observable, of, throwError, timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
@@ -46,6 +46,18 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
         <p class="text-sm text-slate-500">{{ 'Резервних копій немає' | t }}</p>
       } @else {
         <p class="text-sm text-amber-700 mb-2" data-testid="backup-key-reminder">{{ 'Копія зашифрована, ключа в ній немає. Збережіть ключ шифрування окремо від файла: без нього копію не відновити.' | t }}</p>
+        <div class="mb-3 flex flex-wrap items-center gap-2 text-sm" data-testid="backup-key-export">
+          @if (!keyFormOpen()) {
+            <button (click)="keyFormOpen.set(true)" class="px-3 py-1 border border-slate-200 rounded-lg" data-testid="backup-key-open">{{ 'Завантажити ключ шифрування' | t }}</button>
+          } @else {
+            <input type="password" #keyPassword autocomplete="current-password" [placeholder]="'Пароль адміністратора' | t"
+                   class="px-2 py-1 border rounded" data-testid="backup-key-password">
+            <button (click)="exportKey(keyPassword.value)" [disabled]="keyBusy()" class="px-3 py-1 bg-emerald-600 text-white rounded-lg disabled:opacity-50" data-testid="backup-key-download">{{ 'Підтвердити й завантажити' | t }}</button>
+            <button (click)="keyFormOpen.set(false); keyError.set(null)" class="px-3 py-1 border rounded-lg">{{ 'Скасувати' | t }}</button>
+            <span class="text-xs text-slate-500">{{ 'Завантаження записується в аудит і створює алерт' | t }}</span>
+          }
+          @if (keyError()) { <span class="text-red-700" role="alert" data-testid="backup-key-error">{{ keyError() }}</span> }
+        </div>
         <div class="space-y-2">
           @for (backup of list.data(); track backup.snapshot_id) {
             <div class="flex items-center justify-between py-2 border-b border-slate-100">
@@ -72,6 +84,29 @@ export class BackupSectionComponent implements OnInit {
 
   constructor(private ops: OperationsApiService, private toast: ToastService, private confirm: ConfirmService) {}
   ngOnInit(): void { this.loadBackups(); }
+
+  readonly keyFormOpen = signal(false);
+  readonly keyBusy = signal(false);
+  readonly keyError = signal<string | null>(null);
+
+  exportKey(password: string): void {
+    this.keyBusy.set(true);
+    this.keyError.set(null);
+    this.ops.exportBackupKey(password).subscribe({
+      next: (blob) => {
+        this.keyBusy.set(false);
+        this.keyFormOpen.set(false);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'vertep-backup-key.txt';
+        link.click();
+        URL.revokeObjectURL(url);
+        this.toast.show('Ключ шифрування завантажено. Зберігайте його окремо від копій', 'success');
+      },
+      error: (error: Error) => { this.keyBusy.set(false); this.keyError.set(error.message); },
+    });
+  }
 
   loadBackups(): void {
     this.list.run(() => this.ops.backups().pipe(mapToSnapshots()), 'Не вдалося завантажити резервні копії');

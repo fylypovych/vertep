@@ -159,6 +159,8 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "unknown_module_source_action": { uk: "Невідома дія з джерелом модуля", en: "Unknown module source action" },
   "unknown_update_plan_action": { uk: "Невідома дія з планом оновлення", en: "Unknown update plan action" },
   "shared_worker_capabilities_need_the_dynamic_workflow_mode": { uk: "Спільні можливості Worker для модулів потребують динамічного режиму workflow", en: "Shared Worker capabilities need the dynamic workflow mode" },
+  "password_confirmation_failed": { uk: "Пароль не підтверджено", en: "Password confirmation failed" },
+  "system_component_is_deployed_and_updated_with_the_vertep_release": { uk: "Системний компонент розгортається й оновлюється разом із релізом Vertep", en: "System component is deployed and updated with the Vertep release" },
   "administrator_role_required": { uk: "Потрібна роль адміністратора", en: "Administrator role required" },
   "module_token_is_not_valid": { uk: "Токен модуля недійсний", en: "Module token is not valid" },
   "module_not_placed_or_not_approved": { uk: "Модуль не розміщено на цьому вузлі або не погоджено", en: "Module is not placed on this node or not approved" },

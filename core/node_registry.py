@@ -78,8 +78,32 @@ def _enrollment_id(value: object) -> str | None:
     return text if re.fullmatch(r"[a-z0-9][a-z0-9-]{7,63}", text) else None
 
 
-def create_registration_token(role: str, ttl_seconds: int = 900, push_token: bool = False) -> dict:
-    if role not in node_roles() or role == "core":
+def registration_capabilities(role: str) -> set[str]:
+    """Capabilities a node of this role may hold.
+
+    The CORE host's own Worker runs the roles of its deployment plan next to CORE
+    (heartbeat applies the same rule), so its registration allows those too.
+    """
+    allowed = set(node_roles()[role]["capabilities"])
+    if role == "core":
+        from .first_run import config_root
+        try:
+            plan = json.loads((config_root() / "deployment-plan.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            plan = {}
+        for additional in plan.get("additional_roles", []):
+            allowed.update(node_roles().get(additional, {}).get("capabilities", []))
+        from .deployment_plan import ENGINE_RUNTIMES
+        for runtime in plan.get("engine_runtimes", []):
+            allowed.update(ENGINE_RUNTIMES.get(runtime, {}).get("capabilities", ()))
+    return allowed
+
+
+def create_registration_token(role: str, ttl_seconds: int = 900, push_token: bool = False,
+                              *, local_core: bool = False) -> dict:
+    # "core" is never offered through the API: only CORE itself issues it, for the
+    # Worker on its own host (core.local_node).
+    if role not in node_roles() or (role == "core" and not local_core):
         raise ValueError("Unsupported registration role")
     if not 60 <= ttl_seconds <= 3600:
         raise ValueError("Registration token lifetime must be between 60 and 3600 seconds")
@@ -214,7 +238,7 @@ def enroll_node(token: str, requested_id: str, capabilities: list[str], hardware
             write_node_crl()
             return result
         role = token_record["role"]
-        allowed = set(node_roles()[role]["capabilities"])
+        allowed = registration_capabilities(role)
         effective = sorted(set(clean_capabilities) & allowed) if clean_capabilities else sorted(allowed)
         if not effective:
             raise ValueError("Node did not report any capability allowed for its registration role")
@@ -553,7 +577,7 @@ def _enroll_postgres(token: str, node_id: str, clean_capabilities: list[str], ha
                     "certificate_serial": serial, "certificate_expires_at": expires,
                     "configuration": {"capabilities": capabilities, "heartbeat_seconds": 15}}
         role = token_record[0]
-        allowed = set(node_roles()[role]["capabilities"])
+        allowed = registration_capabilities(role)
         effective = sorted(set(clean_capabilities) & allowed) if clean_capabilities else sorted(allowed)
         if not effective:
             raise ValueError("Node did not report any capability allowed for its registration role")

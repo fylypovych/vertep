@@ -220,3 +220,50 @@ class TestJobSequence:
     def test_memory_repository_next_sequence(self):
         repo = MemoryRepository()
         assert repo.next_job_sequence(2024, 10) == 11
+
+class TestPostgresTelegramUpdateIds:
+    """Telegram sends numeric chat/message ids; telegram_updates stores them as TEXT.
+
+    psycopg binds a Python int as bigint, and PostgreSQL refused `text = bigint`
+    ("operator does not exist"), so creating a job from Telegram failed (0.0.4.22).
+    """
+
+    def _repository(self):
+        from core.repository import PostgresRepository
+        calls = []
+
+        class Cursor:
+            def execute(self, sql, params):
+                calls.append(params)
+
+            def fetchone(self):
+                return None
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def cursor(self):
+                return self
+
+        Connection.execute = Cursor.execute
+        Connection.fetchone = Cursor.fetchone
+
+        class FakePsycopg:
+            @staticmethod
+            def connect(dsn):
+                return Connection()
+
+        repository = PostgresRepository.__new__(PostgresRepository)
+        repository.psycopg, repository.dsn = FakePsycopg, "postgresql://test"
+        return repository, calls
+
+    def test_ids_are_bound_as_text(self):
+        repository, calls = self._repository()
+        repository.has_telegram_update(8709475953, 42)
+        repository.record_telegram_update(8709475953, 42, {"text": "rere"})
+        assert calls[0] == ("8709475953", "42")
+        assert calls[1][:2] == ("8709475953", "42")

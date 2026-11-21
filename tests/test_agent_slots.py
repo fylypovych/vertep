@@ -132,3 +132,21 @@ def test_run_seeds_the_slots_and_stages_the_agent_of_a_new_runtime(tmp_path):
 def test_the_update_unit_runs_the_agent_from_its_slot():
     unit = (ROOT / "installer" / "vertep-update.service").read_text()
     assert "scripts/agent-slots.py run --root @VERTEP_ROOT@ -- --root @VERTEP_ROOT@" in unit
+
+
+def test_the_agent_in_a_slot_reads_the_installation_version_not_its_own(tmp_path):
+    """Regression: from agent/slots/a the agent read 0.0.0.0 and every update check failed with
+    "Current version is older than the supported upgrade path"."""
+    root = runtime(tmp_path, "0.0.4.22")
+    env = {"PATH": os.environ["PATH"], "HOME": str(root)}
+    agent = ["--", "--self-test", "--root", str(root), "--state-dir", str(root / "config" / "update")]
+    run = subprocess.run([SYSTEM_PYTHON, "-I", str(root / "scripts" / "agent-slots.py"), "run", "--root", str(root), *agent],
+                         capture_output=True, text=True, timeout=180, env=env)
+    assert run.returncode == 0, run.stderr
+    slot = root / "agent" / "slots" / "a"
+    assert not (slot / "VERSION").exists()
+    # Without VERTEP_ROOT in the environment (systemd does not set it): main() pins --root.
+    result = subprocess.run([SYSTEM_PYTHON, "-I", str(slot / "scripts" / "update-agent.py"), "--self-test",
+                             "--root", str(root), "--state-dir", str(root / "config" / "update")],
+                            capture_output=True, text=True, timeout=120, env=env)
+    assert result.returncode == 0, result.stderr

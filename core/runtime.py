@@ -190,6 +190,23 @@ def _enforce_module_advisories() -> None:
         logging.getLogger("vertep").warning("Module advisory check failed", exc_info=True)
 
 
+_last_local_enrollment = 0.0
+
+
+def _offer_local_worker_enrollment() -> None:
+    """The Worker on the CORE host gets its node identity like any node (mTLS, 20.11.2026)."""
+    global _last_local_enrollment
+    if time.monotonic() - _last_local_enrollment < float(os.getenv("VERTEP_LOCAL_ENROLLMENT_INTERVAL", "60")):
+        return
+    _last_local_enrollment = time.monotonic()
+    try:
+        from core.local_node import ensure_local_worker_enrollment
+        ensure_local_worker_enrollment()
+    except Exception:  # noqa: BLE001 - never stops the watchdog
+        import logging
+        logging.getLogger("vertep").warning("Local Worker enrollment offer failed", exc_info=True)
+
+
 async def _watchdog() -> None:
     global last_maintenance
     while True:
@@ -199,6 +216,7 @@ async def _watchdog() -> None:
         if workflow is not None:
             await asyncio.to_thread(workflow.tick)
         await asyncio.to_thread(_enforce_module_advisories)
+        await asyncio.to_thread(_offer_local_worker_enrollment)
         if not dispatch_allowed():
             continue
         if not task_queue.acquire_watchdog_lock(max(2, int(float(os.getenv("WATCHDOG_INTERVAL", "5")) * 2))):

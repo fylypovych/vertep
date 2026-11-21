@@ -95,6 +95,7 @@
     "brands": {
       "kind": "module",
       "version_source": "modules/brands/manifest.yaml",
+      "image": {"name": "vertep-module-brands", "context": "modules/brands", "file": "modules/brands/Dockerfile"},
       "paths": ["modules/brands/**"],
       "tests": ["tests/test_brands_module.py", "tests/test_brands_module_e2e.py"],
       "transition_base": "0.0.4.14",
@@ -103,6 +104,7 @@
     "characters": {
       "kind": "module",
       "version_source": "modules/characters/manifest.yaml",
+      "image": {"name": "vertep-module-characters", "context": "modules/characters", "file": "modules/characters/Dockerfile"},
       "paths": ["modules/characters/**"],
       "tests": ["tests/test_characters_module.py", "tests/test_characters_lifecycle_e2e.py",
                 "tests/test_characters_browser_rbac.py"],
@@ -112,15 +114,17 @@
     "monitoring": {
       "kind": "module",
       "version_source": "modules/monitoring/manifest.yaml",
+      "image": {"name": "vertep-module-monitoring", "context": "modules/monitoring", "file": "modules/monitoring/Dockerfile"},
       "paths": ["modules/monitoring/**"],
       "tests": ["tests/test_monitoring_module.py", "tests/test_monitoring_retention.py",
-                "tests/test_monitoring_ingest_e2e.py"],
+                "tests/test_monitoring_ingest_e2e.py", "tests/test_monitoring_module_ui_offline.py"],
       "transition_base": "0.0.4.14",
       "legacy_versions": {"1.0.0": "0.0.4.14"}
     },
     "publishing": {
       "kind": "module",
       "version_source": "modules/publishing/manifest.yaml",
+      "image": {"name": "vertep-module-publishing", "context": "modules/publishing", "file": "modules/publishing/Dockerfile"},
       "paths": ["modules/publishing/**"],
       "tests": ["tests/test_publishing_module.py", "tests/test_publishing_module_e2e.py"],
       "transition_base": "0.0.4.14",
@@ -129,6 +133,7 @@
     "storyboard": {
       "kind": "module",
       "version_source": "modules/storyboard/manifest.yaml",
+      "image": {"name": "vertep-module-storyboard", "context": "modules/storyboard", "file": "modules/storyboard/Dockerfile"},
       "paths": ["modules/storyboard/**"],
       "tests": ["tests/test_storyboard_module.py", "tests/test_storyboard_module_e2e.py",
                 "tests/test_storyboard_module_restore_e2e.py", "tests/test_storyboard_module_browser_e2e.py"],

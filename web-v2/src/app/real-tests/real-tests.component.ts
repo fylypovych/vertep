@@ -185,7 +185,10 @@ export class RealTestsComponent {
     return {
       PASS: 'Пройдено',
       FAIL: 'Невдалося',
-      PROCEDURE: 'Не переведено',
+      // A manual procedure was not run automatically: not a failure and not a pass.
+      PROCEDURE: 'Ручна процедура (не автоматизовано)',
+      // The stand lacks what the scenario needs (e.g. no GPU).
+      NOT_APPLICABLE: 'Не застосовно',
     }[result] ?? result;
   }
 

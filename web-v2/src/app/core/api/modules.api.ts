@@ -42,6 +42,8 @@ export interface CatalogModule {
   requires_gpu: boolean; target: string; scaling: string; resources: Record<string, number>;
   dependencies: unknown[]; permissions: string[]; approved_permissions: string[]; placement: string[];
   nodes: CatalogNodeEntry[];
+  /** Deployed and updated with the Vertep release (Web UI); no lifecycle actions. */
+  system?: boolean; health?: 'RUNNING' | 'UNAVAILABLE';
 }
 
 export interface CatalogNode { node_id: string; role?: string; gpu_available?: boolean; vram_mb?: number; environment: string; isolation: string; }

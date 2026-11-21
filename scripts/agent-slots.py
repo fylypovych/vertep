@@ -168,7 +168,8 @@ def run(root: Path, agent_args: list[str]) -> int:
             switch(root)
             active = state(root).get("active")
     script = (_base(root) / "slots" / active / "scripts" / "update-agent.py") if active else root / "scripts" / "update-agent.py"
-    code = subprocess.call([sys.executable, str(script), *agent_args])
+    # The slot holds only the agent code; the version and .env are those of the installation.
+    code = subprocess.call([sys.executable, str(script), *agent_args], env={**os.environ, "VERTEP_ROOT": str(root)})
     # A runtime update brought a new agent: stage it in the other slot; it becomes active
     # only after its own readiness check, otherwise the working slot stays.
     runtime_version = (root / "VERSION").read_text(encoding="utf-8").strip() if (root / "VERSION").exists() else None

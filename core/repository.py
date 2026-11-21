@@ -342,13 +342,14 @@ class PostgresRepository(StateRepository):
 
     def has_telegram_update(self, chat_id: str, message_id: str) -> bool:
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT 1 FROM telegram_updates WHERE chat_id=%s AND message_id=%s", (chat_id, message_id))
+            # Telegram sends numeric ids; the columns are TEXT (psycopg would bind an int as bigint).
+            cursor.execute("SELECT 1 FROM telegram_updates WHERE chat_id=%s AND message_id=%s", (str(chat_id), str(message_id)))
             return cursor.fetchone() is not None
 
     def record_telegram_update(self, chat_id: str, message_id: str, payload: dict) -> None:
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:
             cursor.execute("INSERT INTO telegram_updates(chat_id,message_id,payload) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING",
-                           (chat_id, message_id, json.dumps(payload)))
+                           (str(chat_id), str(message_id), json.dumps(payload)))
 
     def list_channels(self, brand_id: str | None = None) -> list[Channel]:
         with self.psycopg.connect(self.dsn) as connection, connection.cursor() as cursor:

@@ -64,6 +64,12 @@ export class OperationsApiService {
     return this.http.get<BackupListResponse>(`${this.base.url}/system/backups`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }
 
+  /** Owner decision 20.11.2026: the administrator re-downloads the key, confirmed by password, audited. */
+  exportBackupKey(password: string): Observable<Blob> {
+    return this.http.post(`${this.base.url}/system/backups/encryption-key`, { password },
+      { headers: this.base.headers(), responseType: 'blob' }).pipe(catchError(this.base.handleError));
+  }
+
   createBackup(): Observable<OperationAck> {
     return this.http.post<OperationAck>(`${this.base.url}/system/backups`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   }

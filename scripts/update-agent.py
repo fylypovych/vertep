@@ -738,6 +738,13 @@ def self_test(root: Path, state_dir: Path) -> int:
             importlib.import_module(name)
         except Exception as error:  # noqa: BLE001 - every import problem is a readiness failure
             problems.append(f"{name}: {error}")
+    if not problems:
+        # From a slot copy the version must still be the installation's (a slot has no VERSION):
+        # 0.0.0.0 here made every update check fail as "older than the supported upgrade path".
+        from core.version import application_version
+        if application_version() != ((root / "VERSION").read_text(encoding="utf-8").strip()
+                                     if (root / "VERSION").is_file() else application_version()):
+            problems.append(f"installation version is not read from {root}")
     key = root / "installer" / "update-public.pem"
     if not key.is_file() or not os.access(key, os.R_OK):
         problems.append(f"update trust key is not readable: {key}")
@@ -762,6 +769,9 @@ def main() -> None:
                         help="Local readiness of this agent copy (#514); never contacts CORE")
     args = parser.parse_args()
     root, state_dir = args.root.resolve(), args.state_dir.resolve()
+    # The agent may run from an A/B slot copy (#514): the installation version, .env and the
+    # runtime layout always belong to --root, never to the directory this script lives in.
+    os.environ["VERTEP_ROOT"] = str(root)
     if args.self_test:
         raise SystemExit(self_test(root, state_dir))
     sys.path.insert(0, str(root))

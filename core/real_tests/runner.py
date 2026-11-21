@@ -143,7 +143,9 @@ class RealTestRunner:
                                      detail=f"check '{name}' not registered", mandatory=True)
             else:
                 passed, detail = _safe_execute_check(check_fn, name)
-                if passed is None:
+                if passed is None and str(detail).startswith(_scenarios_module.NOT_APPLICABLE):
+                    status = CheckStatus.NOT_APPLICABLE
+                elif passed is None:
                     status = CheckStatus.SKIPPED
                 elif passed:
                     status = CheckStatus.PASS
@@ -178,7 +180,11 @@ class RealTestRunner:
             if not failures:
                 run.final_result = "PASS"
                 run.error_details = None
-            elif all(c.status == CheckStatus.SKIPPED for c in failures):
+            elif all(c.status == CheckStatus.NOT_APPLICABLE for c in failures):
+                # The stand lacks what the scenario needs (e.g. no GPU): neither proved nor failed.
+                run.final_result = "NOT_APPLICABLE"
+                run.error_details = "; ".join(f"{c.name}: {c.detail}" for c in failures[:10])
+            elif all(c.status in {CheckStatus.SKIPPED, CheckStatus.NOT_APPLICABLE} for c in failures):
                 run.final_result = "PROCEDURE"
                 run.error_details = "; ".join(
                     f"{c.name}: {c.detail}" for c in failures[:10]

@@ -259,6 +259,11 @@ class ModuleInstanceRegistry:
             declared = {p for i in self._instances.values() if i.module_id == module_id for p in i.manifest.permissions}
             if module_id in self._installed:
                 declared |= set(self._installed[module_id].permissions)
+            from .lifecycle import BUNDLED, bundled_manifest
+            if module_id in BUNDLED:
+                # An official module declares its permissions in the release manifest, so the
+                # administrator may approve them before installing it.
+                declared |= set(bundled_manifest(module_id).get("permissions") or [])
             if not declared and not permissions:
                 pass
             elif set(permissions) - declared:

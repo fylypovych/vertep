@@ -414,7 +414,8 @@ def _reconcile_alerts() -> None:
         alert_svc.resolve({"type": "UPDATE_FAILED"}, "update operation finished")
 
     deployment = _read_optional_json(config_root() / "deployment-status.json")
-    if deployment.get("state") == "FAILED":
+    from ..deployment_state import stale_failure
+    if deployment.get("state") == "FAILED" and not stale_failure(deployment):
         alert_svc.record({
             "severity": "error", "type": "ROLE_DEPLOYMENT_FAILED",
             "message": deployment.get("error") or "Не вдалося активувати роль",

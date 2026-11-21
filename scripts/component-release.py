@@ -2,14 +2,18 @@
 """Component releases and change-impact CI (#510).
 
   impact   --base REF --head REF | --files a b c   -> JSON: full_suite, components, tests
-  plan     --components a,b --sha SHA               -> JSON: tag per component, collision checks
+  plan     --components a,b --sha SHA [--releases F] -> JSON: tag per component, collision checks,
+                                                       image to build, backfill of packageless releases
   history                                           -> JSON: shared release -> first independent version
   manifest --component X --sha SHA --private-key K --output F [--artifact name=path ...] [--image digest]
+  package  --component X --private-key K --output F [--image ref@sha256:...] [--key-id ID]
+                                                    -> signed module package (package.json + .sha256)
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import subprocess
@@ -55,17 +59,32 @@ def cmd_impact(args) -> dict:
 def cmd_plan(args) -> dict:
     registry = c.load_registry()
     tags = _tags()
+    assets = {}
+    if args.releases:
+        # [{"tag": ..., "assets": [names]}] from the GitHub releases API.
+        assets = {item["tag"]: set(item.get("assets") or []) for item in json.loads(Path(args.releases).read_text())}
     plan = {}
     for component in [item for item in args.components.split(",") if item]:
         spec = registry["components"][component]
         version = c.declared_version(component, ROOT, registry)
         entry = {"version": version, "kind": spec["kind"]}
+        if spec.get("image"):
+            entry["image"] = spec["image"]
         try:
             entry["tag"] = c.check_release(component, version, args.sha, tags)
             entry["publish"] = spec["kind"] == "module" and entry["tag"] not in tags
         except c.ComponentError as error:
             entry["error"] = str(error)
             entry["publish"] = False
+        entry["backfill"] = False
+        tag = c.tag_name(component, version)
+        if spec["kind"] == "module" and tag in tags and tag in assets and "package.json" not in assets[tag]:
+            # A release published before packages existed (#510): add its package when the
+            # component files of the tagged commit are exactly those of this commit.
+            changed = _git("diff", "--name-only", tags[tag], args.sha).split()
+            if not [path for path in changed if any(fnmatch.fnmatch(path, pattern) for pattern in spec["paths"])]:
+                entry.update(backfill=True, commit=tags[tag])
+                entry.pop("error", None)
         plan[component] = entry
     return plan
 
@@ -110,6 +129,27 @@ def cmd_manifest(args) -> dict:
     return {"written": args.output, "tag": signed["tag"]}
 
 
+def cmd_package(args) -> dict:
+    key_id = args.key_id
+    trust = json.loads(c.PUBLISHER_TRUST.read_text(encoding="utf-8")) if c.PUBLISHER_TRUST.exists() else {}
+    keys = (trust.get("vertep") or {}).get("keys") or {}
+    if key_id is None:
+        if not keys:
+            raise SystemExit("config/module-trust/publishers.json has no vertep key: run scripts/create-module-signing-key.py")
+        key_id = list(keys)[-1]
+    package = c.sign_package(c.build_package(args.component, image=args.image), Path(args.private_key).read_bytes(), key_id)
+    if key_id in keys:
+        # The signature must verify with the public key CORE trusts, before anything is published.
+        from core.module.packages import verify_package
+        from core.module.trust import TrustStore
+        verify_package(package, TrustStore.from_root(c.PUBLISHER_TRUST.parent))
+    data = (json.dumps(package, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    Path(args.output).write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    Path(args.output + ".sha256").write_text(f"{digest}  package.json\n", encoding="utf-8")
+    return {"written": args.output, "sha256": digest, "signer": key_id, "image": args.image}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -120,6 +160,7 @@ def main() -> None:
     plan = sub.add_parser("plan")
     plan.add_argument("--components", required=True)
     plan.add_argument("--sha", required=True)
+    plan.add_argument("--releases")
     sub.add_parser("history")
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--component", required=True)
@@ -128,8 +169,15 @@ def main() -> None:
     manifest.add_argument("--output", required=True)
     manifest.add_argument("--artifact", action="append")
     manifest.add_argument("--image", action="append")
+    package = sub.add_parser("package")
+    package.add_argument("--component", required=True)
+    package.add_argument("--private-key", required=True)
+    package.add_argument("--output", required=True)
+    package.add_argument("--image")
+    package.add_argument("--key-id")
     args = parser.parse_args()
-    handler = {"impact": cmd_impact, "plan": cmd_plan, "history": cmd_history, "manifest": cmd_manifest}[args.command]
+    handler = {"impact": cmd_impact, "plan": cmd_plan, "history": cmd_history, "manifest": cmd_manifest,
+               "package": cmd_package}[args.command]
     print(json.dumps(handler(args), ensure_ascii=False, indent=2))
 
 

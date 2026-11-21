@@ -380,3 +380,61 @@ def verify_manifest(manifest: dict, public_key_pem: bytes, *, artifacts: dict[st
             if content is None or hashlib.sha256(content).hexdigest() != artifact["sha256"]:
                 raise ComponentError(f"Artifact {artifact.get('name')} does not match its hash")
     return manifest
+
+
+# -- module packages (#510/#511) ----------------------------------------------------------------
+# A component release of a module carries a signed module package (``package.json``): the
+# manifest (with the container image pinned to the digest built for this release), its migration
+# SQL and its UI bundle, signed with the official Ed25519 publisher key. CORE installs or updates
+# it through the Module Registry source like any external package (core.module.packages).
+
+PUBLISHER_TRUST = Path(__file__).resolve().parents[1] / "config" / "module-trust" / "publishers.json"
+
+
+def module_manifest_document(component: str, root: Path | None = None, registry: dict | None = None) -> dict:
+    import yaml
+    registry = registry or load_registry()
+    spec = registry["components"].get(component)
+    if not spec or spec["kind"] != "module":
+        raise ComponentError(f"{component} is not a module component")
+    data = yaml.safe_load(((root or ROOT) / spec["version_source"]).read_text(encoding="utf-8"))
+    return data.get("module") if isinstance(data.get("module"), dict) else data.get("manifest", data)
+
+
+def build_package(component: str, *, image: str | None = None, root: Path | None = None,
+                  registry: dict | None = None) -> dict:
+    """Unsigned package: manifest + every file CORE needs (migrations, UI bundle)."""
+    root = root or ROOT
+    registry = registry or load_registry()
+    manifest = dict(module_manifest_document(component, root, registry))
+    module_dir = (root / registry["components"][component]["version_source"]).parent
+    if image is not None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}", image):
+            raise ComponentError("Package image must be pinned by digest")
+        if not manifest.get("container"):
+            raise ComponentError(f"{component} has no container to pin")
+        manifest["container"] = {**manifest["container"], "image": image}
+    files: dict[str, str] = {}
+    for migration in manifest.get("migrations") or []:
+        path = module_dir / "migrations" / f"{migration['id']}.sql"
+        if not path.is_file():
+            raise ComponentError(f"{component}: migration {path.name} is missing")
+        files[f"migrations/{migration['id']}.sql"] = base64.b64encode(path.read_bytes()).decode("ascii")
+    ui = manifest.get("ui") or {}
+    for name, digest in (ui.get("files") or {}).items():
+        data = (module_dir / "ui" / name).read_bytes()
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise ComponentError(f"{component}: ui/{name} does not match the manifest digest")
+        files[name] = base64.b64encode(data).decode("ascii")
+    return {"manifest": manifest, "files": files}
+
+
+def sign_package(package: dict, private_key_pem: bytes, key_id: str) -> dict:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = serialization.load_pem_private_key(private_key_pem, password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ComponentError("Module package signing key must be Ed25519")
+    content = {"manifest": package["manifest"], "files": package["files"]}
+    raw = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return {**content, "signer": key_id, "signature": base64.b64encode(key.sign(raw)).decode("ascii")}

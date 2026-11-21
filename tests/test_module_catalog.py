@@ -38,7 +38,11 @@ def test_catalog_lists_modules_nodes_and_reasons(api):
 
     catalog = api.get("/api/nodes/module-catalog").json()
     assert {m["module_id"] for m in catalog["modules"]} == set(BUNDLED)
-    assert all(m["state"] == "NOT_INSTALLED" for m in catalog["modules"])
+    assert all(m["state"] == "NOT_INSTALLED" for m in catalog["modules"] if not m.get("system"))
+    # Web UI is deployed by the release (owner decision 20.11.2026): a system component, no actions.
+    web_ui = next(m for m in catalog["modules"] if m["module_id"] == "web-ui")
+    assert web_ui["system"] and web_ui["state"] == "SYSTEM" and web_ui["nodes"] == []
+    assert web_ui["health"] in {"RUNNING", "UNAVAILABLE"}
     image = {n["node_id"]: n["compatible_reasons"] for n in entry(api, "image")["nodes"]}
     assert image["gpu-node"] == []
     assert any("GPU" in reason for reason in image["cpu-node"])  # no GPU: honest reason, not READY
@@ -91,3 +95,20 @@ def test_role_access_is_unchanged_and_choice_is_admin_only(api, monkeypatch):
                        headers={"x-csrf-token": csrf}).status_code == 403
     assert moderator.put("/api/nodes/module-registry/placement/text", json={"node_ids": ["text-node"]},
                       headers={"x-csrf-token": csrf}).status_code == 403
+
+
+
+def test_system_components_refuse_lifecycle_actions_and_official_permissions_can_be_approved_before_install(api):
+    # Web UI is deployed and updated with the release: no install/activate/uninstall.
+    for action, body in (("install", {"bundled": "web-ui"}), ("activate", {"module_id": "web-ui"}),
+                         ("uninstall", {"module_id": "web-ui", "confirm": True})):
+        response = api.post(f"/api/nodes/module-registry/lifecycle/{action}", json=body)
+        assert response.status_code == 409, (action, response.text)
+    # The administrator could press "approve permissions" on a not yet installed official
+    # module and nothing happened (400 shown out of view): the release manifest declares them.
+    assert entry(api, "monitoring")["state"] == "NOT_INSTALLED"
+    response = api.put("/api/nodes/module-registry/approval/monitoring", json={"permissions": ["monitoring.read"]})
+    assert response.status_code == 200, response.text
+    assert entry(api, "monitoring")["approved_permissions"] == ["monitoring.read"]
+    assert api.put("/api/nodes/module-registry/approval/monitoring",
+                   json={"permissions": ["monitoring.write"]}).status_code in {400, 422}

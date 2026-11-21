@@ -378,6 +378,9 @@ def _consume_request(root: Path, runner=subprocess.run) -> dict:
                 or status.get("error") != str(error)):
             atomic_json(status_path, {"state": "FAILED", "phase": "VALIDATING",
                 "request_id": request.get("request_id"), "additional_roles": request.get("additional_roles", []),
+                # The version the failed request was made for: after an update CORE treats a
+                # failure of an older version as history, not as the current state.
+                "version": request.get("version"),
                 "error": str(error), "updated_at": datetime.now(timezone.utc).isoformat()})
         # PathExists otherwise immediately retries the failed request, repeatedly
         # applying and rolling back the same runtime. Preserve it for diagnosis,
@@ -431,7 +434,7 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         except (OSError, ValueError):
             previous_services = set()
     new_services = set(plan["services"])
-    status = {"state": "APPLYING", "phase": "PREPARING", "role": role,
+    status = {"state": "APPLYING", "phase": "PREPARING", "role": role, "version": version,
               "request_id": request.get("request_id"),
               "previous_roles": json.loads(previous_plan).get("additional_roles", []) if previous_plan else [],
               "additional_roles": plan.get("additional_roles", []), "services": sorted(new_services),

@@ -220,6 +220,9 @@ def module_lifecycle_action(action: str, request: Request, payload: dict = Body(
     }
     if action not in operations:
         raise HTTPException(404, "Unknown module lifecycle action")
+    from core.module.catalog import SYSTEM_COMPONENTS
+    if module_id in SYSTEM_COMPONENTS or str(payload.get("bundled", "")) in SYSTEM_COMPONENTS:
+        raise HTTPException(409, "System component is deployed and updated with the Vertep release")
     try:
         result = operations[action]()
     except (LifecycleError, ValueError, KeyError) as error:

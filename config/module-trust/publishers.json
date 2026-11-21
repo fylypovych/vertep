@@ -1,0 +1,10 @@
+{
+  "vertep": {
+    "keys": {
+      "vertep-modules-1": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAdrHSMZkcO29DMRYRKSuq2VjMQPq0aZ26qsFDOjGod6c=\n-----END PUBLIC KEY-----\n"
+    },
+    "repositories": [
+      "github.com/fylypovych/vertep"
+    ]
+  }
+}

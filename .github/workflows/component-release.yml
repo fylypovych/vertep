@@ -92,8 +92,10 @@ jobs:
     needs: [impact, tests]
     if: vars.COMPONENT_RELEASES_ENABLED == 'true' && needs.impact.outputs.components != ''
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -103,13 +105,24 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install pyyaml cryptography
-      - name: Plan versions (collisions and forward-only checks)
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Plan versions (collisions, forward-only, images, backfill of packageless releases)
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMPONENTS: ${{ needs.impact.outputs.components }}
         run: |
           set -euo pipefail
           git fetch --tags --force origin
-          python scripts/component-release.py plan --components "$COMPONENTS" --sha "$GITHUB_SHA" | tee plan.json
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '[.[] | {tag: .tag_name, assets: [.assets[].name]}]' | jq -s 'add' > releases.json
+          python scripts/component-release.py plan --components "$COMPONENTS" --sha "$GITHUB_SHA" \
+            --releases releases.json | tee plan.json
           python - <<'PY'
           import json, sys
           plan = json.load(open("plan.json"))
@@ -118,27 +131,56 @@ jobs:
               print("Component release refused:", errors)
               sys.exit(1)
           PY
-      - name: Sign and publish stable component releases
+      - name: Build images, sign packages and publish stable component releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SIGNING_KEY: ${{ secrets.RUNTIME_SIGNING_PRIVATE_KEY }}
+          MODULE_SIGNING_KEY: ${{ secrets.MODULE_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           key="${RUNNER_TEMP}/component-signing.pem"
+          module_key="${RUNNER_TEMP}/module-signing.pem"
           printf '%s' "$SIGNING_KEY" > "$key"
-          chmod 600 "$key"
+          printf '%s' "$MODULE_SIGNING_KEY" > "$module_key"
+          chmod 600 "$key" "$module_key"
+          trap 'rm -f "$key" "$module_key"' EXIT
           # Annotated tags need a committer identity on the runner.
           git config user.name "vertep-release[bot]"
           git config user.email "vertep-release[bot]@users.noreply.github.com"
-          for component in $(python -c 'import json; print(" ".join(n for n, e in json.load(open("plan.json")).items() if e["publish"]))'); do
-            tag="$(python -c "import json; print(json.load(open('plan.json'))['$component']['tag'])")"
-            out="${RUNNER_TEMP}/${tag}.manifest.json"
-            python scripts/component-release.py manifest --component "$component" --sha "$GITHUB_SHA" \
-              --private-key "$key" --output "$out"
-            git tag -a "$tag" "$GITHUB_SHA" -m "Vertep component $tag"
-            git push origin "refs/tags/$tag"
-            # Never "latest": bootstrap and the update agent resolve the runtime from releases/latest.
-            gh release create "$tag" "$out" --title "$tag" --notes "Stable signed component release $tag" \
-              --verify-tag --latest=false
+          field() { python -c "import json,sys; e=json.load(open('plan.json'))['$1']; v=e; [v:=v.get(k) if isinstance(v,dict) else None for k in sys.argv[1:]]; print(v if v is not None else '')" "${@:2}"; }
+          for component in $(python -c 'import json; print(" ".join(n for n, e in json.load(open("plan.json")).items() if e["publish"] or e.get("backfill")))'); do
+            tag="$(field "$component" tag)"
+            version="$(field "$component" version)"
+            commit="$(field "$component" commit)"; commit="${commit:-$GITHUB_SHA}"
+            out="${RUNNER_TEMP}/${tag}"
+            mkdir -p "$out"
+            assets=()
+            manifest_args=()
+            image_name="$(field "$component" image name)"
+            if [ -n "$image_name" ]; then
+              # The module's own container, pinned by digest inside its signed package.
+              ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image_name}"
+              docker buildx build --platform linux/amd64,linux/arm64 --push \
+                --tag "${ref}:component-${version}" \
+                --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+                --metadata-file "${out}/image.json" \
+                --file "$(field "$component" image file)" "$(field "$component" image context)"
+              digest="$(jq -r '."containerimage.digest"' "${out}/image.json")"
+              python scripts/component-release.py package --component "$component" --private-key "$module_key" \
+                --image "${ref}@${digest}" --output "${out}/package.json"
+              assets+=("${out}/package.json" "${out}/package.json.sha256")
+              manifest_args+=(--image "$digest" --artifact "package.json=${out}/package.json")
+            fi
+            python scripts/component-release.py manifest --component "$component" --sha "$commit" \
+              --private-key "$key" --output "${out}/${tag}.manifest.json" "${manifest_args[@]}"
+            if [ "$(field "$component" backfill)" = "True" ]; then
+              # A release published before packages existed gets its package (same component files).
+              gh release upload "$tag" "${out}/${tag}.manifest.json" "${assets[@]}" --clobber
+            else
+              git tag -a "$tag" "$GITHUB_SHA" -m "Vertep component $tag"
+              git push origin "refs/tags/$tag"
+              # Never "latest": bootstrap and the update agent resolve the runtime from releases/latest.
+              gh release create "$tag" "${out}/${tag}.manifest.json" "${assets[@]}" --title "$tag" \
+                --notes "Stable signed component release $tag" --verify-tag --latest=false
+            fi
           done
-          rm -f "$key"

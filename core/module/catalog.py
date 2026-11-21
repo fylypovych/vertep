@@ -86,6 +86,29 @@ def check_placement(registry, module_id: str, node_ids: list[str]) -> None:
             raise ValueError(f"Вузол {node_id}: " + "; ".join(reasons))
 
 
+# Components the release deploys itself (owner decision 20.11.2026): shown with their real
+# state, never installed, activated or removed through the module lifecycle.
+SYSTEM_COMPONENTS = {"web-ui": ("VERTEP_WEB_UI_HEALTH_URL", "http://web-ui:8080/healthz")}
+_system_health: dict[str, tuple[float, str]] = {}
+
+
+def system_health(module_id: str) -> str:
+    """RUNNING / UNAVAILABLE from the component's own health endpoint (cached 30 s)."""
+    import os
+    import time
+    import httpx
+    cached = _system_health.get(module_id)
+    if cached and time.monotonic() - cached[0] < 30:
+        return cached[1]
+    variable, default = SYSTEM_COMPONENTS[module_id]
+    try:
+        state = "RUNNING" if httpx.get(os.getenv(variable, default), timeout=1).status_code == 200 else "UNAVAILABLE"
+    except httpx.HTTPError:
+        state = "UNAVAILABLE"
+    _system_health[module_id] = (time.monotonic(), state)
+    return state
+
+
 def catalog(runtime) -> dict:
     registry, lifecycle = runtime.modules, runtime.lifecycle
     records = lifecycle.records()
@@ -99,6 +122,15 @@ def catalog(runtime) -> dict:
     result = []
     for module_id, (manifest, bundled) in sorted(entries.items()):
         record = records.get(module_id)
+        if module_id in SYSTEM_COMPONENTS:
+            result.append({"module_id": module_id, "label": BUNDLED_LABELS.get(module_id) or module_id,
+                           "version": manifest.version, "kind": manifest.kind, "bundled": True, "system": True,
+                           "health": system_health(module_id), "runtime_role": None, "state": "SYSTEM",
+                           "requires_gpu": False, "target": manifest.placement["target"],
+                           "scaling": manifest.placement["scaling"], "resources": manifest.resource_requirements,
+                           "dependencies": [], "permissions": [], "approved_permissions": [], "placement": [],
+                           "nodes": []})
+            continue
         instances = {i.node_id: i.to_dict() for i in registry.instances(module_id)}
         result.append({
             "module_id": module_id, "label": BUNDLED_LABELS.get(module_id) or (manifest.ui or {}).get("navigation", [{}])[0].get("label") or module_id,

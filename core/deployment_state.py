@@ -27,3 +27,25 @@ def operation_state(request: dict, status: dict, path: Path) -> dict:
                                 if value["state"] == "QUEUED" else
                                 "Немає завершення розгортання. Перевірте системний виконавець і його журнал.")
     return value
+
+
+VERSION_MISMATCH = "Запит на розгортання створено для іншої версії Vertep"
+
+
+def stale_failure(status: dict, current_version: str | None = None) -> bool:
+    """A FAILED deployment of an older Vertep version is history after an update.
+
+    It stayed shown as "Застосування не вдалося" with an active alert forever, although the
+    request was already moved to deployment-failed/ and the running version is newer.
+    Status files written before the version field: only the version-mismatch failure is
+    by definition about another version.
+    """
+    if status.get("state") != "FAILED":
+        return False
+    if current_version is None:
+        from .version import application_version
+        current_version = application_version()
+    version = status.get("version")
+    if version:
+        return version != current_version
+    return status.get("error") == VERSION_MISMATCH

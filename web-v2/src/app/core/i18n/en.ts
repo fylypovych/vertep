@@ -912,6 +912,8 @@ export const EN: Record<string, string> = {
   "Не знайдено": "Not found",
   "Не налаштовано": "Not configured",
   "Не переведено": "Not verified",
+  "Ручна процедура (не автоматизовано)": "Manual procedure (not automated)",
+  "Не застосовно": "Not applicable",
   "Не підтвердили завершення роботи:": "Did not confirm finishing work:",
   "Неактивний": "Inactive",
   "Невалідний JSON": "Invalid JSON",
@@ -1319,7 +1321,15 @@ export const EN: Record<string, string> = {
   "Погоджуюся з втратою пізніших записів БД": "I accept losing later database writes",
   "Повернути": "Restore",
   "Непридатна точка": "Unsuitable point",
-  "Модуль повернуто до вибраної точки": "Module restored to the selected point"
+  "Модуль повернуто до вибраної точки": "Module restored to the selected point",
+  "Системний компонент": "System component",
+  "Workflow не вибрано — використано вбудований демонстраційний": "No workflow chosen: the built-in demo workflow is used",
+  "Завантажити ключ шифрування": "Download the encryption key",
+  "Пароль адміністратора": "Administrator password",
+  "Підтвердити й завантажити": "Confirm and download",
+  "Завантаження записується в аудит і створює алерт": "The download is audited and raises an alert",
+  "Ключ шифрування завантажено. Зберігайте його окремо від копій": "Encryption key downloaded. Keep it apart from the backups",
+  "Розгортається й оновлюється разом із релізом Vertep": "Deployed and updated with the Vertep release"
 };
 /** Texts built at run time: the values stay as they are. */
 export const EN_PATTERNS: [RegExp, string][] = [

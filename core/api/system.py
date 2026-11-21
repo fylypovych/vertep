@@ -116,7 +116,9 @@ def local_roles_status():
     plan = _read_optional_json(config_root() / "deployment-plan.json")
     deployment = _read_optional_json(config_root() / "deployment-status.json")
     request = _read_optional_json(config_root() / "deployment-request.json")
-    from ..deployment_state import operation_state
+    from ..deployment_state import operation_state, stale_failure
+    if not request and stale_failure(deployment):
+        deployment = {}
     deployment = operation_state(request, deployment, config_root() / "deployment-request.json")
     active = plan.get("additional_roles", []) if plan.get("role") == "core" else []
     if deployment.get("state") == "APPLYING":
@@ -270,6 +272,57 @@ def post_setup_backup_key():
     if key is None:
         raise HTTPException(404, "Backup key is not available on this node")
     return PlainTextResponse(key, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/api/system/backups/encryption-key")
+async def backup_encryption_key(request: Request):
+    """The backup encryption key again, for the administrator only (owner decision 20.11.2026).
+
+    Before this the key could be saved only once, in the post-setup dialog; an installation
+    that missed it could not restore its encrypted backups anywhere else. The administrator
+    confirms the password; every export is audited and raises an alert.
+    """
+    from fastapi.responses import PlainTextResponse
+    from ..post_setup import read_backup_key
+    from ..security import _authenticate_user
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        raise HTTPException(403, "Administrator role required")
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = {}
+    password = payload.get("password") if isinstance(payload, dict) else None
+    if not isinstance(password, str) or _authenticate_user(identity[0], password) != "admin":
+        _security_audit("backup_key_export_denied", identity[0])
+        raise HTTPException(403, "Password confirmation failed")
+    key = read_backup_key()
+    if key is None:
+        raise HTTPException(404, "Backup key is not available on this node")
+    _security_audit("backup_key_exported", identity[0])
+    try:
+        from ..alert_store import get_alert_store
+        get_alert_store().record({"severity": "warning", "type": "BACKUP_KEY_EXPORTED",
+                                  "message": f"Ключ шифрування резервних копій завантажив {identity[0]}",
+                                  "details": {"actor": identity[0], "at": datetime.now(timezone.utc).isoformat()}})
+    except Exception:  # noqa: BLE001 - the audit line above is the durable record
+        pass
+    return PlainTextResponse(key, headers={"Cache-Control": "no-store",
+                                           "Content-Disposition": 'attachment; filename="vertep-backup-key.txt"'})
+
+
+def _security_audit(event: str, actor: str) -> None:
+    """Structured journal line (category SECURITY) that /api/logs shows; never the key itself."""
+    from ..logging_config import secret_redact
+    record = {"timestamp": datetime.now(timezone.utc).isoformat(), "level": "WARNING", "logger": "core",
+              "message": f"SECURITY {event}", "category": "SECURITY", "actor": secret_redact(str(actor))}
+    root = Path(os.getenv("LOG_ROOT", "logs"))
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        with open(root / "security.jsonl", "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 @router.post("/api/system/post-setup/backup-key/saved")

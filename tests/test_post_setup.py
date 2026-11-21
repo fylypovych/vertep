@@ -69,3 +69,29 @@ def test_wizard_asks_for_telegram_and_makes_the_key_a_required_step():
     for element in ('id="telegramToken"', 'id="telegramAdmins"', 'id="backupKeyDownload"', 'id="backupKeySaved"'):
         assert element in html
     assert "telegram_admin_chat_ids" in Path("web-v2/src/app/setup/setup.component.ts").read_text(encoding="utf-8")
+
+
+def test_admin_downloads_the_key_again_with_password_audit_and_alert(config, monkeypatch, tmp_path):
+    """Owner decision 20.11.2026: the key is no longer a one-time download."""
+    import base64
+    (config / "backup.key").write_text("secret", encoding="utf-8")
+    monkeypatch.setenv("LOG_ROOT", str(tmp_path / "logs"))
+    alerts = []
+    monkeypatch.setattr("core.alert_store.get_alert_store", lambda: type("S", (), {"record": lambda self, a: alerts.append(a)})())
+    monkeypatch.setattr("core.security._authenticate_user",
+                        lambda user, password: "admin" if password == "right" else None)
+    client = TestClient(app)
+    whoami = client.get("/api/session")
+    if whoami.status_code != 200:
+        pytest.skip("test application has no administrator session")
+    denied = client.post("/api/system/backups/encryption-key", json={"password": "wrong"})
+    assert denied.status_code == 403 and alerts == []
+    response = client.post("/api/system/backups/encryption-key", json={"password": "right"})
+    assert response.status_code == 200 and response.text == "secret"
+    assert response.headers["cache-control"] == "no-store"
+    assert "attachment" in response.headers["content-disposition"]
+    assert [alert["type"] for alert in alerts] == ["BACKUP_KEY_EXPORTED"]
+    journal = (tmp_path / "logs" / "security.jsonl").read_text().splitlines()
+    events = [json.loads(line)["message"] for line in journal]
+    assert events == ["SECURITY backup_key_export_denied", "SECURITY backup_key_exported"]
+    assert "secret" not in "".join(journal)

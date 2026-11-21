@@ -63,7 +63,7 @@ import { ModuleUpdatesComponent } from './module-updates.component';
             </p>
           }
         </div>
-        @if (readiness()) {
+        @if (readiness() && showReadiness()) {
           <div class="mb-4 p-3 rounded-lg" [class.bg-emerald-50]="readiness()!.ready" [class.bg-amber-50]="!readiness()!.ready">
             <p class="text-sm font-medium" [class.text-emerald-700]="readiness()!.ready" [class.text-amber-700]="!readiness()!.ready">
               {{ (readiness()!.ready ? 'Підготовку до встановлення завершено' : 'Підготовку до встановлення не завершено') | t }}
@@ -109,6 +109,13 @@ export class UpdateSectionComponent implements OnInit, OnDestroy {
   private progressTimer?: ReturnType<typeof setInterval>;
   updateStatus = signal<UpdateStatus | null>(null);
   readiness = signal<UpdateReadiness | null>(null);
+
+  /** Preparation matters only when there is an update to install or one is running (20.11.2026). */
+  showReadiness(): boolean {
+    const status = this.updateStatus() as { state?: string; update_available?: boolean } | null;
+    return !!status && (!!status.update_available
+      || ['PENDING', 'RUNNING', 'CHECKING', 'DOWNLOADING', 'DRAINING', 'UPDATING'].includes(status.state || ''));
+  }
   rollingStatus = signal<RollingStatus | null>(null);
   loading = signal(false);
   error = signal<string | null>(null);

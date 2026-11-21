@@ -46,39 +46,19 @@ ISSUE = "i.0.0.0.31"
 # виконуваного сценарію немає. "full" дозволено лише після звірки кожного
 # критерію Issue з mandatory checks його сценаріїв.
 IR_COVERAGE = {
-    42: {"id": "ir.0.0.0.42", "coverage": "partial",
-         "note": "S02 перевіряє лише multi-host enrollment і сертифікати (AC1); ролі, моделі, Telegram, "
-                 "account/RBAC та узгодженість Web UI не мають сценарію."},
-    47: {"id": "ir.0.0.0.47", "coverage": "partial",
-         "note": "S08 перевіряє лише live publication receipt (AC3); artifact delivery, OAuth lifecycle, "
-                 "interruption без дублювання та UI не мають сценарію."},
-    54: {"id": "ir.0.0.0.53", "coverage": "partial",
-         "note": "S07 перевіряє лише release trust і key ceremony (AC1); TLS/PKI, sealing, OAuth, "
-                 "Monitoring та alerts не мають сценарію."},
-    63: {"id": "ir.0.0.0.63", "coverage": "none",
-         "note": "Перевіряє сам Runner і GitHub reporting/auto-close на контрольованому Issue; "
-                 "окремого сценарію каталогу немає."},
-    326: {"id": "ir.0.0.3.26", "coverage": "none",
-          "note": "Architecture 2.0: parity old-role/new-module, route switch, migration і retirement; "
-                  "виконуваного сценарію немає."},
-    329: {"id": "ir.0.0.3.29", "coverage": "none",
-          "note": "Ізоляція LAB VM/GPU R1–R6 перевіряється кваліфікацією LAB, а не Real Test Runner."},
-    420: {"id": "ir.0.0.4.20", "coverage": "none",
-          "note": "Перемикач статичного й динамічного workflow: наскрізний прогін із реальними вузлами; "
-                  "виконуваного сценарію немає."},
     441: {"id": "ir.0.0.4.41", "coverage": "partial",
           "note": "S03 перевіряє лише GPU і ComfyUI (#34/AC3); Text, Voice, review, revisions і MPT "
                   "не мають сценарію."},
     442: {"id": "ir.0.0.4.42", "coverage": "partial",
           "note": "S01, S04, S05, S06 перевіряють bootstrap, backup, міграцію та переривання оновлення; "
                   "rolling/canary update, Update Center і MPT recovery (#131) не мають сценарію."},
-    459: {"id": "ir.0.0.4.59", "coverage": "none",
-          "note": "Приймання vertep remove на реальному Ubuntu/systemd, reboot і повторна інсталяція; "
-                  "виконуваного сценарію видалення в каталозі немає."},
+    516: {"id": "ir.0.0.5.16", "coverage": "none",
+          "note": "Оновлення модулів на реальному стенді без GPU (rollout, відновлення, A/B агент); "
+                  "приймання виконує тестовий агент за AGENTS-NOGPU.md, сценарію в каталозі немає."},
 }
 #: The registry is a manual snapshot of the open real-server Issues, not a live GitHub
 #: sync (#460). ``--check-open-ir`` compares it with GitHub and fails on any drift.
-IR_COVERAGE_SNAPSHOT = {"verified_at": "2026-11-13",
+IR_COVERAGE_SNAPSHOT = {"verified_at": "2026-11-21",
                         "method": "gh issue list --state open: titles ir./ri./rt."}
 
 
@@ -98,7 +78,7 @@ VALID_RT_ISSUES = {number for number, item in IR_COVERAGE.items() if item["cover
 
 # ---------------------------------------------------------------------------
 # Каталог сценаріїв кваліфікації інфраструктури.
-# Кожен елемент відповідає одній з 8 обов'язкових груп Issue i.0.0.0.31:
+# Кожен елемент відповідає групі Issue i.0.0.0.31 (S02, S07, S08 прибрано 20.11.2026):
 #   id, name        — ідентифікатор та назва сценарію;
 #   automated       — pytest-цілі (шляхи відносно кореня репо), що реалізують
 #                     сценарій автоматизовано;
@@ -115,16 +95,6 @@ SCENARIOS = [
         "covers": ["#35/AC1"],
         "description": "Automated/disposable qualification чистого Ubuntu-сумісного "
                        "bootstrap: roles, секрети, контейнери, health check.",
-    },
-    {
-        "id": "S02",
-        "name": "CORE + Worker enrollment, certificates, self-test, task/result, remote-control",
-        "automated": ["tests/test_node_registry.py", "tests/test_fleet_controls.py", "tests/test_worker_self_test.py"],
-        "rt": "rt::S02 фізичний multi-host enrollment + certificates",
-        "rt_issue": 42,
-        "covers": ["AC1"],
-        "description": "Реєстрація вузлів, сертифікати, self-test, task/result "
-                       "та remote-control сценарії між CORE та Worker.",
     },
     {
         "id": "S03",
@@ -166,36 +136,16 @@ SCENARIOS = [
         "description": "rolling/canary, interruption/restart, rollback/recovery "
                        "з інжекцією відмов під час оновлення.",
     },
-    {
-        "id": "S07",
-        "name": "Release trust automated checks",
-        "automated": ["tests/test_key_lifecycle.py", "tests/test_update_security.py", "tests/test_release_qualification.py"],
-        "rt": "rt::S07 key ceremony + recovery",
-        "rt_issue": 54,
-        "covers": ["AC1"],
-        "description": "signed artifacts, tamper/revoke/downgrade, key rotation "
-                       "та recovery procedure.",
-    },
-    {
-        "id": "S08",
-        "name": "Publisher sandbox/fake integration з перевірюваним receipt",
-        "automated": ["tests/test_publisher_live_adapters.py", "tests/test_publish_task_helpers.py"],
-        "rt": "rt::S08 live platform publish receipt",
-        "rt_issue": 47,
-        "covers": ["AC3"],
-        "description": "Sandbox/fake publisher із перевірюваним receipt публікації.",
-    },
 ]
 
 
 def validate_rt_issues(scenarios: list[dict] | None = None) -> list[str]:
     """Перевіряє, що кожен rt_issue належить до чинного відкритого ir-набору.
 
-    Набір відповідає фізичним/live сценаріям i.0.0.0.89:
-    #42 (node roles/web/telegram), #47 (publisher), #54 (security/release
-    trust), #441 (медіаконвеєр Native/MPT), #442 (встановлення/міграція/
-    backup/update).  Повертає список порушень; порожній список означає,
-    що каталог валідний.
+    Набір відкритих ir Issues зі сценаріями: #441 (медіаконвеєр Native/MPT),
+    #442 (встановлення/міграція/backup/update). S02, S07 і S08 прибрано
+    рішенням власника 20.11.2026 (їхні #42, #54, #47 закриті). Повертає список
+    порушень; порожній список означає, що каталог валідний.
     """
     items = SCENARIOS if scenarios is None else scenarios
     problems: list[str] = []

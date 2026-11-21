@@ -116,7 +116,8 @@ def test_every_module_declares_its_transition_version_and_legacy_values_rank_bel
     for module in MODULES:
         spec = REGISTRY["components"][module]
         declared = c.declared_version(module)
-        assert declared == c.next_version(spec["transition_base"]), module
+        # The first independent release follows the transition base; later releases move forward.
+        assert c.parse_version(declared) >= c.parse_version(c.next_version(spec["transition_base"])), module
         for legacy, base in spec.get("legacy_versions", {}).items():
             assert c.version_key(module, legacy) < c.version_key(module, declared)
     assert c.declared_version("core") == (ROOT / "VERSION").read_text().strip()  # CORE keeps VERSION
@@ -223,7 +224,9 @@ def test_the_transition_record_matches_the_registry_and_the_manifests():
     for module, entry in transition["modules"].items():
         spec = REGISTRY["components"][module]
         assert entry["base"] == spec["transition_base"], module
-        assert entry["first_independent"] == c.next_version(entry["base"]) == c.declared_version(module), module
+        assert entry["first_independent"] == c.next_version(entry["base"]), module
+        # Later component releases move the manifest forward, never behind the first independent one.
+        assert c.parse_version(c.declared_version(module)) >= c.parse_version(entry["first_independent"]), module
         assert entry["digest"].startswith("sha256:") and len(entry["digest"]) == 71, module
         assert c.parse_version(entry["published_release"]) >= c.parse_version(entry["base"])
     assert transition["core"]["first_independent"] == c.next_version(transition["core"]["base"])
@@ -252,3 +255,62 @@ def test_the_full_history_reconciles_with_the_changelog_count_of_issue_509():
                 if c.parse_version(v) <= c.parse_version(transition["last_shared_version"])]
     for module in MODULES:
         assert c.last_shared_change(module, snapshot) == REGISTRY["components"][module]["transition_base"], module
+
+
+# -- module packages (#510/#511, 20.11.2026) ------------------------------------------------------
+
+def _ed25519_trust(tmp_path):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from core.module.trust import TrustStore
+    key = Ed25519PrivateKey.generate()
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption())
+    public = key.public_key().public_bytes(serialization.Encoding.PEM,
+                                           serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    (tmp_path / "publishers.json").write_text(json.dumps(
+        {"vertep": {"keys": {"test-key": public}, "repositories": ["github.com/fylypovych/vertep"]}}))
+    return private, TrustStore.from_root(tmp_path)
+
+
+def test_every_module_with_a_container_gets_a_signed_package_core_accepts(tmp_path):
+    from core.module.packages import verify_package
+    private, trust = _ed25519_trust(tmp_path)
+    for module, spec in REGISTRY["components"].items():
+        if not spec.get("image"):
+            continue
+        image = f"ghcr.io/fylypovych/{spec['image']['name']}@sha256:" + "a" * 64
+        package = c.sign_package(c.build_package(module, image=image), private, "test-key")
+        manifest = verify_package(package, trust)
+        assert manifest.version == c.declared_version(module)
+        assert manifest.to_dict()["container"]["image"] == image
+        assert "index.html" in package["files"]  # the UI bundle travels with its signed digest
+
+
+def test_a_package_refuses_an_unpinned_image_and_a_tampered_file(tmp_path):
+    from core.module.packages import verify_package
+    from core.module.trust import TrustError
+    private, trust = _ed25519_trust(tmp_path)
+    with pytest.raises(c.ComponentError):
+        c.build_package("monitoring", image="ghcr.io/fylypovych/vertep-module-monitoring:latest")
+    package = c.sign_package(c.build_package("monitoring"), private, "test-key")
+    package["files"]["index.html"] = package["files"]["index.html"][:-4] + "AAAA"
+    with pytest.raises(TrustError):
+        verify_package(package, trust)
+
+
+def test_the_official_publisher_key_is_trusted_for_the_vertep_repository():
+    data = json.loads((ROOT / "config" / "module-trust" / "publishers.json").read_text())
+    assert data["vertep"]["repositories"] == ["github.com/fylypovych/vertep"]
+    assert all("BEGIN PUBLIC KEY" in pem for pem in data["vertep"]["keys"].values())
+
+
+def test_the_publish_job_builds_images_and_uploads_signed_packages():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/component-release.yml").read_text())
+    publish = workflow["jobs"]["publish"]
+    assert publish["permissions"] == {"contents": "write", "packages": "write"}
+    script = "\n".join(step.get("run", "") for step in publish["steps"])
+    assert "MODULE_SIGNING_KEY" in script and "component-release.py package" in script
+    assert "package.json.sha256" in script and "--push" in script
+    # Releases published before packages existed get them added, never re-tagged.
+    assert "gh release upload" in script and "--clobber" in script and "--releases releases.json" in script

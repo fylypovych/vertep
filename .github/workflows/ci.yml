@@ -10,6 +10,24 @@ permissions:
   contents: read
 
 jobs:
+  open-ir-catalog:
+    # The real-test Issue catalog is a snapshot in the code (#460); a drift from the open
+    # ir/ri/rt Issues on GitHub now stops CI instead of surfacing on a server (20.11.2026).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Compare IR_COVERAGE with the open real-server Issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/qualify_infrastructure.py --check-open-ir
+
   gpu-built-inventory:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

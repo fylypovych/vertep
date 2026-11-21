@@ -1,7 +1,7 @@
 schema_version: "2.0"
 name: monitoring
 module_id: monitoring
-version: "0.0.4.15"
+version: "0.0.4.16"
 kind: application
 label: Моніторинг
 core_compatibility: {min: "0.0.3.95", max: "0.0.9.99"}
@@ -42,7 +42,7 @@ ui:
   navigation:
     - {id: monitoring, label: "Моніторинг"}
   files:
-    index.html: "6634bf683f2896f458beeb0eb17f879a54391524e7f490fa19a743f891d380f7"
+    index.html: "60e59b0a791bf043bcd490f3ca600c7d18bc3a46eddcafb957ab83c8ffc76fd2"
 permissions:
   # #503: read-only ingest of CORE metrics, alert states and health checks.
   - monitoring.read

@@ -30,6 +30,7 @@ class CheckStatus(str, Enum):
     WARNING = "WARNING"
     SKIPPED = "SKIPPED"
     NOT_CONFIGURED = "NOT_CONFIGURED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 class CheckResult(BaseModel):

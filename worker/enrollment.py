@@ -193,3 +193,40 @@ def renew_if_needed(core: str, node_name: str, credential: str, verify: str | bo
 
 # CORE no longer wants this attempt: the Job was deleted (404) or the task was
 # reassigned (409). Repeating the request can never succeed.
+
+
+LOCAL_ENROLLMENT_FILE = "local-worker-enrollment.json"
+
+
+def local_core_connection(core: str, config_path: Path | None = None) -> str:
+    """The Worker on the CORE host reaches CORE through the proxy with mTLS (20.11.2026).
+
+    Used only when no CORE_URL was configured (the local default ``http://core:8080``)
+    and CORE left an enrollment offer for this node in the shared config volume
+    (core.local_node). The offer pins CORE's certificate, sets the one-time
+    registration token when the node has no credentials yet, and returns the proxy URL.
+    Every other node keeps its configuration unchanged.
+    """
+    if os.getenv("CORE_URL") or core.startswith("https://"):
+        return core
+    config_path = Path(config_path or os.getenv("NODE_CONFIG_PATH", "/data/config/node-credentials.json"))
+    try:
+        offer = json.loads((config_path.parent / LOCAL_ENROLLMENT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return core
+    node_name = str(os.getenv("NODE_NAME", "")).strip().lower()
+    url = str(offer.get("core_url", ""))
+    if offer.get("node_id") != node_name or not url.startswith("https://") or "BEGIN CERTIFICATE" not in str(offer.get("core_ca", "")):
+        return core
+    pki = config_path.parent / "pki"
+    pki.mkdir(parents=True, exist_ok=True)
+    ca = pki / "core-server.crt"
+    ca.write_text(offer["core_ca"], encoding="utf-8")
+    os.environ["CORE_CA_PATH"] = str(ca)
+    try:
+        enrolled = bool(json.loads(config_path.read_text(encoding="utf-8")).get("jwt"))
+    except (OSError, ValueError):
+        enrolled = False
+    if not enrolled and offer.get("token") and not os.getenv("REGISTRATION_TOKEN"):
+        os.environ["REGISTRATION_TOKEN"] = str(offer["token"])
+    return url.rstrip("/")

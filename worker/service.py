@@ -695,6 +695,8 @@ def claim_video_engine_state() -> dict:
 
 def main() -> None:
     core = os.getenv("CORE_ADDRESS", "http://localhost:8080")
+    from worker.enrollment import local_core_connection
+    core = local_core_connection(core)
     supported_tasks = role_supported_tasks()
     supported_workflows = [item.strip() for item in os.getenv("SUPPORTED_WORKFLOWS", "*").split(",") if item.strip()]
     metrics = gpu_info()
@@ -884,8 +886,13 @@ def main() -> None:
                                                                             "entries": pending_logs[:]})
                     response.raise_for_status()
                     pending_logs.clear()
-            except httpx.HTTPError:
+            except httpx.HTTPError as error:
                 logger.warning("CORE request failed", extra={"node_name": payload["node_name"]})
+                if (getattr(getattr(error, "response", None), "status_code", None) == 401
+                        and local_core_connection(core) != core):
+                    # CORE refused the local shared token and has meanwhile offered this node
+                    # its own enrollment: restart (the container policy) to enroll with mTLS.
+                    raise SystemExit("Restarting to enroll the local Worker with mTLS")
             except Exception as error:
                 payload["status"] = "ERROR"
                 pending_logs.append({"level": "ERROR", "message": str(error),

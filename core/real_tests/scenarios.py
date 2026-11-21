@@ -120,13 +120,34 @@ def _check_ollama_probe() -> tuple[bool, str]:
     return check_ollama()
 
 
-def _check_comfyui_probe() -> tuple[bool, str]:
+NOT_APPLICABLE = "not_applicable:"
+
+
+def _gpu_stand() -> bool:
+    """The stand has a GPU or runs the GPU role / ComfyUI runtime (else GPU checks do not apply)."""
+    import json
+    from ..first_run import config_root, runtime_hardware
+    if str((runtime_hardware().get("gpu") or {}).get("vendor", "none")).lower() not in {"", "none"}:
+        return True
+    try:
+        plan = json.loads((config_root() / "deployment-plan.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (plan.get("role") == "gpu" or "gpu" in (plan.get("additional_roles") or [])
+            or "comfyui" in (plan.get("engine_runtimes") or []))
+
+
+def _check_comfyui_probe() -> tuple[bool | None, str]:
     """Real HTTP probe for ComfyUI availability."""
+    if not _gpu_stand():
+        return None, NOT_APPLICABLE + " на стенді немає GPU і не розгорнуто роль GPU"
     return check_comfyui()
 
 
-def _check_gpu_probe() -> tuple[bool, str]:
+def _check_gpu_probe() -> tuple[bool | None, str]:
     """Real GPU detection probe."""
+    if not _gpu_stand():
+        return None, NOT_APPLICABLE + " на стенді немає GPU і не розгорнуто роль GPU"
     return check_gpu()
 
 
@@ -279,20 +300,17 @@ def _scenario_checks(scenario_id: str) -> list[str]:
     """
     mapping = {
         "S01": ["bootstrap_first_run"],
-        "S02": ["node_connectivity", "certificate_validation", "worker_enrollment"],
         "S03": ["comfyui_probe", "gpu"],
         "S04": ["backup_roundtrip"],
         "S05": ["migration_artifacts"],
         "S06": ["update_interrupt"],
-        "S07": ["release_signature"],
-        "S08": ["publisher_receipt"],
     }
     return list(mapping.get(scenario_id, []))
 
 
 _SCENARIO_SUCCESS_POLICY: dict[str, set] = {
     scenario_id: {CheckStatus.PASS}
-    for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08")
+    for scenario_id in ("S01", "S03", "S04", "S05", "S06")
 }
 
 

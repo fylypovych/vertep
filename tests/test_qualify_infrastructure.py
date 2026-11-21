@@ -24,7 +24,8 @@ from scripts.qualify_infrastructure import (
 
 
 def test_scenarios_catalog_not_empty():
-    assert len(SCENARIOS) == 8
+    # S02, S07 і S08 прибрано рішенням власника 20.11.2026 (їхні issue закриті).
+    assert [item["id"] for item in SCENARIOS] == ["S01", "S03", "S04", "S05", "S06"]
     for scenario in SCENARIOS:
         assert "id" in scenario
         assert "name" in scenario

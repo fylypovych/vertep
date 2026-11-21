@@ -230,7 +230,7 @@ class TestScenarios:
     def test_load_scenarios_returns_list(self):
         scenarios = load_scenarios()
         assert isinstance(scenarios, list)
-        assert len(scenarios) >= 8
+        assert len(scenarios) == 5
 
     def test_find_scenario_by_rt_id(self):
         scenarios = load_scenarios()
@@ -268,7 +268,7 @@ class TestScenarioSpecificChecks:
     """Issue i.0.0.0.89 — scenarios must not borrow generic health probes."""
 
     def test_every_scenario_has_checks(self):
-        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+        for scenario_id in ("S01", "S03", "S04", "S05", "S06"):
             from core.real_tests.scenarios import _scenario_checks
             checks = _scenario_checks(scenario_id)
             assert checks, f"{scenario_id} must declare scenario-specific checks"
@@ -278,7 +278,7 @@ class TestScenarioSpecificChecks:
         generic = {"docker", "core_api", "health_core", "monitoring",
                    "ollama_probe", "postgres_tcp", "redis_tcp", "tts",
                    "publisher", "backup"}
-        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+        for scenario_id in ("S01", "S03", "S04", "S05", "S06"):
             checks = set(_scenario_checks(scenario_id))
             assert not checks & generic, (
                 f"{scenario_id} borrows generic checks: {checks & generic}"
@@ -385,10 +385,10 @@ class TestScenarioSourceContract:
             assert "rt_issue" in scenario
             assert scenario["rt_issue"] is not None
 
-    def test_catalog_has_eight_scenarios_not_nine_issues(self):
+    def test_catalog_has_five_scenarios_after_removing_closed_issue_ones(self):
         from core.real_tests.scenarios import load_scenarios
         scenarios = load_scenarios()
-        assert len(scenarios) == 8
+        assert [s["id"] for s in scenarios] == ["S01", "S03", "S04", "S05", "S06"]
 
     def test_multiple_scenarios_share_one_issue(self):
         from core.real_tests.scenarios import load_scenarios
@@ -408,8 +408,11 @@ class TestScenarioSourceContract:
 
     def test_find_scenario_by_current_issues(self):
         from core.real_tests.scenarios import find_scenario
-        for issue in (42, 47, 54, 441, 442):
+        for issue in (441, 442):
             assert find_scenario(rt_issue_number=issue) is not None, issue
+        # S02, S07, S08 removed with their closed Issues (owner decision 20.11.2026).
+        for issue in (42, 47, 54):
+            assert find_scenario(rt_issue_number=issue) is None, issue
 
     def test_closed_legacy_issues_are_not_catalog_sources(self):
         from core.real_tests.scenarios import load_scenarios
@@ -2404,7 +2407,7 @@ if __name__ == "__main__":
 
 class TestIssue451:
     # Compared with `gh issue list --state open` on 2026-11-13 (#460).
-    OPEN_IR = {42, 47, 54, 63, 326, 329, 420, 441, 442, 459}
+    OPEN_IR = {441, 442, 516}
 
     def _client(self, monkeypatch):
         from fastapi import FastAPI
@@ -2418,16 +2421,13 @@ class TestIssue451:
     def test_catalog_is_local_and_maps_every_open_ir(self, monkeypatch):
         body = self._client(monkeypatch).get("/api/real-tests/scenarios").json()
         assert body["source"] == "local_catalog"
-        assert len(body["scenarios"]) == 8
+        assert len(body["scenarios"]) == 5
         issues = {item["number"]: item for item in body["issues"]}
         assert set(issues) == self.OPEN_IR
         assert issues[442]["scenarios"] == ["S01", "S04", "S05", "S06"]  # several scenarios, one Issue
-        for number in (63, 326, 329, 420, 459):
-            assert issues[number]["coverage"] == "none" and issues[number]["scenarios"] == []
-            assert issues[number]["note"]
+        assert issues[516]["coverage"] == "none" and issues[516]["scenarios"] == [] and issues[516]["note"]
         assert all(item["coverage"] != "full" for item in issues.values())
-        assert issues[459]["id"] == "ir.0.0.4.59" and "vertep remove" in issues[459]["note"]
-        assert body["issues_snapshot"]["verified_at"] == "2026-11-13"
+        assert body["issues_snapshot"]["verified_at"] == "2026-11-21"
         for scenario in body["scenarios"]:
             assert scenario["issue_id"] == issues[scenario["rt_issue"]]["id"]
             assert scenario["issue_coverage"] == "partial" and scenario["covers"]
@@ -2462,7 +2462,7 @@ def test_registry_drift_against_github_is_detected_not_assumed():
     current = sorted(q.IR_COVERAGE)
     assert q.open_ir_drift(current) == {"missing": [], "stale": []}
     assert q.open_ir_drift([*current, 999]) == {"missing": [999], "stale": []}
-    assert q.open_ir_drift([n for n in current if n != 459]) == {"missing": [], "stale": [459]}
+    assert q.open_ir_drift([n for n in current if n != 516]) == {"missing": [], "stale": [516]}
     listing = [{"number": 459, "title": "ir.0.0.4.59 — remove"}, {"number": 460, "title": "i.0.0.4.60 — catalog"},
                {"number": 35, "title": "ri.0.0.0.35 — legacy alias"}]
     fake = lambda *a, **k: SimpleNamespace(stdout=json.dumps(listing))
@@ -2476,3 +2476,17 @@ def test_check_open_ir_exit_code_reports_drift(monkeypatch, capsys):
     monkeypatch.setattr(q, "github_open_ir", lambda: [*sorted(q.IR_COVERAGE), 777])
     assert q.main(["--check-open-ir"]) == 1
     assert '"missing": [777]' in capsys.readouterr().out
+
+
+def test_gpu_scenario_is_not_applicable_on_a_stand_without_gpu(monkeypatch, tmp_path):
+    """S03 on a NOGPU stand failed with health_probe_failed; the stand simply has no GPU."""
+    from core.real_tests import scenarios
+    from core.real_tests.models import CheckStatus
+    monkeypatch.setattr("core.first_run.runtime_hardware", lambda: {"gpu": {"vendor": "none"}})
+    monkeypatch.setattr("core.first_run.config_root", lambda: tmp_path)
+    (tmp_path / "deployment-plan.json").write_text(json.dumps({"role": "core", "additional_roles": ["text"]}))
+    passed, detail = scenarios._check_gpu_probe()
+    assert passed is None and detail.startswith(scenarios.NOT_APPLICABLE)
+    (tmp_path / "deployment-plan.json").write_text(json.dumps({"role": "core", "additional_roles": ["gpu"]}))
+    assert scenarios._gpu_stand() is True
+    assert CheckStatus.NOT_APPLICABLE.value == "NOT_APPLICABLE"
