@@ -224,6 +224,8 @@ def rollback_probe_release(installed: str) -> str:
                                      if os.getenv("GITHUB_TOKEN") else {})
     with urllib.request.urlopen(request, timeout=30) as response:
         tags = [item["tag_name"] for item in json.load(response) if not item["draft"] and not item["prerelease"]]
+    # Only Vertep runtime releases: component releases (<module>.<version>, #510) share the list.
+    tags = [tag for tag in tags if re.fullmatch(r"v?\d+\.\d+\.\d+\.\d+", tag)]
     others = [tag for tag in tags if tag != installed]
     if not others:
         raise RuntimeError("no other published release to probe the rollback with")

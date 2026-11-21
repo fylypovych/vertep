@@ -66,6 +66,13 @@ def test_another_published_release_is_probed(monkeypatch):
     assert target.rollback_probe_release("0.0.3.77") == "0.0.3.72"
 
 
+def test_component_releases_are_never_probed_as_a_runtime(monkeypatch):
+    """Component releases (#510) share the list and are newer: CI 0.0.4.25 probed web-ui.0.0.4.20."""
+    target = module()
+    _releases(monkeypatch, target, ["web-ui.0.0.4.20", "0.0.3.77", "monitoring.0.0.4.15", "0.0.3.72"])
+    assert target.rollback_probe_release("0.0.3.77") == "0.0.3.72"
+
+
 def test_configured_probe_release_wins(monkeypatch):
     target = module()
     monkeypatch.setenv("VERTEP_ROLLBACK_PROBE_RELEASE", "0.0.3.72")
