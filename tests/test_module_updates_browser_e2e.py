@@ -141,6 +141,16 @@ def test_recommend_approve_run_progress_journal_and_rollback_in_the_panel(core, 
         assert answer.value.ok, answer.value.text()
         catalog = api.get("/api/nodes/module-catalog").json()["modules"]
         assert next(m for m in catalog if m["module_id"] == "notes")["version"] == "0.0.0.1"
+        # #515: the rollback is an Update Manager operation of its own, journalled under its id.
+        rollback_id = answer.value.json()["operation_id"]
+        assert rollback_id.startswith("rollback-") and rollback_id != plan_id
+        expect(page.get_by_test_id("rollback-log")).to_contain_text("UPDATE rollback to point completed",
+                                                                   timeout=30_000)
+        records = api.get(f"/api/logs?category=UPDATE&operation_id={rollback_id}").json()
+        messages = [r["message"] for r in records]
+        assert "UPDATE rollback to point requested" in messages and "UPDATE rollback to point completed" in messages
+        assert all(r["operation_id"] == rollback_id and r["category"] == "UPDATE" for r in records)
+        assert any(r.get("component") == "notes" and r.get("version") == "0.0.0.1" for r in records)
     finally:
         stop.set()
         thread.join(timeout=5)

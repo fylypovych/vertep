@@ -87,11 +87,17 @@ def mark_request_failed(request_id: str, message: str) -> dict:
     return failed
 
 
-def request_update(action: str) -> dict:
+def request_update(action: str, target_version: str | None = None) -> dict:
+    """Queue an agent request. ``target_version`` pins the exact release an approved plan
+    coordinates (#512): the agent installs that version, not whatever ``latest`` is now."""
     if os.getenv("WEB_UPDATE_ENABLED", "false").lower() != "true":
         raise RuntimeError("Web updates are disabled on this node")
     if action not in {"check", "update", "restart"}:
         raise ValueError("Unsupported update action")
+    if target_version is not None:
+        import re
+        if action != "update" or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", str(target_version)):
+            raise ValueError("A target version is a release version of an update request")
     root = state_root()
     requests = root / "requests"
     with _lock:
@@ -101,6 +107,8 @@ def request_update(action: str) -> dict:
             raise FileExistsError("An update operation is already pending or running")
         request_id = uuid.uuid4().hex
         payload = {"request_id": request_id, "action": action, "requested_at": utc_now()}
+        if target_version is not None:
+            payload["target_version"] = str(target_version)
         temporary = requests / f".{request_id}.tmp"
         destination = requests / f"{request_id}.json"
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")

@@ -59,6 +59,7 @@ const PANEL_API_MAJOR = 1;
       <!-- Navigation -->
       <nav class="flex-1 overflow-y-auto overflow-x-hidden py-4 px-2 space-y-1" data-testid="sidebar-nav">
         @for (group of visibleGroups(); track group.label) {
+          @if (group.label) {
           <div [attr.data-testid]="'nav-group-' + group.label" class="px-3 py-1.5 text-xs font-medium text-slate-500 uppercase transition-all duration-200"
                [class.opacity-0]="collapsed"
                [class.w-0]="collapsed"
@@ -66,6 +67,7 @@ const PANEL_API_MAJOR = 1;
                [class.invisible]="collapsed">
             {{ (group.label) | t }}
           </div>
+          }
           @for (item of group.items; track item.id) {
             <a [routerLink]="item.path"
                [queryParams]="item.queryParams"
@@ -107,7 +109,8 @@ const PANEL_API_MAJOR = 1;
 export class SidebarComponent implements OnInit, OnDestroy {
   navGroups: SidebarGroup[] = [
     {
-      label: 'Контент',
+      // #518: the overview stands first, above every group (no group title).
+      label: '',
       items: [
         {
           id: 'dashboard',
@@ -116,6 +119,11 @@ export class SidebarComponent implements OnInit, OnDestroy {
           exact: true,
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>`,
         },
+      ],
+    },
+    {
+      label: 'Контент',
+      items: [
         {
           id: 'jobs',
           path: '/jobs',
@@ -125,7 +133,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
         {
           id: 'queue',
           path: '/queue',
-          label: 'Виконання',
+          label: 'Черга виконання',
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>`,
         },
         {
@@ -141,30 +149,23 @@ export class SidebarComponent implements OnInit, OnDestroy {
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
         },
         {
-          id: 'workflows',
-          path: '/workflows',
-          label: 'Сценарії',
-          icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.25v11.5M6 12h12M6 12l5 5m0 0l5-5"/></svg>`,
-        },
-        {
           id: 'brands',
           path: '/brands',
           label: 'Бренди',
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14m14 0v2a2 2 0 002 2h2M5 19h14M5 19l1.5-1.5M5 19l-1.5 1.5M12 12a3 3 0 100-6 3 3 0 000 6z"/></svg>`,
+        },
+        {
+          id: 'workflows',
+          path: '/workflows',
+          label: 'Шаблони обробки',
+          icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.25v11.5M6 12h12M6 12l5 5m0 0l5-5"/></svg>`,
         },
       ],
     },
     {
       label: 'Система',
       items: [
-        {
-          id: 'workers',
-          path: '/workers',
-          label: 'Вузли',
-          icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
-        },
         { id: 'health', path: '/health', label: 'Стан системи', icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>` },
-        { id: 'settings-integrations', path: '/settings', label: 'Стан підключень', queryParams: { tab: 'integrations' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 10-5.656-5.656l-1.1 1.1"/></svg>`, adminOnly: true },
         {
           id: 'alerts',
           path: '/alerts',
@@ -172,16 +173,23 @@ export class SidebarComponent implements OnInit, OnDestroy {
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>`,
         },
         { id: 'logs', path: '/logs', label: 'Логи', icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>` },
+        { id: 'settings-integrations', path: '/settings', label: 'Стан підключень', queryParams: { tab: 'integrations' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 10-5.656-5.656l-1.1 1.1"/></svg>`, adminOnly: true },
+        {
+          id: 'workers',
+          path: '/workers',
+          label: 'Вузли',
+          icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
+        },
+        { id: 'modules', path: '/modules', label: 'Модулі', exact: true, icon: MODULE_ICON, adminOnly: true },
         { id: 'settings-update', path: '/settings', label: 'Оновлення', queryParams: { tab: 'update' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`, adminOnly: true },
         { id: 'settings-backup', path: '/settings', label: 'Бекапи', queryParams: { tab: 'backup' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>`, adminOnly: true },
-        { id: 'modules', path: '/modules', label: 'Модулі', exact: true, icon: MODULE_ICON, adminOnly: true },
         {
           id: 'real-tests',
           path: '/real-tests',
           label: 'Реальні тести',
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
           adminOnly: true,
-        }
+        },
       ],
     },
     {

@@ -11,7 +11,7 @@ test('Меню та вкладки перемикають список і вик
   await page.goto('/jobs');
   const nav = page.getByTestId('sidebar-nav');
   const jobs = nav.getByText('Завдання', { exact: true });
-  const queue = nav.getByText('Виконання', { exact: true });
+  const queue = nav.getByText('Черга виконання', { exact: true });
   await expect(jobs.locator('..')).toHaveAttribute('aria-current', 'page');
   await queue.click();
   await expect(page).toHaveURL(/\/queue$/);
@@ -21,7 +21,7 @@ test('Меню та вкладки перемикають список і вик
   await jobs.click();
   await expect(page).toHaveURL(/\/jobs$/);
   await expect(page.getByTestId('queue-page')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Виконання', exact: true }).click();
+  await page.getByRole('button', { name: 'Черга виконання', exact: true }).click();
   await expect(page).toHaveURL(/\/queue$/);
   await expect(page.getByTestId('queue-page')).toBeVisible();
   await page.goBack();

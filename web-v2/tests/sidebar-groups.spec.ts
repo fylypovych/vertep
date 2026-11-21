@@ -1,54 +1,78 @@
 import { test, expect } from '@playwright/test';
 
-async function open(page: any, role: string) {
+async function open(page: any, role: string, path = '/jobs') {
   await page.route('**/api/**', async (route: any) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: role, username: role, role } });
-    if (path.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
+    const url = new URL(route.request().url()).pathname;
+    if (url.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: role, username: role, role } });
+    if (url.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
+    if (url.endsWith('/queue')) return route.fulfill({ json: { ready: [], inflight: [], dead_letter: [] } });
     return route.fulfill({ json: route.request().method() === 'GET' ? [] : {} });
   });
-  await page.goto('/jobs');
+  await page.goto(path);
 }
 
-const groups = (page: any) => page.locator('nav').first().evaluate((nav: HTMLElement) => {
-  const result: Record<string, string[]> = {};
+/** Menu as rendered: items before the first group title, then each group with its items. */
+const menu = (page: any) => page.getByTestId('sidebar-nav').evaluate((nav: HTMLElement) => {
+  const result: Record<string, string[]> = { '': [] };
   let current = '';
   for (const node of Array.from(nav.querySelectorAll('[data-testid^="nav-group-"], a'))) {
     const element = node as HTMLElement;
     if (element.dataset['testid']?.startsWith('nav-group-')) { current = (element.textContent || '').trim(); result[current] = []; }
-    else if (current) result[current].push((element.textContent || '').trim());
+    else result[current].push((element.textContent || '').trim());
   }
   return result;
 });
 
-test('меню адміністратора: Контент, Система й Налаштування без повторів назв', async ({ page }) => {
+const CONTENT = ['Завдання', 'Черга виконання', 'Опубліковане', 'Персонажі', 'Бренди', 'Шаблони обробки'];
+const SYSTEM = ['Стан системи', 'Алерти', 'Логи', 'Стан підключень', 'Вузли', 'Модулі', 'Оновлення', 'Бекапи', 'Реальні тести'];
+const SETTINGS = ['Загальне', 'Публікація', 'Telegram-бот', 'Моделі', 'Движок відео', 'Режим workflow', 'Брендинг',
+  'Ключі інтеграцій', 'Безпека', 'Користувачі'];
+
+test('#518: Дашборд першим, далі Контент, Система й Налаштування у погодженому порядку', async ({ page }) => {
   await open(page, 'admin');
-  await expect(page.locator('nav').first().getByText('Налаштування', { exact: true })).toBeVisible({ timeout: 20000 });
-  const menu = await groups(page);
-  expect(Object.keys(menu)).toEqual(['Контент', 'Система', 'Налаштування']);
-  expect(menu['Система']).toEqual(['Вузли', 'Стан системи', 'Стан підключень', 'Алерти', 'Логи', 'Оновлення', 'Бекапи', 'Модулі', 'Реальні тести']);
-  expect(menu['Налаштування']).toEqual(['Загальне', 'Публікація', 'Telegram-бот', 'Моделі', 'Движок відео', 'Режим workflow', 'Брендинг', 'Ключі інтеграцій', 'Безпека', 'Користувачі']);
-  const labels = Object.values(menu).flat();
+  await expect(page.getByTestId('sidebar-nav').getByText('Налаштування', { exact: true })).toBeVisible({ timeout: 20000 });
+  const groups = await menu(page);
+  expect(Object.keys(groups)).toEqual(['', 'Контент', 'Система', 'Налаштування']);
+  expect(groups['']).toEqual(['Дашборд']);
+  expect(groups['Контент']).toEqual(CONTENT);
+  expect(groups['Система']).toEqual(SYSTEM);
+  expect(groups['Налаштування']).toEqual(SETTINGS);
+  const settings = groups['Налаштування'];
+  expect(settings.indexOf('Движок відео') - settings.indexOf('Моделі')).toBe(1);
+  expect(settings.indexOf('Режим workflow') - settings.indexOf('Движок відео')).toBe(1);
+  expect(settings.indexOf('Користувачі') - settings.indexOf('Безпека')).toBe(1);
+  const labels = Object.values(groups).flat();
   expect(new Set(labels).size).toBe(labels.length);
-  expect(labels.filter(label => Object.keys(menu).includes(label))).toEqual([]);
 });
 
-test('нові пункти меню відкривають свої сторінки', async ({ page }) => {
-  await open(page, 'admin');
-  const nav = page.locator('nav').first();
-  await nav.getByText('Стан системи', { exact: true }).click({ timeout: 20000 });
-  await expect(page).toHaveURL(/\/health$/);
-  await nav.getByText('Логи', { exact: true }).click();
-  await expect(page).toHaveURL(/\/logs$/);
-  await nav.getByText('Движок відео', { exact: true }).click();
-  await expect(page).toHaveURL(/\/settings\?tab=video-engine$/);
+test('#518: назви в меню збігаються із заголовками сторінок, перехід за чинними маршрутами й підсвічування', async ({ page }) => {
+  await open(page, 'admin', '/');
+  const nav = page.getByTestId('sidebar-nav');
+  const cases: [string, RegExp][] = [
+    ['Черга виконання', /\/queue$/], ['Шаблони обробки', /\/workflows$/], ['Дашборд', /\/$/],
+    ['Стан системи', /\/health$/], ['Модулі', /\/modules$/], ['Реальні тести', /\/real-tests$/]];
+  for (const [label, url] of cases) {
+    const item = nav.getByText(label, { exact: true });
+    await item.click({ timeout: 20000 });
+    await expect(page).toHaveURL(url);
+    await expect(item.locator('..')).toHaveAttribute('aria-current', 'page');
+    if (label === 'Черга виконання' || label === 'Шаблони обробки') {
+      await expect(page.getByTestId('header-title')).toHaveText(label);
+    }
+  }
+  await nav.getByText('Оновлення', { exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\?tab=update$/);
   await nav.getByText('Режим workflow', { exact: true }).click();
   await expect(page).toHaveURL(/\/settings\?tab=workflow-mode$/);
 });
 
-test('модератор не бачить групи Налаштування', async ({ page }) => {
+test('#518: модератор бачить лише свої пункти в тому самому порядку', async ({ page }) => {
   await open(page, 'moderator');
-  const nav = page.locator('nav').first();
+  const nav = page.getByTestId('sidebar-nav');
   await expect(nav.getByText('Вузли', { exact: true })).toBeVisible({ timeout: 20000 });
-  await expect(nav.getByText('Налаштування', { exact: true })).toHaveCount(0);
+  const groups = await menu(page);
+  expect(Object.keys(groups)).toEqual(['', 'Контент', 'Система']);
+  expect(groups['']).toEqual(['Дашборд']);
+  expect(groups['Контент']).toEqual(CONTENT);
+  expect(groups['Система']).toEqual(['Стан системи', 'Алерти', 'Логи', 'Вузли']);
 });

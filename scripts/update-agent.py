@@ -569,8 +569,11 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
                               "message": "Previous release restored", "updated_at": now()})
                 set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
                 return True
-            manifest = fetch_manifest(os.getenv("UPDATE_CHANNEL", "stable"))
             requested_version = request.get("target_version")
+            # #512: an approved plan names its release; fetch exactly that one, not latest.
+            channel_name = os.getenv("UPDATE_CHANNEL", "stable")
+            manifest = (fetch_manifest(channel_name, requested_version) if requested_version
+                        else fetch_manifest(channel_name))
             if requested_version and manifest.get("version") != requested_version:
                 raise RuntimeError("Update server did not return the coordinated target version")
             public_key = Path(os.getenv(

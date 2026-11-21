@@ -153,7 +153,7 @@ def test_routes_localized_dates_and_responsive_layout(monitoring_core, monitorin
         {"message": "localized-date-proof", "level": "INFO"}]}).status_code == 200
     for width in (1280, 390):
         page.set_viewport_size({"width": width, "height": 844})
-        for path, title in (("/jobs", "Завдання"), ("/queue", "Черга"),
+        for path, title in (("/jobs", "Завдання"), ("/queue", "Черга виконання"),
                             ("/workers", "Вузли"), ("/logs", "Журнали"),
                             ("/alerts", "Алерти"), ("/health", "Стан системи"),
                             ("/settings?tab=system", "Налаштування"), ("/brands", "Бренди")):

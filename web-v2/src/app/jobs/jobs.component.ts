@@ -34,7 +34,7 @@ import { RemoteState } from '../core/state/remote-state';
 
       <div class="mb-4 flex gap-2 border-b border-slate-200">
         <button (click)="setView('list')" [class.border-b-2]="view() === 'list'" [class.border-emerald-600]="view() === 'list'" [class.text-emerald-700]="view() === 'list'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Список' | t }}</button>
-        <button (click)="setView('queue')" [class.border-b-2]="view() === 'queue'" [class.border-emerald-600]="view() === 'queue'" [class.text-emerald-700]="view() === 'queue'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Виконання' | t }}</button>
+        <button (click)="setView('queue')" [class.border-b-2]="view() === 'queue'" [class.border-emerald-600]="view() === 'queue'" [class.text-emerald-700]="view() === 'queue'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Черга виконання' | t }}</button>
       </div>
 
       @if (view() === 'list') {

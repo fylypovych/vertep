@@ -47,7 +47,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
   template: `
     <div class="space-y-5" data-testid="workflows-page">
       <div class="flex items-center justify-between">
-        <h2 class="text-xl font-semibold text-slate-900">{{ 'Реєстр сценаріїв' | t }}</h2>
+        <h2 class="text-xl font-semibold text-slate-900">{{ 'Шаблони обробки' | t }}</h2>
         <button (click)="openEditor()" data-testid="create-workflow-button" [disabled]="!canCreateWorkflow" [title]="(createWorkflowReason || 'Новий сценарій') | t"
                 class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
           {{ 'Новий сценарій' | t }}
@@ -59,7 +59,7 @@ function coerceInputValue(value: unknown, type?: string): unknown {
       } @else if (error()) {
         <app-error-state [message]="error()!" (retry)="loadWorkflows()" />
       } @else if (workflows().length === 0) {
-        <div class="text-center text-slate-500 py-10" data-testid="workflows-empty">{{ 'Сценаріїв не знайдено' | t }}</div>
+        <div class="text-center text-slate-500 py-10" data-testid="workflows-empty">{{ 'Шаблонів обробки не знайдено' | t }}</div>
       } @else {
         <div class="overflow-x-auto">
           <table class="w-full text-sm text-left" data-testid="workflows-table">

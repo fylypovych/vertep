@@ -554,15 +554,23 @@ class ModuleLifecycle:
             if record is not None:
                 self._save({**record, "attention": {"operation": journal.get("operation"), "error": str(error)}})
             return "restore_failed"
-        self._unlock_writes(module_id)
         if int(journal.get("retries", 0)) >= 1:
+            # The retry was already spent (also when it was interrupted): the previous version is
+            # the verified final state, so writes open and nothing runs again.
+            self._unlock_writes(module_id)
             self.notify("Module update failed after its automatic retry",
                         {"module_id": module_id, "operation": journal.get("operation")})
             return "retry_failed"
-        path.unlink(missing_ok=True)
+        # Persist the intent and the spent retry BEFORE retrying (#513): an interruption between
+        # restore and retry must not grant a second retry, and writes stay locked meanwhile.
+        _write_json(path, {**journal, "phase": "retry_pending", "retries": 1, "at": time.time()})
+        self.fault("before_retry")
         try:
             self.update(journal["package"], confirmed=True, operation_id=journal.get("operation"), _retry=1)
         except Exception as error:  # noqa: BLE001 - the one retry failed: stop and tell the administrator
+            # update() restored and re-verified the previous version (or refused before changing
+            # anything after the verified restore above): that is the final state.
+            self._unlock_writes(module_id)
             self.notify("Module update failed after its automatic retry",
                         {"module_id": module_id, "operation": journal.get("operation"), "error": str(error)})
             return "retry_failed"

@@ -39,6 +39,10 @@ class PlanError(ValueError):
 _log_lock = threading.Lock()
 
 
+_apply_locks: dict[str, threading.Lock] = {}
+_apply_locks_guard = threading.Lock()
+
+
 def update_log(message: str, operation_id: str | None, **fields) -> None:
     """#515: every update event goes to the existing journal under category UPDATE, linked to
     its operation (plan id or lifecycle operation). Written straight to the structured log
@@ -135,7 +139,10 @@ class UpdateManager:
         self.poll = poll
         self.gates = RolloutGates(self.root / "rollout-gates.json")
         self._lock = threading.RLock()
-        self._apply_lock = threading.Lock()
+        # Shared by every manager of this installation: the API builds one per request, so an
+        # instance lock would not keep a panel rollback apart from a running update (#515).
+        with _apply_locks_guard:
+            self._apply_lock = _apply_locks.setdefault(str(self.root.resolve()), threading.Lock())
 
     # -- persistence -------------------------------------------------------------------
     def _path(self, plan_id: str) -> Path:
@@ -349,6 +356,23 @@ class UpdateManager:
         return plan
 
     # -- reconnect -------------------------------------------------------------------------
+    def rollback_to_point(self, module_id: str, point: str, *, accept_data_loss: bool, actor: str | None = None) -> dict:
+        """Manual rollback from the Updates panel (#515): an Update Manager operation of its own,
+        serialized with updates and recorded in the UPDATE journal under its operation id."""
+        operation = f"rollback-{uuid.uuid4().hex}"
+        before = (self.lifecycle.record(module_id) or {}).get("version")
+        update_log("rollback to point requested", operation, module=module_id, point=point,
+                   from_version=before, accept_data_loss=accept_data_loss, actor=actor)
+        try:
+            with self._apply_lock:  # never in parallel with a running update of any module
+                result = self.lifecycle.rollback_to_point(module_id, point, accept_data_loss=accept_data_loss)
+        except Exception as error:
+            update_log("rollback to point failed", operation, module=module_id, point=point, error=str(error))
+            raise
+        update_log("rollback to point completed", operation, module=module_id, point=point,
+                   from_version=before, version=result.get("version"), state=result.get("state"))
+        return {**result, "operation_id": operation}
+
     def resume_node(self, node_id: str) -> list[dict]:
         """A deferred node reconnected: re-check the plan still applies, then release it."""
         results = []

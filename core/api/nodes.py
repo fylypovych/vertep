@@ -213,9 +213,11 @@ def module_lifecycle_action(action: str, request: Request, payload: dict = Body(
         "update": lambda: lifecycle.update(payload.get("package") or {}, confirmed=payload.get("confirm") is True),
         "rollback": lambda: lifecycle.rollback(module_id),
         "uninstall": lambda: lifecycle.uninstall(module_id, confirmed=payload.get("confirm") is True),
-        # #513: manual rollback to a suitable point (later writes lost only when confirmed) and purge.
-        "rollback_point": lambda: lifecycle.rollback_to_point(
-            module_id, str(payload.get("operation", "")), accept_data_loss=payload.get("accept_data_loss") is True),
+        # #513/#515: manual rollback to a suitable point (later writes lost only when confirmed),
+        # run by the Update Manager so it is serialized and journalled as an UPDATE operation.
+        "rollback_point": lambda: _update_manager().rollback_to_point(
+            module_id, str(payload.get("operation", "")), accept_data_loss=payload.get("accept_data_loss") is True,
+            actor=actor),
         "purge": lambda: lifecycle.purge(module_id, confirmed=payload.get("confirm") is True),
     }
     if action not in operations:
@@ -328,7 +330,8 @@ def _update_manager():
     return UpdateManager(lifecycle.root, lifecycle,
                          placement=lambda module_id: registry.placement.placement.get(module_id, []),
                          package_for=package_for, core_version=application_version,
-                         request_core_update=lambda version: request_update("update"),
+                         # #512: the agent installs exactly the version of the approved plan.
+                         request_core_update=lambda version: request_update("update", target_version=version),
                          health=health, node_online=node_online)
 
 

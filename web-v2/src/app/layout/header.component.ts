@@ -13,11 +13,11 @@ import { PolicyService, SystemMode } from '../core/services/policy.service';
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '':           { title: 'Дашборд',      subtitle: 'Огляд системи Vertep' },
   'jobs':       { title: 'Завдання',      subtitle: 'Управління завданнями' },
-  'queue':      { title: 'Черга',         subtitle: 'Черга виконання' },
+  'queue':      { title: 'Черга виконання', subtitle: 'Виконання завдань' },
   'published':  { title: 'Опубліковане',  subtitle: 'Опублікований контент' },
   'workers':    { title: 'Вузли',         subtitle: 'Вузли та їх стан' },
   'characters': { title: 'Персонажі',     subtitle: 'Персонажі контенту' },
-  'workflows':  { title: 'Сценарії',      subtitle: 'Сценарії обробки' },
+  'workflows':  { title: 'Шаблони обробки', subtitle: 'Workflow обробки контенту' },
   'brands':     { title: 'Бренди',        subtitle: 'Бренди та канали' },
   'operations': { title: 'Операції',      subtitle: 'Операції системи' },
   'alerts':     { title: 'Алерти',        subtitle: 'Попередження системи' },
@@ -36,8 +36,9 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   templateUrl: './header.component.html',
 })
 export class HeaderComponent implements OnInit, OnDestroy {
-  title = 'Дашборд';
-  subtitle = 'Огляд системи Vertep';
+  // #518: signals, so the title follows in-app navigation (plain fields kept the previous page's).
+  readonly title = signal('Дашборд');
+  readonly subtitle = signal('Огляд системи Vertep');
   systemState = 'Невизначений';
   systemOk = false;
   isDark = false;
@@ -99,8 +100,8 @@ export class HeaderComponent implements OnInit, OnDestroy {
     const segment = url.replace(/^\//, '').split('?')[0].split('#')[0];
     const firstSegment = segment.split('/')[0];
     const info = PAGE_TITLES[firstSegment] ?? PAGE_TITLES[''];
-    this.title    = info.title;
-    this.subtitle = info.subtitle;
+    this.title.set(info.title);
+    this.subtitle.set(info.subtitle);
   }
 
   private loadSystemState(): void {

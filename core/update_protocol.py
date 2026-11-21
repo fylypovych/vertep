@@ -178,14 +178,21 @@ def _read_small_response(request: urllib.request.Request, *, timeout: int,
     raise AssertionError("unreachable")
 
 
-def fetch_manifest(channel: str = "stable") -> dict:
+def fetch_manifest(channel: str = "stable", version: str | None = None) -> dict:
+    """The signed manifest of the latest release, or of ``version`` when a plan pins one (#512)."""
     if not re.fullmatch(r"[a-z0-9-]{1,32}", channel):
         raise ValueError("Invalid update channel")
+    if version is not None and not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
+        raise ValueError("Invalid release version")
     base = update_server_url()
     parsed = urlsplit(base)
     github_repository = re.fullmatch(r"/repos/([^/]+)/([^/]+)/releases/", parsed.path)
-    url = (urljoin(base, "latest") if parsed.hostname == "api.github.com" and github_repository
-           else urljoin(base, f"v1/releases/{channel}/latest.json"))
+    if parsed.hostname == "api.github.com" and github_repository:
+        url = urljoin(base, f"tags/{version}" if version else "latest")
+    else:
+        # Other update servers publish only the channel's latest; the agent then refuses
+        # a different version instead of installing it (coordinated target check).
+        url = urljoin(base, f"v1/releases/{channel}/latest.json")
     request = urllib.request.Request(
         url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Vertep-Updater/1"})
     payload = _read_small_response(request, timeout=30, maximum=1024 * 1024)

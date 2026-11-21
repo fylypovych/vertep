@@ -151,7 +151,7 @@ def test_worker_update_request_changes_runtime_instance_and_acks(monkeypatch, tm
     monkeypatch.setenv("VERTEP_TEST_EFFECT", str(runtime_version))
     import core.update_protocol as protocol
     import core.version as version
-    monkeypatch.setattr(protocol, "fetch_manifest", lambda channel: {
+    monkeypatch.setattr(protocol, "fetch_manifest", lambda channel, version=None: {
         "version": "9.9.9", "channel": "stable", "required": False})
     monkeypatch.setattr(protocol, "validate_manifest", lambda *a, **kw: None)
     monkeypatch.setattr(protocol, "validate_replay_state", lambda *a, **kw: None)
@@ -407,7 +407,7 @@ def test_update_agent_persists_signed_check_result_and_removes_request(monkeypat
     requests.mkdir(parents=True)
     request_path = requests / ("a" * 32 + ".json")
     request_path.write_text(json.dumps({"request_id": "a" * 32, "action": "check"}), encoding="utf-8")
-    monkeypatch.setattr(protocol, "fetch_manifest", lambda channel: {
+    monkeypatch.setattr(protocol, "fetch_manifest", lambda channel, version=None: {
         "version": "99.0.0", "required": False, "package": "packages/vertep.tar.gz",
         "sha256": "1" * 64, "signature": "signed"})
     monkeypatch.setattr(protocol, "validate_manifest", lambda manifest, public_key, **kwargs: manifest)
@@ -501,3 +501,54 @@ def test_update_api_accepts_only_valid_internal_key(monkeypatch, tmp_path):
                          headers={"X-Vertep-Internal-Key": "host-executor-secret"})
     assert queued.status_code == 200
     assert queued.json()["state"] == "PENDING"
+
+
+def test_an_approved_plan_target_is_fetched_by_tag_not_latest(monkeypatch):
+    """#512: latest may already be newer than the version the plan approved."""
+    import core.update_protocol as protocol
+    release = {"tag_name": "0.0.4.27", "assets": [{
+        "name": "update-manifest-0.0.4.27.json",
+        "url": "https://api.github.com/repos/fylypovych/vertep/releases/assets/7"}]}
+    responses = [json.dumps(release).encode(), json.dumps({"version": "0.0.4.27"}).encode()]
+    requests = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self, _):
+            return self.body
+
+    def urlopen(request, **_):
+        requests.append(request)
+        return Response(responses.pop(0))
+
+    monkeypatch.setenv("VERTEP_UPDATE_SERVER", "https://api.github.com/repos/fylypovych/vertep/releases")
+    monkeypatch.setattr(protocol.urllib.request, "urlopen", urlopen)
+    assert protocol.fetch_manifest("stable", "0.0.4.27")["version"] == "0.0.4.27"
+    assert requests[0].full_url.endswith("/releases/tags/0.0.4.27")
+    with pytest.raises(ValueError):
+        protocol.fetch_manifest("stable", "latest")
+
+
+def test_the_core_step_of_a_plan_queues_its_exact_version_for_the_agent(tmp_path, monkeypatch):
+    from core import update_manager
+    monkeypatch.setenv("WEB_UPDATE_ENABLED", "true")
+    monkeypatch.setattr(update_manager, "state_root", lambda: tmp_path)
+    update_manager.request_update("update", target_version="0.0.4.27")
+    [request] = list((tmp_path / "requests").glob("*.json"))
+    assert json.loads(request.read_text())["target_version"] == "0.0.4.27"
+    with pytest.raises(ValueError):
+        update_manager.request_update("check", target_version="0.0.4.27")
+    # The Update Manager wiring passes the plan's version (not a bare "update").
+    import inspect
+    from core.api import nodes
+    assert 'request_update("update", target_version=version)' in inspect.getsource(nodes)

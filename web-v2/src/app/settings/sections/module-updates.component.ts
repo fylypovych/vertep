@@ -98,6 +98,11 @@ interface LogEntry { timestamp?: string; message?: string; operation_id?: string
             <button class="px-2 py-1 text-xs border rounded" (click)="loadPoints(item.module_id)" [attr.data-testid]="'rollback-points-' + item.module_id">{{ item.module_id }}</button>
           }
         </div>
+        @if (rollbackLog().length) {
+          <div class="mb-2 text-xs text-slate-600" data-testid="rollback-log">
+            @for (entry of rollbackLog(); track $index) { <div>{{ entry.timestamp }} · {{ entry.message }}</div> }
+          </div>
+        }
         @for (point of points(); track point.operation) {
           <div class="text-xs flex items-center gap-2 py-1" [attr.data-testid]="'rollback-point-' + point.version">
             <span>{{ point.version }} · {{ point.created_at * 1000 | date:'yyyy-MM-dd HH:mm' }}</span>
@@ -120,6 +125,8 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
   log = signal<LogEntry[]>([]);
   logPlan = signal<string | null>(null);
   acceptLoss = signal(false);
+  /** UPDATE journal of the rollback just run (its own Update Manager operation, #515). */
+  rollbackLog = signal<LogEntry[]>([]);
   error = signal<string | null>(null);
   private timer?: ReturnType<typeof setInterval>;
 
@@ -194,7 +201,16 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
     this.http.post(`${this.api}/lifecycle/rollback_point`,
       { module_id: moduleId, operation: point.operation, accept_data_loss: this.acceptLoss() }, { headers: this.base.headers() })
       .pipe(catchError(this.fail)).subscribe((result) => {
-        if (result && !Array.isArray(result)) { this.toast.show('Модуль повернуто до вибраної точки', 'success'); this.refresh(); this.loadPoints(moduleId); }
+        if (result && !Array.isArray(result)) {
+          this.toast.show('Модуль повернуто до вибраної точки', 'success');
+          this.refresh();
+          this.loadPoints(moduleId);
+          const operation = (result as { operation_id?: string }).operation_id;
+          if (operation) {
+            this.http.get<LogEntry[]>(`${this.base.url}/logs?category=UPDATE&operation_id=${encodeURIComponent(operation)}&limit=50`,
+              this.background).pipe(catchError(() => [])).subscribe((entries) => this.rollbackLog.set((entries as LogEntry[]) || []));
+          }
+        }
       });
   }
 }

@@ -135,3 +135,39 @@ def test_uninstall_keeps_a_restorable_archive_and_purge_is_a_separate_action(tmp
         lifecycle.purge("notes", confirmed=False)
     purged = lifecycle.purge("notes", confirmed=True)
     assert len(purged["purged"]) == 2 and other.exists()
+
+
+def test_an_interruption_between_restore_and_retry_keeps_writes_locked_and_grants_no_second_retry(
+        tmp_path, key, module_postgres):
+    """Audit #513 (21.11.2026): the restore was verified, then the process died before the retry.
+    Writes stay locked until a verified final state, and the spent retry survives the restart."""
+    lifecycle, url = installed(tmp_path, key, module_postgres)
+    insert(url, "before")
+    _crash(tmp_path, key, module_postgres, "after_apply", "update")
+
+    class Killed(BaseException):
+        pass
+
+    def die_before_retry(point):
+        if point == "before_retry":
+            raise Killed()
+    first = make(tmp_path, key, module_postgres, fault=die_before_retry)
+    with pytest.raises(Killed):
+        first.recover()
+    journal = json.loads((tmp_path / "lc/journal/notes.json").read_text())
+    assert journal["phase"] == "retry_pending" and journal["retries"] == 1
+    assert first.database.writes_locked("notes")  # restored, but not yet a final state
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        insert(url, "between restore and retry")
+
+    checked, notes = [], []
+    second = make(tmp_path, key, module_postgres,
+                  self_test=lambda manifest: checked.append(manifest.version) or manifest.version == "1.0.0",
+                  notify=lambda message, details: notes.append(message))
+    assert second.recover() == [{"module_id": "notes", "op": "update", "outcome": "retry_failed"}]
+    assert "1.1.0" not in checked  # no second retry was attempted
+    assert notes == ["Module update failed after its automatic retry"]
+    assert second.record("notes")["version"] == "1.0.0"
+    assert not second.database.writes_locked("notes")  # verified previous version: writes open
+    assert second.recover() == []
+    insert(url, "after")
