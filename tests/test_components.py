@@ -314,3 +314,20 @@ def test_the_publish_job_builds_images_and_uploads_signed_packages():
     assert "package.json.sha256" in script and "--push" in script
     # Releases published before packages existed get them added, never re-tagged.
     assert "gh release upload" in script and "--clobber" in script and "--releases releases.json" in script
+
+
+def test_plan_names_the_tag_of_a_release_that_only_gets_its_package(tmp_path, monkeypatch):
+    """Run 44890975001: a backfill entry had no "tag", so the package went to release ""."""
+    import importlib.util
+    import types
+    spec = importlib.util.spec_from_file_location("component_release", ROOT / "scripts" / "component-release.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli, "_tags", lambda: {"brands.0.0.4.15": "a" * 40})
+    monkeypatch.setattr(cli, "_git", lambda *args: "")  # no brands file changed since its tag
+    releases = tmp_path / "releases.json"
+    releases.write_text(json.dumps([{"tag": "brands.0.0.4.15", "assets": ["brands.0.0.4.15.manifest.json"]}]))
+    plan = cli.cmd_plan(types.SimpleNamespace(components="brands", sha="b" * 40, releases=str(releases)))
+    entry = plan["brands"]
+    assert entry["backfill"] and not entry["publish"] and "error" not in entry
+    assert entry["tag"] == "brands.0.0.4.15" and entry["commit"] == "a" * 40

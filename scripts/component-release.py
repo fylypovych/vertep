@@ -78,6 +78,7 @@ def cmd_plan(args) -> dict:
             entry["publish"] = False
         entry["backfill"] = False
         tag = c.tag_name(component, version)
+        entry["tag"] = tag  # also when the release already exists (backfill uploads to it)
         if tag in tags:
             changed = _git("diff", "--name-only", tags[tag], args.sha).split()
             if not [path for path in changed if any(fnmatch.fnmatch(path, pattern) for pattern in spec["paths"])]:

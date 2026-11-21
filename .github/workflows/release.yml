@@ -100,8 +100,34 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reuse the released image when its inputs did not change
+        # Owner decision 21.11.2026: an image whose Dockerfile and copied files are unchanged
+        # since the previous release is not rebuilt; it gets this version's tag on the same
+        # digest. Images that bake the version in, or older than the age limit, are rebuilt.
+        id: reuse
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${{ github.repository_owner }}/vertep-module-${{ matrix.name }}"
+          fingerprint="$(python3 scripts/image-reuse.py fingerprint --file "modules/${{ matrix.name }}/Dockerfile" --context "modules/${{ matrix.name }}" --platforms "linux/amd64,linux/arm64")"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          previous="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          docker buildx imagetools inspect "$image:$previous" --format '{{json .Image}}' > inspect.json 2>/dev/null || echo null > inspect.json
+          decision="$(python3 scripts/image-reuse.py decide --fingerprint "$fingerprint" --inspect inspect.json \
+            --file "modules/${{ matrix.name }}/Dockerfile" --max-age-days "${{ vars.IMAGE_REUSE_MAX_AGE_DAYS || '7' }}")"
+          echo "$decision"
+          if [ "$(jq -r .reuse <<<"$decision")" = "true" ]; then
+            digest="$(docker buildx imagetools inspect "$image:$previous" --format '{{json .Manifest}}' | jq -r .digest)"
+            docker buildx imagetools create -t "$image:${{ needs.prepare.outputs.version }}" "$image@$digest"
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and publish module ${{ matrix.name }}
         id: build
+        if: steps.reuse.outputs.reuse != 'true'
         uses: docker/build-push-action@v6
         with:
           context: modules/${{ matrix.name }}
@@ -110,7 +136,10 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/vertep-module-${{ matrix.name }}:${{ needs.prepare.outputs.version }}
-          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.vertep.inputs=${{ steps.reuse.outputs.fingerprint }}
+            org.vertep.built-at=${{ steps.reuse.outputs.built_at }}
           cache-from: type=gha,scope=module-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=module-${{ matrix.name }}
       - name: Save the pinned module image
@@ -118,7 +147,7 @@ jobs:
         run: |
           mkdir module-image
           jq -n --arg name '${{ matrix.name }}' \
-            --arg image 'ghcr.io/${{ github.repository_owner }}/vertep-module-${{ matrix.name }}@${{ steps.build.outputs.digest }}' \
+            --arg image 'ghcr.io/${{ github.repository_owner }}/vertep-module-${{ matrix.name }}@${{ steps.build.outputs.digest || steps.reuse.outputs.digest }}' \
             '{($name): $image}' > 'module-image/${{ matrix.name }}.json'
           jq -e --arg name '${{ matrix.name }}' '.[$name] | test("@sha256:[0-9a-f]{64}$")' 'module-image/${{ matrix.name }}.json'
       - uses: actions/upload-artifact@v7
@@ -171,8 +200,34 @@ jobs:
         run: |
           jq -s 'add' "${{ runner.temp }}"/module-images/*.json > config/module-images.json
           test "$(jq 'length' config/module-images.json)" -eq 5
+      - name: Reuse the released image when its inputs did not change
+        # Owner decision 21.11.2026: an image whose Dockerfile and copied files are unchanged
+        # since the previous release is not rebuilt; it gets this version's tag on the same
+        # digest. Images that bake the version in, or older than the age limit, are rebuilt.
+        id: reuse
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}"
+          fingerprint="$(python3 scripts/image-reuse.py fingerprint --file "${{ matrix.file }}" --context "." --platforms "${{ matrix.platforms }}")"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          previous="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          docker buildx imagetools inspect "$image:$previous" --format '{{json .Image}}' > inspect.json 2>/dev/null || echo null > inspect.json
+          decision="$(python3 scripts/image-reuse.py decide --fingerprint "$fingerprint" --inspect inspect.json \
+            --file "${{ matrix.file }}" --max-age-days "${{ vars.IMAGE_REUSE_MAX_AGE_DAYS || '7' }}")"
+          echo "$decision"
+          if [ "$(jq -r .reuse <<<"$decision")" = "true" ]; then
+            digest="$(docker buildx imagetools inspect "$image:$previous" --format '{{json .Manifest}}' | jq -r .digest)"
+            docker buildx imagetools create -t "$image:${{ needs.prepare.outputs.version }}" "$image@$digest"
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and publish ${{ matrix.name }}
         id: build
+        if: steps.reuse.outputs.reuse != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -185,7 +240,10 @@ jobs:
             VERTEP_ENVIRONMENT=production
           tags: |
             ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:${{ needs.prepare.outputs.version }}
-          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.vertep.inputs=${{ steps.reuse.outputs.fingerprint }}
+            org.vertep.built-at=${{ steps.reuse.outputs.built_at }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
       - name: Save immutable image metadata
@@ -195,7 +253,7 @@ jobs:
           jq -n \
             --arg name '${{ matrix.name }}' \
             --arg reference 'ghcr.io/${{ github.repository_owner }}/vertep-${{ matrix.name }}:${{ needs.prepare.outputs.version }}' \
-            --arg digest '${{ steps.build.outputs.digest }}' \
+            --arg digest '${{ steps.build.outputs.digest || steps.reuse.outputs.digest }}' \
             --arg platforms '${{ matrix.platforms }}' \
             '{name:$name,reference:$reference,digest:$digest,platforms:($platforms|split(","))}' \
             > "image-metadata/${{ matrix.name }}.json"

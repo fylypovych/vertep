@@ -309,7 +309,27 @@ class ModuleSources:
 
     def pin(self, module_id: str) -> dict | None:
         path = self.pins / f"{module_id}.json"
-        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        return self._official_pin(module_id)
+
+    def _official_pin(self, module_id: str) -> dict | None:
+        """Official modules installed with the release update from the official repository (21.11.2026).
+
+        Only modules whose component releases carry a signed package (their own container,
+        ``image`` in config/components.json). The pin is implicit until the first update
+        writes a real one; the package is still verified against the trusted publisher key.
+        """
+        from core.components import load_registry
+        from .lifecycle import BUNDLED
+        record = self.lifecycle.record(module_id)
+        if module_id not in BUNDLED or record is None:
+            return None
+        registry = load_registry()
+        if not (registry["components"].get(module_id) or {}).get("image"):
+            return None
+        return {"module_id": module_id, "source": {"type": "github", "location": registry["source_repository"]},
+                "version": record["version"], "official": True}
 
     def _save_pin(self, module_id: str, source: Source, version: str, digest: str) -> None:
         self.pins.mkdir(parents=True, exist_ok=True)
