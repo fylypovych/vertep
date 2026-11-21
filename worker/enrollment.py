@@ -177,8 +177,8 @@ def renew_if_needed(core: str, node_name: str, credential: str, verify: str | bo
         renewal_credential = json.loads(config_path.read_text(encoding="utf-8")).get("worker_secret") or credential
     except (OSError, ValueError):
         renewal_credential = credential
-    with httpx.Client(timeout=30, verify=verify, cert=(str(certificate), str(key)),
-                      headers={"X-Vertep-Token": renewal_credential}) as client:
+    with httpx.Client(timeout=30, headers={"X-Vertep-Token": renewal_credential},
+                      **core_tls(verify, (str(certificate), str(key)))) as client:
         response = client.post(f"{core}/api/nodes/{node_name}/renew",
                                json={"csr": csr.read_text(encoding="utf-8")})
         response.raise_for_status()
@@ -196,6 +196,26 @@ def renew_if_needed(core: str, node_name: str, credential: str, verify: str | bo
 
 
 LOCAL_ENROLLMENT_FILE = "local-worker-enrollment.json"
+
+
+def core_tls(verify, cert: tuple[str, str] | None = None):
+    """TLS settings for calls to CORE.
+
+    The local Worker reaches the proxy by its Docker name, which is not in CORE's
+    certificate: it trusts exactly the pinned CORE certificate (the only trust anchor)
+    without the host name check. Every other node keeps ordinary verification.
+    """
+    if os.getenv("VERTEP_CORE_TLS_PINNED") == "1" and isinstance(verify, str) and verify:
+        import ssl
+        context = ssl.create_default_context(cafile=verify)
+        context.check_hostname = False
+        if cert:
+            context.load_cert_chain(*cert)
+        return {"verify": context}
+    options = {"verify": verify}
+    if cert:
+        options["cert"] = cert
+    return options
 
 
 def local_core_connection(core: str, config_path: Path | None = None) -> str:
@@ -223,6 +243,8 @@ def local_core_connection(core: str, config_path: Path | None = None) -> str:
     ca = pki / "core-server.crt"
     ca.write_text(offer["core_ca"], encoding="utf-8")
     os.environ["CORE_CA_PATH"] = str(ca)
+    if offer.get("pin_certificate"):
+        os.environ["VERTEP_CORE_TLS_PINNED"] = "1"
     try:
         enrolled = bool(json.loads(config_path.read_text(encoding="utf-8")).get("jwt"))
     except (OSError, ValueError):

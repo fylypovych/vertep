@@ -55,8 +55,7 @@ def ensure_local_worker_enrollment(now: float | None = None) -> dict:
     from .node_registry import create_registration_token, registered_nodes
     config = config_root()
     node_id = local_node_id()
-    domain = str(os.getenv("WEB_DOMAIN", "")).strip()
-    if not _mtls_required() or not node_id or not domain or not _plan_runs_worker(config):
+    if not _mtls_required() or not node_id or not _plan_runs_worker(config):
         return {"state": "not_applicable"}
     if any(node.get("node_id") == node_id and not node.get("revoked_at") for node in registered_nodes()):
         return {"state": "enrolled", "node_id": node_id}
@@ -64,7 +63,10 @@ def ensure_local_worker_enrollment(now: float | None = None) -> dict:
     now = time.time() if now is None else now
     try:
         offer = json.loads(path.read_text(encoding="utf-8"))
-        if offer.get("node_id") == node_id and datetime.fromisoformat(offer["expires_at"]).timestamp() > now + 60:
+        current = (offer.get("pin_certificate") is True
+                   and offer.get("core_url") == os.getenv("VERTEP_LOCAL_CORE_URL", "https://proxy:8443"))
+        # An offer from 0.0.4.23 (public address, no pinning) is replaced at once.
+        if current and offer.get("node_id") == node_id and datetime.fromisoformat(offer["expires_at"]).timestamp() > now + 60:
             return {"state": "offered", "node_id": node_id}
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -75,9 +77,12 @@ def ensure_local_worker_enrollment(now: float | None = None) -> dict:
         return {"state": "no_core_certificate"}
     token = create_registration_token("core", TOKEN_TTL_SECONDS, local_core=True)
     offer = {"node_id": node_id, "token": token["token"], "expires_at": token["expires_at"],
-             # The proxy is the only place that verifies node certificates; the Worker reaches
-             # it like a remote node, by the address the CORE certificate was issued for.
-             "core_url": f"https://{domain}:{os.getenv('VERTEP_PROXY_PORT', '8443')}",
+             # The proxy is the only place that verifies node certificates. The Worker reaches it
+             # inside the Docker network: the public address (WEB_DOMAIN, often the host name or a
+             # VPN address) is not reachable from a container on every host (20.11.2026 stand).
+             # The Worker pins this exact certificate instead of checking the host name.
+             "core_url": os.getenv("VERTEP_LOCAL_CORE_URL", "https://proxy:8443"),
+             "pin_certificate": True,
              "core_ca": core_ca}
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(offer, indent=2), encoding="utf-8")

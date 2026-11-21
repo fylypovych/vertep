@@ -721,7 +721,8 @@ def main() -> None:
     enrollment_verify = os.getenv("CORE_CA_PATH", "")
     if core.startswith("https://") and os.getenv("REGISTRATION_TOKEN") and not enrollment_verify:
         raise RuntimeError("CORE_CA_PATH is required to pin Core before sending a registration token")
-    with httpx.Client(timeout=5, verify=enrollment_verify or True) as enrollment_client:
+    from worker.enrollment import core_tls
+    with httpx.Client(timeout=5, **core_tls(enrollment_verify or True)) as enrollment_client:
         credential = enroll(enrollment_client, core, payload["node_name"], metrics, capabilities)
     pki = Path(os.getenv("NODE_CONFIG_PATH", "/data/config/node-credentials.json")).parent / "pki"
     config_path = Path(os.getenv("NODE_CONFIG_PATH", "/data/config/node-credentials.json"))
@@ -729,8 +730,7 @@ def main() -> None:
                                  pki, config_path)
     client_options = {"timeout": 5, "headers": {"X-Vertep-Token": credential} if credential else {}}
     if core.startswith("https://") and (pki / "node.crt").is_file():
-        client_options.update({"verify": enrollment_verify or True,
-                               "cert": (str(pki / "node.crt"), str(pki / "node.key"))})
+        client_options.update(core_tls(enrollment_verify or True, (str(pki / "node.crt"), str(pki / "node.key"))))
     with httpx.Client(**client_options) as client:
         desired_state = None
         workflow_execution_enabled = False
