@@ -106,8 +106,17 @@ class Acceptance:
             "DEMO_MODE": "false",
             "VERTEP_DEMO": "false",
             "MAX_RETRIES": "1",
+            # The installation runs CURRENT_VERSION, so TARGET_VERSION is really newer
+            # (an older "available" version is not offered).
+            "VERTEP_ROOT": str(self._installation_root()),
         })
         return env
+
+    def _installation_root(self) -> Path:
+        root = self.config_root.parent / "installation"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "VERSION").write_text(f"{CURRENT_VERSION}\n", encoding="utf-8")
+        return root
 
     # -- child processes ---------------------------------------------------
     def prepare_config_root(self) -> None:
@@ -517,7 +526,7 @@ class TestUpdateOperationAcceptance:
                     if "Поточна версія" in prompt:
                         break
                 time.sleep(0.1)
-            assert f"Поточна версія: {Path('VERSION').read_text(encoding='utf-8').strip()}" in prompt
+            assert f"Поточна версія: {CURRENT_VERSION}" in prompt
             assert f"Доступна: {TARGET_VERSION}" in prompt
             for line in _release_notes(TARGET_VERSION)[:3]:
                 assert line in prompt

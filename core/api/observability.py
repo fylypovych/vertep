@@ -24,7 +24,13 @@ router = APIRouter()
 @router.get("/api/health")
 def health() -> dict:
     checks = _run_health_checks(None)
-    return {"status": _health_status(checks), "service": "core",
+    from ..system_state import get_system_state
+    try:
+        system_state = get_system_state().get("state")
+    except Exception:  # noqa: BLE001 - liveness must answer even if the state is unreadable
+        system_state = None
+    # #442: components may be healthy while the system is in EMERGENCY after a failed restore.
+    return {"status": _health_status(checks), "service": "core", "system_state": system_state,
             "runtime_instance_id": CORE_RUNTIME_INSTANCE_ID,
             "jobs": len(store.jobs), "checks": checks}
 

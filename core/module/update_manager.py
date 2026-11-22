@@ -220,6 +220,11 @@ class UpdateManager:
                 record = self.lifecycle.record(module_id)
                 if record is None:
                     raise PlanError(f"{module_id} is not installed")
+                if manifests[module_id].kind == "application" and not self.placement(module_id):
+                    # A container module runs only on the nodes it is placed on; without one the
+                    # update could only fail its self-test (Publisher on the stand, 21.11.2026).
+                    raise PlanError(f"{module_id} is not placed on any node that runs module containers; "
+                                    "place it on a node first")
                 steps.append({"kind": "module", "component": module_id, "stage": index,
                               "from": record["version"], "to": targets[module_id],
                               "depends_on": sorted(set(_dependency_names(manifests[module_id])) & set(targets)),

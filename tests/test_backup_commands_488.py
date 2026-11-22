@@ -40,7 +40,7 @@ def test_built_in_postgres_commands_are_argument_lists(monkeypatch, tmp_path):
     monkeypatch.setenv("POSTGRES_HOST", "db.local")
     assert backup_service._pg_restore_default(dump) == [
         "pg_restore", "-h", "db.local", "-p", "5432", "-U", "vertep", "-d", "vertep",
-        "-c", "--if-exists", str(dump)]
+        "-c", "--if-exists", "--single-transaction", str(dump)]
 
 
 @pytest.mark.parametrize("url,host,port,database", [

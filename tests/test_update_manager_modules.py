@@ -230,3 +230,13 @@ def test_permissions_a_new_version_adds_are_shown_in_the_plan_and_granted_by_app
     assert registry.placement.approvals["c"] == ["c.publish"]
     events = [event["message"] for event in world["manager"].get(plan["id"])["events"]]
     assert "permissions approved with the plan" in events
+
+
+def test_a_container_module_placed_on_no_node_is_refused_before_anything_runs(world):
+    """Stand 21.11.2026: Publisher 0.0.3.92 had no node to run on, the plan was approved and
+    failed its self-test. Without a node the plan is refused with the reason instead."""
+    world["manager"].placement = lambda module_id: []
+    world["publish"]("c", "0.0.0.2")
+    with pytest.raises(PlanError, match="not placed on any node"):
+        world["manager"].plan({"c": "0.0.0.2"})
+    assert world["lifecycle"].record("c")["version"] == "0.0.0.1"

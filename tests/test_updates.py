@@ -552,3 +552,17 @@ def test_the_core_step_of_a_plan_queues_its_exact_version_for_the_agent(tmp_path
     import inspect
     from core.api import nodes
     assert 'request_update("update", target_version=version)' in inspect.getsource(nodes)
+
+
+def test_a_check_from_before_the_install_does_not_offer_an_older_version(monkeypatch, tmp_path):
+    """After installing 0.0.4.31 the stored check still said 0.0.4.30; the page showed it."""
+    import json
+    from core import update_manager
+    monkeypatch.setattr(update_manager, "state_root", lambda: tmp_path)
+    monkeypatch.setattr(update_manager, "application_version", lambda: "0.0.4.31")
+    (tmp_path / "status.json").write_text(json.dumps({"state": "SUCCEEDED", "available_version": "0.0.4.30"}))
+    status = update_manager.update_status()
+    assert status["available_version"] == "0.0.4.31" and status["update_available"] is False
+    (tmp_path / "status.json").write_text(json.dumps({"state": "SUCCEEDED", "available_version": "0.0.4.32"}))
+    status = update_manager.update_status()
+    assert status["available_version"] == "0.0.4.32" and status["update_available"] is True

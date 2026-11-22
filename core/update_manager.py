@@ -45,6 +45,10 @@ def update_status() -> dict:
     status["current_version"] = application_version()
     if status.get("available_version"):
         status["update_available"] = _version_tuple(status["available_version"]) > _version_tuple(status["current_version"])
+        if not status["update_available"]:
+            # A check from before the last install offered what now runs (or older): there is
+            # nothing newer to show until the next check says so.
+            status["available_version"] = status["current_version"]
     return status
 
 

@@ -485,7 +485,35 @@ def _pg_dump_default() -> list[str]:
 
 
 def _pg_restore_default(dump: Path) -> list[str]:
-    return ["pg_restore", *_postgres_connection(), "-c", "--if-exists", str(dump)]
+    # One transaction (#442): any error rolls the whole restore back, the database stays as it was.
+    return ["pg_restore", *_postgres_connection(), "-c", "--if-exists", "--single-transaction", str(dump)]
+
+
+def _major(text: str) -> int | None:
+    import re
+    match = re.search(r"(\d+)(?:\.\d+)*", text or "")
+    return int(match.group(1)) if match else None
+
+
+def _pg_client_mismatch() -> str | None:
+    """#442: pg_restore newer than the server writes settings the server rejects.
+
+    Checked before anything is changed; None when versions match or cannot be read
+    (an overridden restore command or a test environment without the tools).
+    """
+    if os.getenv("BACKUP_PG_RESTORE_CMD") is not None or not _command_exists("pg_restore") \
+            or not _command_exists("psql"):
+        return None
+    try:
+        client = _major(_run_command(["pg_restore", "--version"], timeout=30).stdout.decode())
+        server_num = _run_command(["psql", *_postgres_connection(), "-tAc", "SHOW server_version_num"],
+                                  timeout=30).stdout.decode().strip()
+        server = int(server_num) // 10000 if server_num.isdigit() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if client and server and client != server:
+        return f"pg_restore {client} does not match PostgreSQL server {server}"
+    return None
 
 
 def _redis_dump_default() -> tuple[list[str], dict[str, str]]:
@@ -881,6 +909,13 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
         
         if not _core_available():
             raise HTTPException(503, "CORE недоступний, відновлення заборонено")
+        mismatch = _pg_client_mismatch()
+        if mismatch:
+            # Nothing has been changed yet: the system returns to NORMAL, not EMERGENCY.
+            _set_system_state("NORMAL", f"Restore refused before changes: {mismatch}")
+            _write_operation(snapshot_id, {"status": "failed", "progress": 0, "message": mismatch,
+                                           "snapshot_id": snapshot_id})
+            raise _RefusedBeforeChanges(mismatch)
             
         _set_restore_progress(snapshot_id, 10, "Розшифрування...")
         restore_root = root / "restore"
@@ -962,6 +997,8 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
         return {"snapshot_id": snapshot_id, "restored": [], "sha256": encrypted_digest, "status": "done",
                 "pre_restore_snapshot": pre_restore["snapshot_id"]}
         
+    except _RefusedBeforeChanges as refused:
+        raise HTTPException(409, f"Відновлення відхилено до змін: {refused}") from refused
     except HTTPException:
         _finalize_restore_failure(snapshot_id, "Помилка відновлення", "Restore failed")
         raise
@@ -970,6 +1007,10 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
         raise HTTPException(500, f"Restore failed: {error}") from error
     finally:
         _release_restore_guard(guard)
+
+
+class _RefusedBeforeChanges(RuntimeError):
+    """The restore stopped before any data was touched."""
 
 
 def _set_restore_progress(snapshot_id: str, progress: int, message: str, status: str = "running") -> None:
