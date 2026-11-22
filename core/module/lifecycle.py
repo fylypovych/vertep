@@ -421,6 +421,12 @@ class ModuleLifecycle:
         if self.database is not None and self.database.exists(module_id):
             self.database.unlock_writes(module_id)
 
+    def moves_into_container(self, record: dict, manifest: ModuleManifest) -> bool:
+        """A bundled role module moving into its own container package of the same component
+        version (#511): the Vertep release ships the role and the package with one version."""
+        return ("bundled" in (record.get("package") or {}) and self._manifest(record).kind == "execution"
+                and manifest.kind == "application")
+
     def update(self, package: dict, *, confirmed: bool, operation_id: str | None = None, _retry: int = 0) -> dict:
         """Approved update; a repeated delivery of the same operation returns its stored result (#513)."""
         if confirmed is not True:
@@ -441,7 +447,7 @@ class ModuleLifecycle:
             record = self.record(module_id)
             if record is None:
                 raise LifecycleError("Module is not installed")
-            if record["version"] == manifest.version:
+            if record["version"] == manifest.version and not self.moves_into_container(record, manifest):
                 raise LifecycleError("Module version is already installed")
             migration_sources(package, manifest)
             was_active = record["state"] == ACTIVE
@@ -508,11 +514,13 @@ class ModuleLifecycle:
                 self.registry.set_lifecycle_state(module_id, None)
             return
         state = record["state"]
-        if reactivate or state == ACTIVE:
-            # Publish the restored version first (inactive) so nodes converge to it,
-            # then require its own self-test: no false READY.
-            self._save({**record, "state": INACTIVE})
-            state = ACTIVE if self.self_test(self._manifest(record)) else FAILED
+        # Publish the restored version first (inactive) so nodes converge to it, then require its
+        # own self-test, also for an inactive module: the write fence opens only after it (#513).
+        self._save({**record, "state": INACTIVE})
+        if not self.self_test(self._manifest(record)):
+            state = FAILED
+        elif reactivate or state == ACTIVE:
+            state = ACTIVE
         self._save({**record, "state": state})
 
     def recover(self) -> list[dict]:

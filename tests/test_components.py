@@ -186,7 +186,8 @@ def test_unstable_foreign_or_mislabelled_releases_are_refused(keys, override, er
         c.verify_manifest(_manifest(keys, **override), keys[1])
 
 
-def test_the_manifest_cli_signs_a_real_module_release(keys, tmp_path):
+@pytest.mark.parametrize("component", ["brands", "publisher"])
+def test_the_manifest_cli_signs_a_real_module_release(keys, tmp_path, component):
     import subprocess
     import sys
     private = tmp_path / "key.pem"
@@ -194,14 +195,16 @@ def test_the_manifest_cli_signs_a_real_module_release(keys, tmp_path):
     package = tmp_path / "package.json"
     package.write_bytes(b"{}")
     out = tmp_path / "manifest.json"
-    subprocess.run([sys.executable, str(ROOT / "scripts" / "component-release.py"), "manifest", "--component", "brands",
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "component-release.py"), "manifest", "--component", component,
                     "--sha", "e" * 40, "--private-key", str(private), "--output", str(out),
                     "--artifact", f"package.json={package}", "--image", "sha256:" + "b" * 64],
                    check=True, capture_output=True, text=True)
     manifest = json.loads(out.read_text())
     c.verify_manifest(manifest, keys[1], artifacts={"package.json": b"{}"})
-    assert manifest["tag"] == f"brands.{c.declared_version('brands')}"
-    assert manifest["compatibility"]["api"] == {"namespace": "brands", "version": "1.0"}
+    assert manifest["tag"] == f"{component}.{c.declared_version(component)}"
+    # Publisher's bundled role manifest has no compatibility; the package manifest has it (#510).
+    assert manifest["compatibility"]["api"] == {"namespace": component, "version": "1.0"}
+    assert manifest["compatibility"]["core"]["min"] and manifest["compatibility"]["core"]["max"]
 
 
 # -- CI workflow ---------------------------------------------------------------------------------

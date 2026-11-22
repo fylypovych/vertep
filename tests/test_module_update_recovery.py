@@ -196,3 +196,28 @@ def test_a_failed_retry_whose_restored_version_fails_its_check_keeps_writes_lock
     assert "Module update failed after its automatic retry" in notes
     with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
         insert(url, "after a failed retry")
+
+
+@pytest.mark.parametrize("restored_ok", [True, False])
+def test_an_inactive_module_restore_is_checked_before_writes_open(tmp_path, key, module_postgres, restored_ok):
+    """Audit #513: after a failed update of an inactive module the restored version was never
+    self-tested, yet the write fence was lifted."""
+    tested, broken = [], []
+
+    def self_test(manifest):
+        tested.append(manifest.version)
+        return manifest.version == "1.0.0" and not broken
+    lifecycle, url = installed(tmp_path, key, module_postgres, self_test=self_test)
+    lifecycle.deactivate("notes")
+    tested.clear()
+    broken.extend([] if restored_ok else [True])  # the previous version breaks while inactive
+    with pytest.raises(LifecycleError, match="self-test failed"):
+        lifecycle.update(package(key, version="1.1.0", migrations={"m1": M1, "m2": M2}), confirmed=True)
+    record = lifecycle.record("notes")
+    assert tested == ["1.1.0", "1.0.0"] and record["version"] == "1.0.0"
+    if restored_ok:
+        assert record["state"] == "INACTIVE" and not lifecycle.database.writes_locked("notes")
+        insert(url, "after a verified restore")
+    else:
+        assert record["state"] == "FAILED" and lifecycle.database.writes_locked("notes")
+        assert record["attention"]["error"].startswith("restored version is not verified")

@@ -254,9 +254,11 @@ def test_an_official_module_installed_with_the_release_updates_from_the_official
     assert pin.get("official") is None and pin["version"] == "0.0.9.1" and pin["history"] == [installed]
 
 
-def test_publisher_moves_from_its_role_into_its_container_through_the_official_update(tmp_path):
+@pytest.mark.parametrize("released", [None, "0.0.9.2"])
+def test_publisher_moves_from_its_role_into_its_container_through_the_official_update(tmp_path, released):
     """#510/#511 (21.11.2026): the bundled Publisher role updates to the signed container
-    package from the official repository; its new permission comes with the approved profile."""
+    package from the official repository; its new permission comes with the approved profile.
+    ``None``: the actual release, where the role and the package share one version (audit 22.11)."""
     from core import components as c
     from core.module.instances import ModuleInstanceRegistry, PlacementStore
     from core.module.catalog import catalog
@@ -272,23 +274,28 @@ def test_publisher_moves_from_its_role_into_its_container_through_the_official_u
     assert lifecycle._manifest(lifecycle.record("publisher")).kind == "execution"
 
     unsigned = c.build_package("publisher", image="ghcr.io/fylypovych/vertep-module-publisher@sha256:" + "d" * 64)
-    unsigned["manifest"] = {**unsigned["manifest"], "version": "0.0.9.2"}
+    released = released or c.declared_version("publisher")
+    unsigned["manifest"] = {**unsigned["manifest"], "version": released}
     data = json.dumps(c.sign_package(unsigned, private, "vertep-modules-1")).encode()
     network = Network()
-    asset = "https://github.com/fylypovych/vertep/releases/download/publisher.0.0.9.2/package.json"
+    asset = f"https://github.com/fylypovych/vertep/releases/download/publisher.{released}/package.json"
     network.files[asset] = data
     network.files["https://api.github.com/repos/fylypovych/vertep/releases?per_page=100"] = json.dumps([
-        {"tag_name": "publisher.0.0.9.2", "draft": False, "prerelease": False,
+        {"tag_name": f"publisher.{released}", "draft": False, "prerelease": False,
          "assets": [{"name": "package.json", "browser_download_url": asset}]}]).encode()
     sources = ModuleSources(lifecycle, SourceResolver(network), core_version="0.0.4.30")
 
     [offer] = [item for item in sources.recommendations() if item["module_id"] == "publisher"]
-    assert offer["available"] == "0.0.9.2" and offer["recommended"], offer
-    sources.update("publisher", "0.0.9.2", approved_profile=offer["profile"])
+    assert offer["available"] == released and offer["recommended"], offer
+    sources.update("publisher", released, approved_profile=offer["profile"])
     manifest = lifecycle._manifest(lifecycle.record("publisher"))
-    assert manifest.kind == "application" and manifest.version == "0.0.9.2"
+    assert manifest.kind == "application" and manifest.version == released
     assert manifest.container["image"].endswith("d" * 64)
     assert registry.placement.approvals["publisher"] == ["publishing.publish"]
     runtime = type("Runtime", (), {"modules": registry, "lifecycle": lifecycle})()
     entry = next(m for m in catalog(runtime)["modules"] if m["module_id"] == "publisher")
-    assert entry["version"] == "0.0.9.2" and entry["kind"] == "application" and entry["runtime_role"] is None
+    assert entry["version"] == released and entry["kind"] == "application" and entry["runtime_role"] is None
+    # The container is now installed: the same version is neither offered nor applied again.
+    assert next(i for i in sources.recommendations() if i["module_id"] == "publisher")["available"] is None
+    with pytest.raises(LifecycleError, match="already installed"):
+        lifecycle.update(json.loads(data), confirmed=True)

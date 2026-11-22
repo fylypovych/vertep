@@ -119,7 +119,9 @@ def cmd_manifest(args) -> dict:
         artifacts.append({"name": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
     for digest in args.image or []:
         artifacts.append({"name": "image", "digest": digest})
-    manifest = yaml.safe_load((ROOT / spec["version_source"]).read_text(encoding="utf-8")) if spec["kind"] == "module" else {}
+    # The released package's manifest carries compatibility and API (#510), as in cmd_package.
+    source = spec.get("package_manifest") or spec["version_source"]
+    manifest = yaml.safe_load((ROOT / source).read_text(encoding="utf-8")) if spec["kind"] == "module" else {}
     module = manifest.get("module") if isinstance(manifest.get("module"), dict) else manifest
     compatibility = {"core": module.get("core_compatibility")
                      or {"min": module.get("min_core_version"), "max": module.get("max_core_version") or None},

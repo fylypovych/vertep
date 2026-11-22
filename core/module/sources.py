@@ -456,6 +456,9 @@ class ModuleSources:
                     except ValueError:
                         return (0, 0, 0, 0)
                 newer = [r for r in releases if key(r) > key({"version": record["version"]})]
+                if not newer and self.lifecycle._manifest(record).kind == "execution" and "bundled" in (record.get("package") or {}):
+                    # A bundled role and its container package share one version (#511).
+                    newer = [r for r in releases if r["version"] == record["version"]]
                 if not newer:
                     result.append({**entry, "reasons": ["Встановлено найновішу стабільну версію"]})
                     continue

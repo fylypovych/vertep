@@ -145,3 +145,13 @@ def test_routed_task_cancel_fences_a_stale_module_result(switch_contour):
     assert claim(api) is None
     assert get_job(api, job_id)["status"] == "CANCELLED"
     assert consistent(switch_contour)["total"]["ready"] == consistent(switch_contour)["total"]["inflight"] == 0
+
+
+def test_the_worker_on_core_reports_the_modules_of_its_additional_roles(monkeypatch):
+    """Stand 22.11.2026: activating Backup on the CORE node failed its self-test because the
+    local Worker (NODE_ROLE=core) never reported the backup module of its additional role."""
+    monkeypatch.setenv("NODE_ROLE", "core")
+    monkeypatch.setenv("NODE_ADDITIONAL_ROLES", "backup, text")
+    assert sorted(item["name"] for item in migration.inventory()) == ["backup", "text"]
+    monkeypatch.setenv("NODE_ADDITIONAL_ROLES", "")
+    assert migration.inventory() == []

@@ -90,8 +90,11 @@ def overview():
 
 def inventory():
     result = []
+    # The Worker on CORE runs NODE_ROLE=core plus its additional roles (backup, text, ...):
+    # those bundled modules are reported too, or their self-test never finds an instance.
+    roles = {os.getenv("NODE_ROLE", "")} | {item.strip() for item in os.getenv("NODE_ADDITIONAL_ROLES", "").split(",")}
     for role, (name, _, _) in ROUTES.items():
-        if os.getenv("NODE_ROLE") and os.environ["NODE_ROLE"] != role:
+        if os.getenv("NODE_ROLE") and role not in roles:
             continue
         flagged = enabled(name) or enabled(name, "SHADOW")
         from pathlib import Path
