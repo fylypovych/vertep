@@ -32,6 +32,13 @@ PENDING, APPROVED, RUNNING, WAITING_CORE, DONE, FAILED = (
 HEALTH_CHECKS = ("container", "api", "database", "dependencies")
 
 
+def _applied(step: dict, record: dict | None) -> bool:
+    """The step's package is in place. A bundled role moving into its container package keeps
+    its version (#511), so the version alone does not show the move is done."""
+    return (bool(record) and record["version"] == step["to"]
+            and not (step.get("moves_into_container") and "bundled" in (record.get("package") or {})))
+
+
 class PlanError(ValueError):
     pass
 
@@ -230,6 +237,8 @@ class UpdateManager:
                               "depends_on": sorted(set(_dependency_names(manifests[module_id])) & set(targets)),
                               # Permissions the new version adds (e.g. Publisher moving from a role into
                               # its own container): shown in the plan, granted by approving it.
+                              # Same version, role -> container (#511): applied although the version matches.
+                              "moves_into_container": self.lifecycle.moves_into_container(record, manifests[module_id]),
                               "new_permissions": sorted(set(manifests[module_id].permissions)
                                                         - set(self._approved_permissions(module_id))),
                               "nodes": [{"node": node, "status": "PENDING"} for node in sorted(self.placement(module_id))],
@@ -326,7 +335,7 @@ class UpdateManager:
         try:
             record = self.lifecycle.record(module_id)
             online = [n for n in step["nodes"] if n["status"] != "DONE" and self.node_online(n["node"])]
-            if record["version"] != version:
+            if not _applied(step, record):
                 if not online and step["nodes"]:
                     for node in step["nodes"]:
                         node["status"] = "DEFERRED"
@@ -394,7 +403,7 @@ class UpdateManager:
             if step["kind"] != "module" or step["component"] not in dependents:
                 continue
             record = self.lifecycle.record(step["component"])
-            if record and record["version"] == step["to"] and record.get("previous"):
+            if _applied(step, record) and record.get("previous"):
                 self.lifecycle.rollback(step["component"])
                 rolled_back.append(step["component"])
             self.gates.close(step["component"])
@@ -439,12 +448,13 @@ class UpdateManager:
                     if node["node"] != node_id or node["status"] != "DEFERRED":
                         continue
                     record = self.lifecycle.record(step["component"])
-                    if record and record["version"] == step["from"] and step["status"] == "DEFERRED":
+                    if (record and not _applied(step, record) and record["version"] == step["from"]
+                            and step["status"] == "DEFERRED"):
                         # The module was deferred whole: the approved update still applies.
                         self.gates.allow(step["component"], node_id)
                         self.lifecycle.update(self.package_for(step["component"], step["to"]), confirmed=True)
                         record = self.lifecycle.record(step["component"])
-                    if not record or record["version"] != step["to"]:
+                    if not _applied(step, record):
                         node["status"] = "STALE"
                         self._event(plan, "plan no longer applies to the node", module=step["component"], node=node_id)
                         continue

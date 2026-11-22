@@ -240,3 +240,36 @@ def test_a_container_module_placed_on_no_node_is_refused_before_anything_runs(wo
     with pytest.raises(PlanError, match="not placed on any node"):
         world["manager"].plan({"c": "0.0.0.2"})
     assert world["lifecycle"].record("c")["version"] == "0.0.0.1"
+
+
+def test_the_bundled_publisher_role_moves_into_its_container_of_the_same_version_through_a_plan(tmp_path):
+    """Audit #511 (22.11.2026): the role and the released package share one version; the plan
+    finished DONE while the record stayed the role. The package must be applied before DONE."""
+    import json
+    from cryptography.hazmat.primitives import serialization
+    from core import components as c
+    from core.module.instances import ModuleInstanceRegistry, PlacementStore
+    signing = Ed25519PrivateKey.generate()
+    private = signing.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption())
+    trust = TrustStore({"vertep": Publisher("vertep", {"vertep-modules-1": pem(signing)},
+                                            ["github.com/fylypovych/vertep"])})
+    registry = ModuleInstanceRegistry({"core_runtime": "0.0.4.30"}, PlacementStore(tmp_path / "placement.json"))
+    lifecycle = ModuleLifecycle(tmp_path / "lc", lambda p: verify_package(p, trust), drain_timeout=0.1,
+                                registry=registry, system_versions={"core_runtime": "0.0.4.30"})
+    lifecycle.install_bundled("publisher")
+    version = lifecycle.record("publisher")["version"]
+    unsigned = c.build_package("publisher", image="ghcr.io/fylypovych/vertep-module-publisher@sha256:" + "d" * 64)
+    assert unsigned["manifest"]["version"] == version  # the actual release: one version for both
+    released = json.loads(json.dumps(c.sign_package(unsigned, private, "vertep-modules-1")))
+    manager = UpdateManager(tmp_path / "lc", lifecycle, placement=lambda module_id: ["n1"],
+                            package_for=lambda m, v: released, core_version=lambda: "0.0.4.30",
+                            request_core_update=lambda v: None, health=lambda m, n, v: OK,
+                            node_online=lambda n: True, maintenance=lambda m, on: None,
+                            wait_seconds=0.5, poll=0.01)
+    plan = manager.plan({"publisher": version})
+    assert plan["steps"][0]["moves_into_container"] is True
+    manager.approve(plan["id"], "admin")
+    assert manager.execute(plan["id"])["status"] == "DONE"
+    manifest = lifecycle._manifest(lifecycle.record("publisher"))
+    assert manifest.kind == "application" and manifest.version == version

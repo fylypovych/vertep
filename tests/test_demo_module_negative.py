@@ -108,3 +108,18 @@ def test_absent_or_failed_module_does_not_block_the_platform(runtime, monkeypatc
     assert client.get("/api/health").status_code == 200
     job = runtime.create("configured", {"topic": "platform keeps working"})
     assert runtime.engine.get_job_status(job)["status"] == "IN_PROGRESS"
+
+
+def test_a_refused_reactivation_keeps_a_deactivated_module_inactive(runtime):
+    """Regression of 0.0.4.33: a deactivated module whose activation is refused became FAILED."""
+    lifecycle, registry = runtime.lifecycle, runtime.modules
+    lifecycle.install(runtime.package(migrations=[]))
+    registry.set_placement("demo-notes", ["demo-node"])
+    registry.approve_permissions("demo-notes", ["demo-notes.data"])
+    report(runtime, ready=True)
+    lifecycle.activate("demo-notes")
+    lifecycle.deactivate("demo-notes")
+    report(runtime, ready=False)  # the node is not ready yet
+    with pytest.raises(LifecycleError):
+        lifecycle.activate("demo-notes")
+    assert lifecycle.record("demo-notes")["state"] == "INACTIVE"

@@ -362,7 +362,8 @@ class ModuleLifecycle:
                 record["state"] = ACTIVE
                 self._save(record)
             except BaseException:
-                self._rollback_to(module_id, snapshot)
+                # The refused activation changed nothing but data prepared for it: no second check.
+                self._rollback_to(module_id, snapshot, check=False)
                 self._journal_path(module_id).unlink(missing_ok=True)  # undone: nothing left to recover
                 raise
             self._journal_path(module_id).unlink()
@@ -506,7 +507,7 @@ class ModuleLifecycle:
             self._journal_path(module_id).unlink(missing_ok=True)
             return {"module_id": module_id, "state": self.record(module_id)["state"], "version": self.record(module_id)["version"]}
 
-    def _rollback_to(self, module_id: str, snapshot: Path, reactivate: bool = False) -> None:
+    def _rollback_to(self, module_id: str, snapshot: Path, reactivate: bool = False, check: bool = True) -> None:
         record = self._restore_snapshot(module_id, snapshot)
         if record is None:
             self._state_path(module_id).unlink(missing_ok=True)
@@ -514,13 +515,15 @@ class ModuleLifecycle:
                 self.registry.set_lifecycle_state(module_id, None)
             return
         state = record["state"]
-        # Publish the restored version first (inactive) so nodes converge to it, then require its
-        # own self-test, also for an inactive module: the write fence opens only after it (#513).
-        self._save({**record, "state": INACTIVE})
-        if not self.self_test(self._manifest(record)):
-            state = FAILED
-        elif reactivate or state == ACTIVE:
-            state = ACTIVE
+        if check and (reactivate or state in (ACTIVE, INACTIVE)):
+            # Publish the restored version first (inactive) so nodes converge to it, then require its
+            # own self-test, also for an inactive module: the write fence opens only after it (#513).
+            # A never activated (INSTALLED) module has nothing running to check.
+            self._save({**record, "state": INACTIVE})
+            if not self.self_test(self._manifest(record)):
+                state = FAILED
+            elif reactivate or state == ACTIVE:
+                state = ACTIVE
         self._save({**record, "state": state})
 
     def recover(self) -> list[dict]:
