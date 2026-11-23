@@ -21,6 +21,7 @@ import importlib.util
 import io
 import json
 import re
+import os
 import shutil
 import sys
 import tempfile
@@ -797,9 +798,14 @@ def test_a_probe_below_the_pinned_minimum_is_refused_before_the_upstream(monkeyp
 def test_a_real_probe_clip_is_encoded_at_the_verified_geometry(tmp_path):
     """Where FFmpeg exists, the encoded probe is decoded and measured, not assumed.
 
-    The moneyprinter-pinned-image CI job installs moviepy at the MPT image pin and the
-    system ffmpeg the wrapper calls, so this runs there instead of being skipped."""
-    moviepy = pytest.importorskip("moviepy")
+    The moneyprinter-pinned-image CI job runs it in its own step with moviepy at the MPT
+    image pin and the system ffmpeg the wrapper calls (VERTEP_REQUIRE_PROBE_CLIP=1)."""
+    required = os.getenv("VERTEP_REQUIRE_PROBE_CLIP") == "1"
+    if shutil.which("ffmpeg") is None:
+        if required:
+            pytest.fail("the system ffmpeg the wrapper calls is not installed")
+        pytest.skip("the wrapper calls the system ffmpeg, which is not installed here")
+    moviepy = pytest.importorskip("moviepy") if not required else __import__("moviepy")
     from services import moneyprinter_service as wrapper
 
     clip = tmp_path / "scene-1.mp4"

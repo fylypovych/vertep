@@ -686,16 +686,20 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install runtime-check dependencies
-        # moviepy at the pin of the MPT image and the system ffmpeg the wrapper calls:
-        # the probe-clip regression encodes and measures a real clip (#520).
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          python -m pip install -r requirements.txt -r requirements-dev.txt "moviepy==2.2.1"
+        # moviepy at the pin of the MPT image: the probe-clip regression encodes with it (#520).
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt "moviepy==2.2.1"
       - name: Verify MPT bridge regressions
         run: >-
           python -m pytest -q tests/test_moneyprinter_runtime.py
           tests/test_assembly_worker_route.py tests/test_mpt_recovery.py
           tests/test_mpt_media_matrix.py tests/test_issue_122_acceptance_report.py
+      - name: Verify the probe clip with the system FFmpeg the wrapper calls
+        # A separate step: the bridge regressions above run without a system ffmpeg (#520).
+        env:
+          VERTEP_REQUIRE_PROBE_CLIP: "1"
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          python -m pytest -q "tests/test_moneyprinter_runtime.py::test_a_real_probe_clip_is_encoded_at_the_verified_geometry"
       - name: Build and execute pinned MoneyPrinterTurbo
         run: >-
           python scripts/moneyprinter-runtime-check.py --timeout 900 --keep
