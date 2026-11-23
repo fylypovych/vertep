@@ -797,8 +797,8 @@ def test_a_probe_below_the_pinned_minimum_is_refused_before_the_upstream(monkeyp
 def test_a_real_probe_clip_is_encoded_at_the_verified_geometry(tmp_path):
     """Where FFmpeg exists, the encoded probe is decoded and measured, not assumed.
 
-    moviepy is installed at the MPT image pin in the moneyprinter-pinned-image CI job;
-    it encodes with the bundled imageio-ffmpeg, so no system ffmpeg is required."""
+    The moneyprinter-pinned-image CI job installs moviepy at the MPT image pin and the
+    system ffmpeg the wrapper calls, so this runs there instead of being skipped."""
     moviepy = pytest.importorskip("moviepy")
     from services import moneyprinter_service as wrapper
 
