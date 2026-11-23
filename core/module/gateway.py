@@ -537,6 +537,13 @@ def ui_extensions():
     return {"extensions": sorted(result, key=lambda item: item["module_id"])}
 
 
+@router.get("/api/modules/navigation")
+def module_navigation():
+    """Menu entries of READY modules; the panel shows nothing else for module pages."""
+    from .navigation import navigation
+    return navigation()
+
+
 @router.get("/api/modules/ui/{module_id}/{version}/{path:path}")
 def ui_asset(module_id: str, version: str, path: str):
     registry = _registry()

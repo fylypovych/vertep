@@ -47,6 +47,7 @@ def pytest_configure(config):
     global _TEST_STATE_ROOT
     config.addinivalue_line("markers", "stand_in: always render on the MPT stand-in runtime")
     config.addinivalue_line("markers", "strict_channel_credentials: no legacy channel allowance (#502)")
+    config.addinivalue_line("markers", "strict_module_pages: module pages need a READY module")
     config.addinivalue_line("markers", "lease_seconds(n): CORE task lease for a process test")
     config.addinivalue_line("markers", "render_timeout_seconds(n): bridge render timeout for a process test")
     _TEST_STATE_ROOT = Path(tempfile.mkdtemp(prefix="vertep-tests-"))
@@ -664,6 +665,19 @@ def pytest_collection_modifyitems(items):
         if item.module.__name__.rsplit(".", 1)[-1] in _XDIST_TOGETHER:
             item.add_marker(pytest.mark.xdist_group("together"))
 
+
+
+@pytest.fixture(autouse=True)
+def module_pages_active(request, monkeypatch):
+    """The suite exercises the CORE API of module pages (characters, brands, publishing) without
+    running their module containers: by default those modules count as active. Tests of the rule
+    itself opt out with ``@pytest.mark.strict_module_pages``. Production has no such allowance."""
+    if not request.node.get_closest_marker("strict_module_pages"):
+        from core.module import navigation
+        from tests.module_menu import with_official_pages
+        real = navigation.navigation
+        monkeypatch.setattr(navigation, "module_ready", lambda module_id: True)
+        monkeypatch.setattr(navigation, "navigation", lambda: with_official_pages(real()))
 
 
 @pytest.fixture(autouse=True)

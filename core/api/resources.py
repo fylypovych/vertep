@@ -10,13 +10,14 @@ from fastapi.responses import FileResponse
 
 from ..configuration import (BrandConfig, CharacterConfig, SAFE_ID, load_character,
                             read_json, save_character)
+from ..module.navigation import require_module
 from ..models import Channel, ChannelCreate, ChannelUpdate, CHANNEL_TYPES
 from ..state import store
 
 router = APIRouter()
 
 
-@router.post("/api/characters")
+@router.post("/api/characters", dependencies=[require_module("characters")])
 def create_character(config: CharacterConfig):
     if config.id and not SAFE_ID.fullmatch(config.id):
         raise HTTPException(400, "Invalid character ID")
@@ -28,7 +29,7 @@ def create_character(config: CharacterConfig):
     return config
 
 
-@router.get("/api/characters")
+@router.get("/api/characters", dependencies=[require_module("characters")])
 def characters():
     root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
     result = []
@@ -41,7 +42,7 @@ def characters():
     return result
 
 
-@router.get("/api/characters/{character_id}")
+@router.get("/api/characters/{character_id}", dependencies=[require_module("characters")])
 def get_character(character_id: str):
     if not SAFE_ID.fullmatch(character_id):
         raise HTTPException(400, "Invalid character ID")
@@ -59,13 +60,13 @@ def _reference_owner(character_id: str) -> str:
     return character_id
 
 
-@router.get("/api/characters/{character_id}/references")
+@router.get("/api/characters/{character_id}/references", dependencies=[require_module("characters")])
 def character_references(character_id: str):
     from ..character_references import list_references
     return list_references(_reference_owner(character_id))
 
 
-@router.post("/api/characters/{character_id}/references")
+@router.post("/api/characters/{character_id}/references", dependencies=[require_module("characters")])
 async def upload_character_reference(character_id: str, request: Request):
     from ..character_references import save_reference
     owner = _reference_owner(character_id)
@@ -75,7 +76,7 @@ async def upload_character_reference(character_id: str, request: Request):
         raise HTTPException(422, str(error)) from error
 
 
-@router.get("/api/characters/{character_id}/references/{filename}")
+@router.get("/api/characters/{character_id}/references/{filename}", dependencies=[require_module("characters")])
 def character_reference_file(character_id: str, filename: str):
     from ..character_references import reference_path
     path = reference_path(_reference_owner(character_id), filename)
@@ -84,7 +85,7 @@ def character_reference_file(character_id: str, filename: str):
     return FileResponse(path)
 
 
-@router.delete("/api/characters/{character_id}/references/{filename}")
+@router.delete("/api/characters/{character_id}/references/{filename}", dependencies=[require_module("characters")])
 def delete_character_reference(character_id: str, filename: str):
     from ..character_references import reference_path
     path = reference_path(_reference_owner(character_id), filename)
@@ -94,7 +95,7 @@ def delete_character_reference(character_id: str, filename: str):
     return {"deleted": filename}
 
 
-@router.put("/api/characters/{character_id}")
+@router.put("/api/characters/{character_id}", dependencies=[require_module("characters")])
 def put_character(character_id: str, config: CharacterConfig):
     if character_id != config.id:
         raise HTTPException(400, "Character ID cannot be changed")
@@ -102,7 +103,7 @@ def put_character(character_id: str, config: CharacterConfig):
     return config
 
 
-@router.delete("/api/characters/{character_id}")
+@router.delete("/api/characters/{character_id}", dependencies=[require_module("characters")])
 def delete_character(character_id: str):
     if not SAFE_ID.fullmatch(character_id):
         raise HTTPException(400, "Invalid character ID")
@@ -146,7 +147,7 @@ def delete_character(character_id: str):
     return {"deleted": character_id}
 
 
-@router.get("/api/characters/{character_id}/usage")
+@router.get("/api/characters/{character_id}/usage", dependencies=[require_module("characters")])
 def character_usage(character_id: str):
     if not SAFE_ID.fullmatch(character_id):
         raise HTTPException(400, "Invalid character ID")
@@ -189,7 +190,7 @@ def _brand_call(operation, *args):
         raise HTTPException(error.status, error.detail) from error
 
 
-@router.post("/api/brands")
+@router.post("/api/brands", dependencies=[require_module("brands")])
 def create_brand(config: BrandConfig):
     from ..brand_store import create_brand as store_create
     if not config.id:
@@ -199,20 +200,20 @@ def create_brand(config: BrandConfig):
     return _brand_call(store_create, config.model_dump())
 
 
-@router.get("/api/brands")
+@router.get("/api/brands", dependencies=[require_module("brands")])
 def brands():
     from ..brand_store import list_brands
     return _brand_call(list_brands)
 
 
-@router.post("/api/brands/migrate-to-module")
+@router.post("/api/brands/migrate-to-module", dependencies=[require_module("brands")])
 def migrate_brands_to_module():
     """Administrator: copy legacy brands/channels into the running Brands module."""
     from ..brand_store import migrate_to_module
     return _brand_call(migrate_to_module)
 
 
-@router.put("/api/brands/{brand_id}")
+@router.put("/api/brands/{brand_id}", dependencies=[require_module("brands")])
 def put_brand(brand_id: str, config: BrandConfig):
     from ..brand_store import update_brand
     if brand_id != config.id:
@@ -220,7 +221,7 @@ def put_brand(brand_id: str, config: BrandConfig):
     return _brand_call(update_brand, brand_id, config.model_dump())
 
 
-@router.delete("/api/brands/{brand_id}")
+@router.delete("/api/brands/{brand_id}", dependencies=[require_module("brands")])
 def delete_brand(brand_id: str):
     from ..brand_store import delete_brand as store_delete
     if any(job.brand_id == brand_id for job in store.jobs.values()):
@@ -231,12 +232,12 @@ def delete_brand(brand_id: str):
     return {"deleted": brand_id}
 
 
-@router.get("/api/channels/types")
+@router.get("/api/channels/types", dependencies=[require_module("brands")])
 def channel_types():
     return sorted(CHANNEL_TYPES)
 
 
-@router.get("/api/brands/{brand_id}/channels")
+@router.get("/api/brands/{brand_id}/channels", dependencies=[require_module("brands")])
 def list_brand_channels(brand_id: str):
     if not SAFE_ID.fullmatch(brand_id):
         raise HTTPException(400, "Invalid brand ID")
@@ -244,7 +245,7 @@ def list_brand_channels(brand_id: str):
     return [ch.model_dump() for ch in _brand_call(list_channels, brand_id)]
 
 
-@router.get("/api/channels/{channel_id}")
+@router.get("/api/channels/{channel_id}", dependencies=[require_module("brands")])
 def get_channel(channel_id: str):
     from ..brand_store import get_channel as store_get
     channel = _brand_call(store_get, channel_id)
@@ -260,7 +261,7 @@ def _check_channel_target(channel_type: str, target: str) -> None:
         raise HTTPException(400, "Канал Telegram: @назва або числовий ідентифікатор")
 
 
-@router.post("/api/brands/{brand_id}/channels")
+@router.post("/api/brands/{brand_id}/channels", dependencies=[require_module("brands")])
 def create_channel(brand_id: str, config: ChannelCreate):
     if not SAFE_ID.fullmatch(brand_id):
         raise HTTPException(400, "Invalid brand ID")
@@ -276,7 +277,7 @@ def create_channel(brand_id: str, config: ChannelCreate):
     return _brand_call(store_create_channel, channel).model_dump()
 
 
-@router.put("/api/channels/{channel_id}")
+@router.put("/api/channels/{channel_id}", dependencies=[require_module("brands")])
 def update_channel(channel_id: str, config: ChannelUpdate):
     from ..brand_store import get_channel as store_get, update_channel as store_update
     existing = _brand_call(store_get, channel_id)
@@ -292,7 +293,7 @@ def update_channel(channel_id: str, config: ChannelUpdate):
     return _brand_call(store_update, existing).model_dump()
 
 
-@router.delete("/api/channels/{channel_id}")
+@router.delete("/api/channels/{channel_id}", dependencies=[require_module("brands")])
 def delete_channel(channel_id: str):
     from ..brand_store import delete_channel as store_delete_channel, get_channel as store_get
     existing = _brand_call(store_get, channel_id)
@@ -303,7 +304,7 @@ def delete_channel(channel_id: str):
 
 
 
-@router.get("/api/channels/{channel_id}/credentials")
+@router.get("/api/channels/{channel_id}/credentials", dependencies=[require_module("brands")])
 def channel_credentials(channel_id: str):
     """Which credentials a channel publishes with (values are never returned)."""
     from ..brand_store import get_channel as store_get
@@ -314,7 +315,7 @@ def channel_credentials(channel_id: str):
     return describe(channel)
 
 
-@router.put("/api/channels/{channel_id}/credentials")
+@router.put("/api/channels/{channel_id}/credentials", dependencies=[require_module("brands")])
 def put_channel_credentials(channel_id: str, payload: dict, request: Request):
     """Administrator: the channel's own secrets, or the explicit, audited permission to
     use the installation-wide platform credentials for this existing channel."""

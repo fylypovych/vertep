@@ -1,3 +1,4 @@
+import { activeModules } from './module-menu';
 import { test, expect } from '@playwright/test';
 
 const mockBrands: any[] = [
@@ -57,6 +58,7 @@ test.describe('Brands CRUD', () => {
 
   test('Список брендів відображається після завантаження', async ({ page }) => {
     await setupRoutes(page);
+    await activeModules(page);
     await page.goto('/brands');
     await expect(page.getByTestId('brands-page')).toBeVisible();
     await expect(page.getByText('Brand One')).toBeVisible();
@@ -65,6 +67,7 @@ test.describe('Brands CRUD', () => {
 
   test('Створення нового бренду', async ({ page }) => {
     await setupRoutes(page);
+    await activeModules(page);
     await page.goto('/brands');
     await page.getByTestId('create-brand-button').click();
     await expect(page.getByTestId('brand-editor-modal')).toBeVisible();
@@ -79,6 +82,7 @@ test.describe('Brands CRUD', () => {
 
   test('Редагування існуючого бренду', async ({ page }) => {
     await setupRoutes(page);
+    await activeModules(page);
     await page.goto('/brands');
     await page.getByRole('button', { name: 'Редагувати', exact: true }).first().click();
     await expect(page.getByTestId('brand-editor-modal')).toBeVisible();
@@ -100,6 +104,7 @@ test.describe('Brands CRUD', () => {
       }
       return route.fallback();
     });
+    await activeModules(page);
     await page.goto('/brands');
     page.on('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: 'Видалити', exact: true }).first().click();
@@ -111,6 +116,7 @@ test.describe('Brands CRUD', () => {
 
   test('Відображення стану бренду (активний/неактивний)', async ({ page }) => {
     await setupRoutes(page);
+    await activeModules(page);
     await page.goto('/brands');
     await expect(page.getByText('Активний').first()).toBeVisible();
     await expect(page.getByText('Неактивний')).toBeVisible();

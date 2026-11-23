@@ -125,7 +125,7 @@ def config_contour(tmp_path, request, record_property):
                     env[key] = value
         log = (tmp_path / f"{name}-{uuid.uuid4().hex}.log").open("w", encoding="utf-8")
         logs.append(log)
-        command = [sys.executable, "-m", "uvicorn", "core.app:app", "--host", "127.0.0.1", "--port", core_url.rsplit(":", 1)[1]] if name == "core" else [sys.executable, "-m", "tests.config_process_probe"]
+        command = [sys.executable, "-m", "uvicorn", "tests.core_app_modules_active:app", "--host", "127.0.0.1", "--port", core_url.rsplit(":", 1)[1]] if name == "core" else [sys.executable, "-m", "tests.config_process_probe"]
         processes[name] = subprocess.Popen(command, cwd=ROOT, env=env if name == "core" else worker_env, stdout=log, stderr=log)
         def ready():
             try:

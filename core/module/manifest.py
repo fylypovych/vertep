@@ -247,6 +247,14 @@ class ModuleManifest:
             navigation = _list_of_dicts(ui.get("navigation"), "ui.navigation")
             for item in navigation:
                 _identifier(item.get("id"), "ui.navigation.id")
+                # Optional menu details; CORE decides whether a route may be used (core/module/navigation.py).
+                if not isinstance(item.get("label", ""), str) or not isinstance(item.get("admin_only", False), bool):
+                    raise ValueError("Invalid module ui.navigation entry")
+                if "route" in item and (not isinstance(item["route"], str) or not _ROUTE.fullmatch(item["route"])
+                                        or ".." in item["route"]):
+                    raise ValueError("Invalid module ui.navigation.route")
+                if "group" in item:
+                    _identifier(item["group"], "ui.navigation.group")
             files = ui.get("files", {})
             if not isinstance(files, dict) or any(
                     not isinstance(path, str) or not path or path.startswith("/") or "\\" in path

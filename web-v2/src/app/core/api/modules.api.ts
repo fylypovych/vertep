@@ -14,6 +14,17 @@ export interface ModuleUiExtension {
   api_base?: string | null;
 }
 
+/** A menu entry a READY module declares (`ui.navigation` of its manifest). */
+export interface ModuleNavItem {
+  module_id: string;
+  id: string;
+  label: string;
+  /** A page of the panel (`/characters`) or the module's own UI (`/modules/<id>`). */
+  path: string;
+  group: string;
+  admin_only: boolean;
+}
+
 /** Signed module UI extensions (#493). A failure yields no extensions, never a broken panel. */
 @Injectable({ providedIn: 'root' })
 export class ModulesApiService {
@@ -23,6 +34,12 @@ export class ModulesApiService {
     this.http.get<{ extensions: ModuleUiExtension[] }>(`${this.base.url}/modules/ui-extensions`,
       { headers: this.base.headers(), context: new HttpContext().set(BACKGROUND_REQUEST, true) })
       .pipe(map(response => Array.isArray(response?.extensions) ? response.extensions : []), catchError(() => of([])));
+
+  /** Menu entries of READY modules; a failure yields none, so module pages stay closed. */
+  navigation = (): Observable<ModuleNavItem[]> =>
+    this.http.get<{ items: ModuleNavItem[] }>(`${this.base.url}/modules/navigation`,
+      { headers: this.base.headers(), context: new HttpContext().set(BACKGROUND_REQUEST, true) })
+      .pipe(map(response => Array.isArray(response?.items) ? response.items : []), catchError(() => of([])));
 
   /** Status of the extension entry; the bytes are digest-checked by CORE before serving. */
   entryAvailable = (url: string): Observable<boolean> =>

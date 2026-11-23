@@ -1,7 +1,7 @@
 schema_version: "2.0"
 name: brands
 module_id: brands
-version: "0.0.4.15"
+version: "0.0.4.16"
 kind: application
 label: Бренди
 core_compatibility: {min: "0.0.4.11", max: "0.0.9.99"}
@@ -35,7 +35,7 @@ api:
 ui:
   entry: index.html
   navigation:
-    - {id: brands, label: "Бренди"}
+    - {id: brands, label: "Бренди", route: "/brands", group: content}
   files:
     index.html: "73441c514747b1694c70bdd1f2c8675b558d5ecf94ac325bb815a1736335941c"
 permissions: []

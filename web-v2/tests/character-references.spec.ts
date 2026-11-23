@@ -1,3 +1,4 @@
+import { activeModules } from './module-menu';
 import { test, expect } from '@playwright/test';
 
 const PNG = Buffer.from(
@@ -32,6 +33,7 @@ function mockApi(page: any, uploads: string[]) {
 test('референс старого персонажа завантажується одразу з вікна редагування', async ({ page }) => {
   const uploads: string[] = [];
   await mockApi(page, uploads);
+  await activeModules(page);
   await page.goto('/characters');
   await page.getByTestId('edit-character-button').click();
   await page.getByTestId('character-reference-input').setInputFiles(file);
@@ -42,6 +44,7 @@ test('референс старого персонажа завантажуєт�
 test('референс нового персонажа завантажується лише після збереження', async ({ page }) => {
   const uploads: string[] = [];
   await mockApi(page, uploads);
+  await activeModules(page);
   await page.goto('/characters');
   await page.getByTestId('create-character-button').click();
   await page.getByTestId('character-reference-input').setInputFiles(file);

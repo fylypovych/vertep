@@ -1,3 +1,4 @@
+import { activeModules } from './module-menu';
 import { test, expect } from '@playwright/test';
 
 async function open(page: any, role: string, path = '/jobs') {
@@ -8,6 +9,7 @@ async function open(page: any, role: string, path = '/jobs') {
     if (url.endsWith('/queue')) return route.fulfill({ json: { ready: [], inflight: [], dead_letter: [] } });
     return route.fulfill({ json: route.request().method() === 'GET' ? [] : {} });
   });
+  await activeModules(page);
   await page.goto(path);
 }
 
@@ -75,4 +77,27 @@ test('#518: модератор бачить лише свої пункти в т
   expect(groups['']).toEqual(['Дашборд']);
   expect(groups['Контент']).toEqual(CONTENT);
   expect(groups['Система']).toEqual(['Стан системи', 'Алерти', 'Логи', 'Вузли']);
+});
+
+test('сторінки модулів є в меню й відкриваються лише поки модуль активний', async ({ page }) => {
+  await page.route('**/api/**', async (route: any) => {
+    const url = new URL(route.request().url()).pathname;
+    if (url.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', username: 'admin', role: 'admin' } });
+    if (url.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
+    return route.fulfill({ json: route.request().method() === 'GET' ? [] : {} });
+  });
+  // Only Brands is READY; a future module brings its own UI into «Розширення модулів».
+  await activeModules(page, [
+    { module_id: 'brands', id: 'brands', label: 'Бренди', path: '/brands', group: 'content', admin_only: false },
+    { module_id: 'demo', id: 'demo', label: 'Демо', path: '/modules/demo', group: 'modules', admin_only: false }]);
+  await page.goto('/jobs');
+  await expect(page.getByTestId('sidebar-nav').getByText('Бренди', { exact: true })).toBeVisible({ timeout: 20000 });
+  const groups = await menu(page);
+  expect(groups['Контент']).toEqual(['Завдання', 'Черга виконання', 'Бренди', 'Шаблони обробки']);
+  expect(groups['Розширення модулів']).toEqual(['Демо']);
+  await page.goto('/characters');
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('characters-page')).toHaveCount(0);
+  await page.goto('/published');
+  await expect(page).toHaveURL(/\/$/);
 });

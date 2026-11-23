@@ -1,3 +1,4 @@
+import { modulePageGuard } from './core/module-page.guard';
 import { Routes } from '@angular/router';
 import { LayoutComponent } from './layout/layout.component';
 import { AuthGuard } from './core/auth.guard';
@@ -25,13 +26,13 @@ export const routes: Routes = [
       { path: 'jobs', loadComponent: () => import('./jobs/jobs.component').then(m => m.JobsComponent), title: 'Завдання', data: { metadata: { title: 'Завдання', icon: 'jobs-icon' } } },
       { path: 'queue', loadComponent: () => import('./jobs/jobs.component').then(m => m.JobsComponent), title: 'Черга виконання', data: { metadata: { title: 'Черга виконання', icon: 'queue-icon', queryParams: { tab: 'queue' } } } },
       { path: 'jobs/:id', loadComponent: () => import('./jobs/job-detail.component').then(m => m.JobDetailComponent), title: 'Завдання', data: { metadata: { title: 'Завдання' } } },
-      { path: 'published', loadComponent: () => import('./published/published.component').then(m => m.PublishedComponent), title: 'Опубліковане', data: { metadata: { title: 'Опубліковане', icon: 'published-icon' } } },
+      { path: 'published', canActivate: [modulePageGuard], loadComponent: () => import('./published/published.component').then(m => m.PublishedComponent), title: 'Опубліковане', data: { metadata: { title: 'Опубліковане', icon: 'published-icon' } } },
       { path: 'workers', loadComponent: () => import('./workers/workers.component').then(m => m.WorkersComponent), title: 'Вузли', data: { metadata: { title: 'Вузли', icon: 'workers-icon' } } },
       { path: 'workers/:id', loadComponent: () => import('./worker-detail/worker-detail.component').then(m => m.WorkerDetailComponent), title: 'Вузол', data: { metadata: { title: 'Вузол' } } },
-      { path: 'characters', loadComponent: () => import('./characters/characters.component').then(m => m.CharactersComponent), title: 'Персонажі', data: { metadata: { title: 'Персонажі', icon: 'characters-icon' } } },
-      { path: 'characters/:id', loadComponent: () => import('./character-detail/character-detail.component').then(m => m.CharacterDetailComponent), title: 'Персонаж', data: { metadata: { title: 'Персонаж' } }, canDeactivate: [UnsavedGuardService] },
+      { path: 'characters', canActivate: [modulePageGuard], loadComponent: () => import('./characters/characters.component').then(m => m.CharactersComponent), title: 'Персонажі', data: { metadata: { title: 'Персонажі', icon: 'characters-icon' } } },
+      { path: 'characters/:id', canActivate: [modulePageGuard], loadComponent: () => import('./character-detail/character-detail.component').then(m => m.CharacterDetailComponent), title: 'Персонаж', data: { metadata: { title: 'Персонаж' } }, canDeactivate: [UnsavedGuardService] },
       { path: 'workflows', loadComponent: () => import('./workflows/workflows.component').then(m => m.WorkflowsComponent), title: 'Шаблони обробки', data: { metadata: { title: 'Шаблони обробки', icon: 'workflows-icon' } } },
-      { path: 'brands', loadComponent: () => import('./brands/brands.component').then(m => m.BrandsComponent), title: 'Бренди', data: { metadata: { title: 'Бренди', icon: 'brands-icon' } } },
+      { path: 'brands', canActivate: [modulePageGuard], loadComponent: () => import('./brands/brands.component').then(m => m.BrandsComponent), title: 'Бренди', data: { metadata: { title: 'Бренди', icon: 'brands-icon' } } },
       { path: 'operations', redirectTo: 'alerts', pathMatch: 'full' },
       { path: 'alerts', loadComponent: () => import('./alerts/alerts.component').then(m => m.AlertsComponent), title: 'Алерти', data: { metadata: { title: 'Алерти', icon: 'alerts-icon' } } },
       { path: 'logs', loadComponent: () => import('./logs/logs.component').then(m => m.LogsComponent), title: 'Логи', data: { metadata: { title: 'Логи', icon: 'logs-icon' } } },

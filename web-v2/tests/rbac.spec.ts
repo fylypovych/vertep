@@ -1,3 +1,4 @@
+import { activeModules } from './module-menu';
 import { test, expect } from '@playwright/test';
 
 interface RbacMocks {
@@ -56,6 +57,7 @@ test.describe('RBAC — Issue #29', () => {
     // Модератор створює job своїх брендів (CORE перевіряє бренд), а admin-мутації
     // (тут — створення бренду) заблоковані policy з поясненням причини.
     await expect(page.getByTestId('create-job-button')).toBeEnabled();
+    await activeModules(page);
     await page.goto('/brands');
     const createBrand = page.getByTestId('create-brand-button');
     await expect(createBrand).toBeVisible({ timeout: 20000 });
@@ -182,6 +184,7 @@ test.describe('Policy fail-closed — Issue #168.3/#114', () => {
 // and resources stay mutable in MAINTENANCE but are blocked in READ_ONLY.
 test.describe('System-state mutation matrix — Issue #168.3/#168.4', () => {
   async function gotoAndWait(page: any, path: string) {
+    await activeModules(page);
     await page.goto(path);
     await page.waitForLoadState('networkidle').catch(() => {});
   }

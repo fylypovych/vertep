@@ -568,7 +568,7 @@ def test_queue_ready_inflight_have_task_fields(monkeypatch):
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")  # the task stays in the queue for a Worker
     client = _client()
     jid = client.post("/api/jobs", json={"topic": "Queue fields"}).json()["job_id"]  # queues its script
-    resp = client.get("/api/tasks/queue")
+    resp = client.get("/api/tasks/queue", params={"limit": 500})  # earlier tests may leave more than a page
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data["inflight"], list)

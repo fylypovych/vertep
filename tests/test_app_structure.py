@@ -63,6 +63,7 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["POST", "/api/setup/selection"],  # #445 stages the wizard's selected services.
         ["GET", "/api/system/models/catalog"],  # #454 Ollama tags available for download.
         ["GET", "/api/nodes/module-registry"],  # #492 node/module/instance registry.
+        ["GET", "/api/modules/navigation"],  # owner 23.11.2026: menu entries of READY modules.
         ["GET", "/api/nodes/module-catalog"],  # #496 modules x nodes catalog.
         ["PUT", "/api/nodes/module-registry/placement/{module_id}"],
         ["PUT", "/api/nodes/module-registry/profile/{node_id}"],

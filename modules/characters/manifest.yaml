@@ -1,7 +1,7 @@
 schema_version: "2.0"
 name: characters
 module_id: characters
-version: "0.0.4.15"
+version: "0.0.4.16"
 kind: application
 core_compatibility: {min: "0.0.3.91", max: "0.0.9.99"}
 dependencies: []
@@ -34,7 +34,7 @@ api:
 ui:
   entry: index.html
   navigation:
-    - {id: characters, label: "Персонажі"}
+    - {id: characters, label: "Персонажі", route: "/characters", group: content}
   files:
     index.html: "2e36f0521ed450009e9fa6e2810c86e178d80a409759b2c118833298edf01b2f"
 permissions:

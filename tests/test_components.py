@@ -341,14 +341,15 @@ def test_plan_names_the_tag_of_a_release_that_only_gets_its_package(tmp_path, mo
     spec = importlib.util.spec_from_file_location("component_release", ROOT / "scripts" / "component-release.py")
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
-    monkeypatch.setattr(cli, "_tags", lambda: {"brands.0.0.4.15": "a" * 40})
+    tag = "brands." + c.declared_version("brands")  # the current version of the module
+    monkeypatch.setattr(cli, "_tags", lambda: {tag: "a" * 40})
     monkeypatch.setattr(cli, "_git", lambda *args: "")  # no brands file changed since its tag
     releases = tmp_path / "releases.json"
-    releases.write_text(json.dumps([{"tag": "brands.0.0.4.15", "assets": ["brands.0.0.4.15.manifest.json"]}]))
+    releases.write_text(json.dumps([{"tag": tag, "assets": [tag + ".manifest.json"]}]))
     plan = cli.cmd_plan(types.SimpleNamespace(components="brands", sha="b" * 40, releases=str(releases)))
     entry = plan["brands"]
     assert entry["backfill"] and not entry["publish"] and "error" not in entry
-    assert entry["tag"] == "brands.0.0.4.15" and entry["commit"] == "a" * 40
+    assert entry["tag"] == tag and entry["commit"] == "a" * 40
 
 
 # -- the LAB as a signed component (#491 L5, #523) -------------------------------------------------

@@ -11,6 +11,15 @@ import { ModulesApiService } from '../core/api/modules.api';
 
 const MODULE_ICON = `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>`;
 
+/** Icons of the panel pages that official modules declare in their menu entries. */
+const PAGE_ICONS: Record<string, string> = {
+  '/published': `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>`,
+  '/characters': `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
+  '/brands': `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14m14 0v2a2 2 0 002 2h2M5 19h14M5 19l1.5-1.5M5 19l-1.5 1.5M12 12a3 3 0 100-6 3 3 0 000 6z"/></svg>`,
+};
+/** Where a module's menu entry goes (`group` of its manifest entry). */
+const MODULE_GROUPS: Record<string, string> = { content: 'Контент', system: 'Система' };
+
 interface NavItem {
   id: string;
   path: string;
@@ -139,24 +148,6 @@ export class SidebarComponent implements OnInit, OnDestroy {
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>`,
         },
         {
-          id: 'published',
-          path: '/published',
-          label: 'Опубліковане',
-          icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>`,
-        },
-        {
-          id: 'characters',
-          path: '/characters',
-          label: 'Персонажі',
-          icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
-        },
-        {
-          id: 'brands',
-          path: '/brands',
-          label: 'Бренди',
-          icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14m14 0v2a2 2 0 002 2h2M5 19h14M5 19l1.5-1.5M5 19l-1.5 1.5M12 12a3 3 0 100-6 3 3 0 000 6z"/></svg>`,
-        },
-        {
           id: 'workflows',
           path: '/workflows',
           label: 'Шаблони обробки',
@@ -218,8 +209,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
     },
   ];
 
-  /** READY signed module UI extensions; an unavailable list adds nothing. */
-  moduleItems = signal<NavItem[]>([]);
+  /** Menu entries READY modules declare; a module that is not READY has none (owner, 23.11.2026). */
+  moduleItems = signal<(NavItem & { group: string })[]>([]);
   /** #491 L3: «Лабораторія» for an administrator, only when CORE has LAB_PANEL_URL. */
   labConfigured = signal(false);
 
@@ -230,7 +221,20 @@ export class SidebarComponent implements OnInit, OnDestroy {
     const navGroups = this.labConfigured()
       ? this.navGroups.map(group => group.label === 'Система' ? { ...group, items: [...group.items, lab] } : group)
       : this.navGroups;
-    const groups = modules.length ? [...navGroups, { label: 'Розширення модулів', items: modules }] : navGroups;
+    const extensions = modules.filter(item => !MODULE_GROUPS[item.group]);
+    const withModules = navGroups.map(group => {
+      // #518 order of the official pages (PAGE_ICONS); other entries follow them.
+      const rank = (path: string) => { const at = Object.keys(PAGE_ICONS).indexOf(path); return at < 0 ? 99 : at; };
+      const own = modules.filter(item => MODULE_GROUPS[item.group] === group.label)
+        .sort((a, b) => rank(a.path) - rank(b.path));
+      if (!own.length) return group;
+      // Module pages stand before the processing templates, where the built-in entries were.
+      const at = group.items.findIndex(item => item.id === 'workflows');
+      const items = [...group.items];
+      items.splice(at < 0 ? items.length : at, 0, ...own);
+      return { ...group, items };
+    });
+    const groups = extensions.length ? [...withModules, { label: 'Розширення модулів', items: extensions }] : withModules;
     return groups
       .map(group => ({
         label: group.label,
@@ -266,18 +270,25 @@ export class SidebarComponent implements OnInit, OnDestroy {
     // #504 AC3: CORE may restart or be updated while the panel stays open; the
     // version and API compatibility are re-checked, so a reconnect clears the
     // state and an incompatible CORE is reported without reloading the page.
-    this.statusTimer = setInterval(() => this.checkCore(), 30_000);
+    // A module activated or deactivated meanwhile changes the menu without a reload.
+    this.statusTimer = setInterval(() => { this.checkCore(); this.loadModuleMenu(); }, 30_000);
     // A background probe: a refusal (moderator, no session yet) never redirects or reports an error.
     this.http.get<{ url: string | null }>('/api/lab/panel',
         { context: new HttpContext().set(BACKGROUND_REQUEST, true) }).subscribe({
       next: ({ url }) => this.labConfigured.set(!!url),
       error: () => this.labConfigured.set(false),  // a moderator gets 403: no entry
     });
-    this.modulesApi.uiExtensions().subscribe(list => this.moduleItems.set(list.map(extension => ({
-      id: 'module-' + extension.module_id,
-      path: '/modules/' + extension.module_id,
-      label: extension.navigation?.[0]?.label || extension.module_id,
-      icon: MODULE_ICON,
+    this.loadModuleMenu();
+  }
+
+  private loadModuleMenu(): void {
+    this.modulesApi.navigation().subscribe(items => this.moduleItems.set(items.map(item => ({
+      id: 'module-' + item.module_id + '-' + item.id,
+      path: item.path,
+      label: item.label,
+      icon: PAGE_ICONS[item.path] || MODULE_ICON,
+      adminOnly: item.admin_only,
+      group: item.group,
     }))));
   }
 

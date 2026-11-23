@@ -1,7 +1,7 @@
 schema_version: "2.0"
 name: publishing
 module_id: publishing
-version: "0.0.4.15"
+version: "0.0.4.16"
 kind: application
 label: Публікації
 core_compatibility: {min: "0.0.4.11", max: "0.0.9.99"}
@@ -28,7 +28,7 @@ api:
 ui:
   entry: index.html
   navigation:
-    - {id: publishing, label: "Публікації"}
+    - {id: publishing, label: "Опубліковане", route: "/published", group: content}
   files:
     index.html: "82c4887a8475e5e1e76bf986f2583ae923248d8c10a1fb6b653749f6184b0c89"
 # Interface and editor actions only (#502): no database, channels or send path.

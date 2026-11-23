@@ -113,7 +113,7 @@ def contour(tmp_path, monkeypatch, request):
         logs.append(log)
         cmd = ([binary, "--bind", "127.0.0.1", "--port", str(redis_port), "--dir", str(redis_dir),
                 "--save", "", "--appendonly", "yes", "--appendfsync", "always"] if name == "redis" else
-               [sys.executable, "-m", "uvicorn", "core.app:app", "--host", "127.0.0.1", "--port", str(core_port)])
+               [sys.executable, "-m", "uvicorn", "tests.core_app_modules_active:app", "--host", "127.0.0.1", "--port", str(core_port)])
         processes[name] = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
         def ready():
             assert processes[name].poll() is None, f"{name} exited; see disposable log"

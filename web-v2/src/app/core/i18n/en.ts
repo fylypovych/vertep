@@ -434,6 +434,7 @@ export const EN: Record<string, string> = {
   "Обладнання": "Hardware",
   "Моніторинг": "Monitoring",
   "Лабораторія": "Laboratory",
+  "Модуль вимкнено: ця сторінка працює лише з активним модулем": "The module is not active: this page works only with an active module",
   "Синтез мовлення": "Speech synthesis",
   "Обчислення GPU": "GPU computation",
   "Не застосовується": "Not applicable",

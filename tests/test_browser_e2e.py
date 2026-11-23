@@ -11,6 +11,7 @@ from urllib.parse import quote
 from pathlib import Path
 
 import pytest
+from tests.module_menu import ACTIVE_MODULE_MENU
 
 try:
     from playwright.sync_api import sync_playwright, expect
@@ -76,6 +77,8 @@ def _mock_status(page, overrides=None):
     """Register a /api/status route so sidebar/header never hit the real server."""
     data = {**DEFAULT_STATUS, **(overrides or {})}
     page.route("**/api/status", lambda route: route.fulfill(json=data))
+    # Pages of official modules open only while the module is READY (core/module/navigation.py).
+    page.route("**/api/modules/navigation", lambda route: route.fulfill(json={"items": ACTIVE_MODULE_MENU}))
 
 
 def _mock_session(page, role="admin"):

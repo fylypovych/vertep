@@ -44,7 +44,7 @@ def monitoring_core(tmp_path):
 
     def start():
         nonlocal process
-        process = subprocess.Popen([sys.executable, "-m", "uvicorn", "core.app:app",
+        process = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.core_app_modules_active:app",
                                     "--host", "0.0.0.0", "--port", str(port)],
                                    cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
         def ready():

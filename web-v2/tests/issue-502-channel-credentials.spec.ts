@@ -1,3 +1,4 @@
+import { activeModules } from './module-menu';
 import { test, expect } from '@playwright/test';
 
 // #502: the administrator sees which credentials a channel publishes with, stores
@@ -23,6 +24,7 @@ test('адміністратор задає токен каналу або яв�
     }
     return route.fulfill({ json: request.method() === 'GET' ? [] : {} });
   });
+  await activeModules(page);
   await page.goto('/brands');
   await page.getByTestId('channel-credentials-ch-1').click({ timeout: 20000 });
   await expect(page.getByTestId('channel-credentials-state-ch-1')).toContainText('публікацію заблоковано');

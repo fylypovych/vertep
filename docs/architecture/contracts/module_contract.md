@@ -58,6 +58,7 @@ ui:
   files: {index.html: "<sha256>"}                 # підписані digest файлів UI
 ```
 
+- Меню панелі (рішення власника 23.11.2026) — лише з `ui.navigation` READY модулів (`GET /api/modules/navigation`, `core/module/navigation.py`). Поля пункту: `id`, `label`, необов'язкові `group` (`content`, `system`; інакше «Розширення модулів»), `admin_only`, `route`. Пункт веде на власний підписаний UI модуля (`/modules/<id>`). Вбудовану сторінку панелі (`route`) може задати лише офіційний модуль, якому CORE її відвів у `MODULE_PAGES`: characters → `/characters`, brands → `/brands`, publishing → `/published`. Поки модуль не READY, його пункту в меню немає, guard не відкриває сторінку, а API CORE цієї сторінки (`/api/characters*`, `/api/brands*`, `/api/channels*`, `POST /api/jobs/{id}/publish`) повертає 503 `module_is_not_active`.
 - `secret_refs` дозволені лише у власному scope: `secret://<module_id>/<name>`.
 - `application` вимагає `container` з образом, закріпленим за `sha256` digest; `execution` контейнера не має.
 

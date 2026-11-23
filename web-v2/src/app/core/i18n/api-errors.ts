@@ -169,6 +169,7 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "module_ui_is_unavailable": { uk: "Інтерфейс модуля не відповідає", en: "Module UI is unavailable" },
   "module_ui_digest_mismatch": { uk: "Інтерфейс модуля не відповідає підписаному digest", en: "Module UI does not match its signed digest" },
   "module_api_is_not_available": { uk: "API модуля недоступний", en: "Module API is not available" },
+  "module_is_not_active": { uk: "Модуль вимкнено: ця сторінка працює лише з активним модулем", en: "The module is not active: this page works only with an active module" },
   "module_api_version_is_not_available": { uk: "Версія API модуля недоступна", en: "Module API version is not available" },
   "module_api_route_is_not_declared": { uk: "Маршрут API модуля не оголошено", en: "Module API route is not declared" },
   "module_may_call_only_declared_apis": { uk: "Модуль може викликати лише оголошені API", en: "Module may call only APIs it declares" },

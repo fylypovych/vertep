@@ -1,3 +1,4 @@
+import { activeModules } from './module-menu';
 import { test, expect } from '@playwright/test';
 
 // #500: the owner brand's «Спільний контент» tab shows other brands' material with
@@ -24,6 +25,7 @@ test('власник погоджує, відкликає й створює вл
     }
     return route.fulfill({ json: request.method() === 'GET' ? [] : {} });
   });
+  await activeModules(page);
   await page.goto('/brands');
   const item = page.getByTestId('shared-job-a1');
   await expect(item).toContainText('Очікує погодження', { timeout: 20000 });
@@ -41,6 +43,7 @@ test('власник погоджує, відкликає й створює вл
   await expect(page).toHaveURL(/\/jobs\/job-b1$/);
   expect(calls[1]).toEqual({ path: '/api/jobs/job-a1/shared-publications', body: {
     brand_id: 'brand-b', title: 'Версія бренду B', description: 'Опис B', hashtags: ['#b', '#news'], cover: 'https://cdn.example/b.jpg' } });
+  await activeModules(page);
   await page.goto('/brands');
   await page.getByTestId('shared-job-a1').getByText('Відкликати', { exact: true }).click();
   await expect(page.getByTestId('shared-job-a1')).toContainText('Відкликано');
