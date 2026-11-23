@@ -1,3 +1,6 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.4.38
+- Тести: `test_queue_ready_inflight_have_task_fields` шукає задачу створеного job і серед ready, і серед inflight та вимикає локальний fallback-виконавець; у паралельному прогоні `Component releases` 0.0.4.37 задача встигала піти з ready, і тест падав зі `StopIteration`.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.4.37
 - CI: тест probe-кліпа MPT виконується в окремому кроці job `moneyprinter-pinned-image`, лише там встановлюється системний `ffmpeg` (`VERTEP_REQUIRE_PROBE_CLIP=1`, без нього тест fail-closed); у 0.0.4.36 спільна установка `ffmpeg` переключила інші регресії MPT на реальне декодування, і вони впали на тривалості.
 

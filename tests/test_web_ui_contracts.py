@@ -564,14 +564,16 @@ def test_publish_of_a_job_that_is_not_ready_is_refused():
 
 # ── V2C-301: Queue state contract ────────────────────────────────
 
-def test_queue_ready_inflight_have_task_fields():
+def test_queue_ready_inflight_have_task_fields(monkeypatch):
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")  # the task stays in the queue for a Worker
     client = _client()
     jid = client.post("/api/jobs", json={"topic": "Queue fields"}).json()["job_id"]  # queues its script
     resp = client.get("/api/tasks/queue")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data["inflight"], list)
-    task = next(item for item in data["ready"] if item["job_id"] == jid)
+    # The job's script task is queued; under load it may already have been claimed.
+    task = next(item for item in data["ready"] + data["inflight"] if item.get("job_id") == jid)
     for key in ("task_id", "job_id", "task", "priority"):
         assert key in task, f"Missing queue task field: {key}"
 
