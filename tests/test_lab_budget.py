@@ -22,14 +22,20 @@ def test_allow_list_allows_free_models(ledger):
 
 
 def test_paid_providers_are_refused(ledger):
-    for provider in ("openai", "anthropic", "gemini", "groq-paid", "paid"):
-        with pytest.raises(PaidModelDenied):
+    for provider in ("openai-paid", "anthropic", "gemini", "groq-paid", "paid"):
+        with pytest.raises(PaidModelDenied, match="paid provider"):
             ledger.require_model(provider)
 
 
-def test_unknown_provider_is_refused(ledger):
-    with pytest.raises(PaidModelDenied):
+def test_external_provider_without_its_own_endpoint_is_refused(ledger, monkeypatch):
+    monkeypatch.delenv("LAB_OPENAI_BASE_URL", raising=False)
+    with pytest.raises(PaidModelDenied, match="LAB_OPENAI_BASE_URL"):
         ledger.require_model("openai", "gpt-4o")
+
+
+def test_unknown_provider_is_refused(ledger):
+    with pytest.raises(PaidModelDenied, match="not in the free allow-list"):
+        ledger.require_model("mystery-llm", "model")
 
 
 def test_quota_exceeded_blocks_new_runs(ledger):

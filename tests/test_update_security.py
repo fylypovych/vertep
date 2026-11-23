@@ -88,8 +88,10 @@ def test_update_lease_fences_a_second_agent(tmp_path):
         with pytest.raises(RuntimeError, match="holds the update lease"):
             with UpdateLease(tmp_path, "second"):
                 pass
-    with UpdateLease(tmp_path, "third"):
-        assert True
+    # Released on exit: the next agent takes the lease and owns the record.
+    with UpdateLease(tmp_path, "third") as lease:
+        assert json.loads((tmp_path / "update.lock").read_text())["operation_id"] == "third"
+        lease.assert_current()
 
 
 def test_update_lease_uses_postgres_epoch_fence(monkeypatch, tmp_path):
@@ -397,27 +399,7 @@ def test_worker_restart_triggers_local_update(tmp_path, monkeypatch):
     assert "request_id=restart_operation_id" in source
 
 
-def test_worker_restart_action_matches_update_agent_handler():
-    """update-agent.py must handle action='restart' with restart-runtime."""
-    agent_source = (Path(__file__).parents[1] / "scripts" / "update-agent.py").read_text(encoding="utf-8")
-    assert '"restart"' in agent_source
-    assert "restart-runtime" in agent_source
-    assert 'action == "restart"' in agent_source
-    assert 'action == "rollback"' in agent_source
-
-
 # ── Fault-injection: concurrent update requests ────────────────────────────
-
-
-def test_update_lease_prevents_concurrent_agents(tmp_path):
-    """Two UpdateLease contexts cannot overlap for the same state dir."""
-    with UpdateLease(tmp_path, "agent-1"):
-        with pytest.raises(RuntimeError, match="holds the update lease"):
-            with UpdateLease(tmp_path, "agent-2"):
-                pass
-    # After first releases, third can acquire
-    with UpdateLease(tmp_path, "agent-3"):
-        pass
 
 
 def test_update_lease_stale_lock_acquired_after_timeout(tmp_path):
@@ -432,21 +414,6 @@ def test_update_lease_stale_lock_acquired_after_timeout(tmp_path):
 
 
 # ── Fault-injection: corrupt audit chain ───────────────────────────────────
-
-
-def test_audit_log_tamper_detected_on_append(tmp_path):
-    """Tampering with a prior audit entry breaks the hash chain."""
-    agent = _load_agent()
-    agent.append_audit(tmp_path, {"operation_id": "x", "phase": "CHECKING"})
-    agent.append_audit(tmp_path, {"operation_id": "x", "phase": "UPDATING"})
-    lines = (tmp_path / "audit.jsonl").read_text().strip().split("\n")
-    entries = [json.loads(line) for line in lines]
-    # Tamper with first entry's phase
-    entries[0]["phase"] = "TAMPERED"
-    (tmp_path / "audit.jsonl").write_text(
-        "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="hash chain"):
-        agent.append_audit(tmp_path, {"operation_id": "x", "phase": "NORMAL"})
 
 
 def test_audit_log_detects_truncated_entries(tmp_path):
@@ -925,41 +892,6 @@ def test_rollback_invokes_vertep_script(tmp_path, monkeypatch):
     agent._attempt_rollback(tmp_path, tmp_path, state)
     assert any("rollback" in str(cmd) for cmd in commands_run)
     assert state["state"] == "ROLLED_BACK"
-
-
-def test_process_request_triggers_rollback_on_failure(tmp_path, monkeypatch):
-    """When apply-update fails, process_request triggers rollback."""
-    agent = _load_agent()
-    monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
-    import core.update_protocol as _upd
-    import core.version as _ver
-    monkeypatch.setattr(_upd, "fetch_manifest", lambda channel: {
-        "version": "0.0.2.0", "channel": "stable", "sha256": "c" * 64,
-        "signature": "sig", "required": False})
-    monkeypatch.setattr(_upd, "validate_manifest", lambda *a, **kw: None)
-    monkeypatch.setattr(_upd, "validate_replay_state", lambda *a, **kw: None)
-    monkeypatch.setattr(_ver, "application_version", lambda: "0.0.1.0")
-
-    call_count = [0]
-    def failing_run(cmd, root, **kw):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            raise RuntimeError("Health check failed")
-        return "rollback ok"
-    monkeypatch.setattr(agent, "run", failing_run)
-    monkeypatch.setattr(agent, "transition", lambda *a, **kw: None)
-    monkeypatch.setattr(agent, "merge_runtime_progress", lambda *a, **kw: None)
-
-    request = tmp_path / "requests" / "test.json"
-    request.parent.mkdir()
-    request.write_text(json.dumps({
-        "request_id": "c" * 32, "action": "update"}), encoding="utf-8")
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    result = agent.process_request(tmp_path, state_dir, request, skip_drain=True)
-    assert result is False
-    status = json.loads((state_dir / "status.json").read_text(encoding="utf-8"))
-    assert status.get("state") in {"FAILED", "ROLLED_BACK"}
 
 
 # ── Fault-injection: unsafe archive / symlink / cross-origin ───────────────

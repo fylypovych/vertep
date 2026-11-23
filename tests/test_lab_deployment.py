@@ -30,10 +30,12 @@ def test_working_copy_isolation_isolated_developer_copy():
     assert not report.problems
 
 
-def test_working_copy_rejects_the_production_tree():
-    report = check_working_copy(Path(__file__).parents[1] / "AGENTS.md")
+def test_working_copy_rejects_the_production_tree(monkeypatch):
+    production = Path(__file__).parents[1]  # an existing tree, so the production check decides
+    monkeypatch.setenv("VERTEP_PRODUCTION_ROOT", str(production))
+    report = check_working_copy(production)
     assert report.isolated is False
-    assert report.problems
+    assert report.problems == ["working copy points at the production repository"]
 
 
 def test_environment_holds_no_production_credentials():

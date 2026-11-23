@@ -80,9 +80,14 @@ class TestScriptCallbackHandlers:
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: j)
+        dispatched = []
+        monkeypatch.setattr("core.telegram.job_callbacks.executor",
+                            SimpleNamespace(submit=lambda fn, job: dispatched.append(job.job_id)))
         cb = {"id": "cb-1", "data": "sc_ok:2026-000001", "message": {"chat": {"id": "42"}}}
         _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_ok", "2026-000001")
-        assert adapter.answer_callback.called
+        assert job.status == JobStatus.SCRIPT_APPROVED and job.approval_status == "approved"
+        assert dispatched == ["2026-000001"]
+        assert "схвалено" in adapter.answer_callback.call_args[0][1]
 
     def test_sc_reject_cancels(self, monkeypatch):
         module = importlib.import_module("core.app")
@@ -259,17 +264,25 @@ class TestPipelineVideoApproval:
 
 class TestCallbackIdempotency:
     def test_double_sc_ok_no_crash(self, monkeypatch):
+        """A second sc_ok on an approved script is refused: no second approval, no dispatch."""
         module = importlib.import_module("core.app")
         adapter = Mock()
         patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
-        job = _make_job("SCRIPT_APPROVED")
+        job = _make_job("SCRIPT_PENDING_APPROVAL")
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "jobs", {"2026-000001": job})
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "update", lambda j, s, e: setattr(j, "status", s) or j)
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "event", lambda j, e: j)
+        dispatched = []
+        monkeypatch.setattr("core.telegram.job_callbacks.executor",
+                            SimpleNamespace(submit=lambda fn, job: dispatched.append(job.job_id)))
         cb = {"id": "cb-1", "data": "sc_ok:2026-000001", "message": {"chat": {"id": "42"}}}
         _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_ok", "2026-000001")
-        assert adapter.answer_callback.called
+        _owner_core_telegram_handlers._handle_script_callback(cb, "42", "sc_ok", "2026-000001")
+        assert job.status == JobStatus.SCRIPT_APPROVED
+        assert dispatched == ["2026-000001"]  # dispatched once
+        first, second = (call[0][1] for call in adapter.answer_callback.call_args_list)
+        assert "схвалено" in first and "Cannot approve script" in second
 
     def test_double_vid_ok_no_crash(self, monkeypatch):
         module = importlib.import_module("core.app")
@@ -281,4 +294,6 @@ class TestCallbackIdempotency:
         monkeypatch.setattr(_owner_core_telegram_handlers.store, "transition", lambda j, s, e: setattr(j, "status", s) or j)
         cb = {"id": "cb-1", "data": "vid_ok:2026-000001", "message": {"chat": {"id": "42"}}}
         _owner_core_telegram_handlers._handle_video_callback(cb, "42", "vid_ok", "2026-000001")
-        assert adapter.answer_callback.called
+        # The video is already approved (READY): the repeated approval is refused, state kept.
+        assert job.status == JobStatus.READY
+        assert "Cannot approve video" in adapter.answer_callback.call_args[0][1]

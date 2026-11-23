@@ -10,20 +10,9 @@ FILES = ["bootstrap.sh", "install.sh", "scripts/vertep", "installer/detect-gpu.s
          "installer/roles/voice.sh"]
 
 
-def test_header_is_exactly_the_version():
-    assert NOTES.read_text(encoding="utf-8").splitlines()[0] == "# Vertep 0.0.3.65"
-
-
 def test_content_matches_the_commit_and_changelog():
     text = NOTES.read_text(encoding="utf-8")
     assert "100755 → 100644" in text and "вміст файлів не змінювався" in text
     assert all(f"`{name}`" in text for name in FILES)
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert "## ПРАВИЛЬНА НАЗВА: 0.0.3.65\n- Помилково знято ознаку виконуваного файла" in changelog
-
-
-def test_late_restoration_is_stated_and_history_is_untouched():
-    text = NOTES.read_text(encoding="utf-8")
-    assert "відновлено пізніше" in text and "aeb4533a" in text
-    assert "історію, SHA і tags не змінено" in text
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() != "0.0.3.65"

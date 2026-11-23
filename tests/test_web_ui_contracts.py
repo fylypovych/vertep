@@ -172,6 +172,7 @@ def test_security_check_shape():
     for key in ("ok", "weak_or_missing", "recommendation"):
         assert key in check, f"Missing security key: {key}"
     assert isinstance(check["weak_or_missing"], list)
+    assert isinstance(check["recommendation"], str)
 
 
 # ── Logs ──────────────────────────────────────────────────────────
@@ -185,9 +186,11 @@ def test_logs_shape():
 
 def test_logs_filters():
     client = _client()
-    resp = client.get("/api/logs?limit=5&level=INFO")
+    resp = client.get("/api/logs?limit=2&level=ERROR")
     assert resp.status_code == 200
-    assert isinstance(resp.json(), list)
+    entries = resp.json()
+    assert isinstance(entries, list) and len(entries) <= 2
+    assert all(entry["level"] == "ERROR" for entry in entries)
 
 
 # ── Alerts ────────────────────────────────────────────────────────
@@ -315,17 +318,6 @@ def test_system_roles_shape():
 
 
 # ── Node Registration Token ───────────────────────────────────────
-
-def test_registration_token_shape():
-    client = _client()
-    resp = client.post("/api/nodes/registration-tokens",
-                       json={"role": "gpu"},
-                       auth=_auth())
-    assert resp.status_code == 200
-    token = resp.json()
-    for key in ("token", "role", "expires_at"):
-        assert key in token, f"Missing token key: {key}"
-
 
 # ── Setup ─────────────────────────────────────────────────────────
 
@@ -549,80 +541,54 @@ def test_job_update_preserves_version():
     job = client.get(f"/api/jobs/{jid}").json()
     resp = client.patch(f"/api/jobs/{jid}", json={
         "expected_version": job["version"], "topic": "Updated"})
-    if resp.status_code == 200:
-        assert resp.json()["topic"] == "Updated"
-    else:
-        # Pipeline may auto-process between GET and PATCH; 409 is acceptable
-        assert resp.status_code == 409
+    assert resp.status_code == 200
+    assert resp.json()["topic"] == "Updated" and resp.json()["version"] == job["version"] + 1
+    # The old version is now stale: a second edit based on it is refused.
+    stale = client.patch(f"/api/jobs/{jid}", json={"expected_version": job["version"] - 1, "topic": "Stale"})
+    assert stale.status_code == 422
+    assert client.get(f"/api/jobs/{jid}").json()["topic"] == "Updated"
 
 
 # ── V2C-202: Job stages/scenes structure ─────────────────────────
 
-def test_job_stages_are_dict_with_scene_records():
-    client = _client()
-    jid = client.post("/api/jobs", json={"topic": "Stage test"}).json()["job_id"]
-    job = client.get(f"/api/jobs/{jid}").json()
-    assert isinstance(job["stages"], dict)
-    assert isinstance(job["scenes"], list)
-    if job["scenes"]:
-        scene = job["scenes"][0]
-        for key in ("scene_id", "index", "prompt", "status", "artifact_ids", "attempts"):
-            assert key in scene, f"Missing scene field: {key}"
-
-
 # ── V2C-203: Artifacts contract ───────────────────────────────────
-
-def test_job_artifacts_verify_returns_results():
-    client = _client()
-    jid = client.post("/api/jobs", json={"topic": "Artifact DL"}).json()["job_id"]
-    verify = client.post(f"/api/jobs/{jid}/artifacts/verify")
-    assert verify.status_code == 200
-    data = verify.json()
-    assert "results" in data
-    assert isinstance(data["results"], list)
-
 
 # ── V2C-204: Publish flow contract ───────────────────────────────
 
-def test_publish_without_channels_returns_200_or_422():
+def test_publish_of_a_job_that_is_not_ready_is_refused():
     client = _client()
     jid = client.post("/api/jobs", json={"topic": "Publish test"}).json()["job_id"]
     resp = client.post(f"/api/jobs/{jid}/publish")
-    assert resp.status_code in (200, 422, 409)
+    assert resp.status_code == 409 and resp.json()["code"] == "job_is_not_ready"
 
 
 # ── V2C-301: Queue state contract ────────────────────────────────
 
 def test_queue_ready_inflight_have_task_fields():
     client = _client()
+    jid = client.post("/api/jobs", json={"topic": "Queue fields"}).json()["job_id"]  # queues its script
     resp = client.get("/api/tasks/queue")
     assert resp.status_code == 200
     data = resp.json()
-    if data["ready"]:
-        task = data["ready"][0]
-        for key in ("task_id", "job_id", "task", "priority"):
-            assert key in task, f"Missing queue task field: {key}"
+    assert isinstance(data["inflight"], list)
+    task = next(item for item in data["ready"] if item["job_id"] == jid)
+    for key in ("task_id", "job_id", "task", "priority"):
+        assert key in task, f"Missing queue task field: {key}"
 
 
 # ── V2C-302: Alerts contract ─────────────────────────────────────
 
 def test_alerts_have_severity_and_type():
+    from core.alert_store import get_alert_store
+    recorded = get_alert_store().record({"type": "CONTRACT_CHECK", "severity": "critical", "message": "check"})
     client = _client()
     resp = client.get("/api/alerts")
     assert resp.status_code == 200
-    for alert in resp.json():
-        assert "severity" in alert
-        assert "type" in alert
+    alert = next(item for item in resp.json() if item["id"] == recorded["id"])
+    assert alert["severity"] == "critical" and alert["type"] == "CONTRACT_CHECK"
 
 
 # ── V2C-303: Logs contract ───────────────────────────────────────
-
-def test_logs_with_limit_filter():
-    client = _client()
-    resp = client.get("/api/logs?limit=5")
-    assert resp.status_code == 200
-    assert isinstance(resp.json(), list)
-
 
 # ── V2C-304: Health monitoring contract ───────────────────────────
 
@@ -635,21 +601,13 @@ def test_health_history_shape():
     assert isinstance(data["history"], list)
 
 
-def test_security_check_fields():
-    client = _client()
-    resp = client.get("/api/security/check")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert isinstance(data["weak_or_missing"], list)
-    assert isinstance(data["recommendation"], str)
-
-
 def test_maintenance_cleanup_dry_run():
     client = _client()
     resp = client.post("/api/maintenance/cleanup?dry_run=true")
     assert resp.status_code == 200
     data = resp.json()
-    assert "jobs" in data or "temporary_files" in data
+    assert data["dry_run"] is True
+    assert isinstance(data["jobs"], list) and isinstance(data["temporary_files"], list)
 
 
 # ── V2C-401: Worker registration token contract ──────────────────

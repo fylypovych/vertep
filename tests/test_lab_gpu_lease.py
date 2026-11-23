@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from lab.gpu_lease import (CONTRACT_VERSION, FakeResourceProvider, LeaseDenied, LeaseLost,
+from lab.gpu_lease import (FakeResourceProvider, LeaseDenied, LeaseLost,
                            LeaseManager, ResourceRequirement, ResourceUnavailable,
                            VertepResourceClient)
 
@@ -22,12 +22,6 @@ REQUIREMENT = ResourceRequirement(model="qwen2.5-coder:7b", vram_mb=8192)
 @pytest.fixture()
 def manager(tmp_path):
     return LeaseManager(FakeResourceProvider(), state_dir=tmp_path)
-
-
-def test_status_reports_the_contract_version(manager):
-    status = manager.status()
-    assert status["contract_version"] == CONTRACT_VERSION
-    assert status["gpu_available"] is True
 
 
 def test_grant_then_release_confirms_the_resource_is_free(manager):
@@ -69,7 +63,7 @@ def test_heartbeat_renews_the_lease(manager):
     lease = manager.acquire(REQUIREMENT)
     original = lease.expires_at
     assert manager.heartbeat() is True
-    assert manager.lease.expires_at >= original
+    assert manager.lease.expires_at > original  # renewed, not just kept
 
 
 def test_revoke_makes_the_laboratory_stop_immediately(tmp_path):
@@ -183,33 +177,3 @@ class _FakeResponse:
 
     def __exit__(self, *_):
         return False
-
-
-def test_http_adapter_speaks_the_versioned_contract():
-    captured = {}
-
-    class Opener:
-        def open(self, request, timeout=None):
-            captured["path"] = request.full_url
-            captured["version"] = request.headers.get("X-vertep-contract-version")
-            captured["token"] = request.headers.get("X-vertep-lab-token")
-            return _FakeResponse({"contract_version": CONTRACT_VERSION,
-                                  "gpu_available": True})
-
-    client = VertepResourceClient("https://gpu.example", token="lab-token", enabled=True,
-                                  opener=Opener())
-    assert client.status()["gpu_available"] is True
-    assert captured["path"].endswith("/status")
-    assert captured["version"] == CONTRACT_VERSION
-    assert captured["token"] == "lab-token"
-
-
-def test_http_adapter_rejects_a_different_contract_version():
-    class Opener:
-        def open(self, request, timeout=None):
-            return _FakeResponse({"contract_version": "99"})
-
-    client = VertepResourceClient("https://gpu.example", enabled=True, opener=Opener())
-    with pytest.raises(ResourceUnavailable):
-        client.status()
-

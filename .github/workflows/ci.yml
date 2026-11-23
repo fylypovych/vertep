@@ -686,7 +686,8 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install runtime-check dependencies
-        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+        # moviepy at the pin of the MPT image: the probe-clip regression encodes with it (#520).
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt "moviepy==2.2.1"
       - name: Verify MPT bridge regressions
         run: >-
           python -m pytest -q tests/test_moneyprinter_runtime.py

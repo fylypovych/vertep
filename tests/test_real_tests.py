@@ -296,22 +296,25 @@ class TestScenarioSpecificChecks:
         from core.real_tests.runner import run_rt_check_names
         assert run_rt_check_names("rt::S04") == ["backup_roundtrip"]
 
+    # S02, S07 and S08 were removed (core/real_tests/scenarios.py); iterating them proved nothing.
+    CURRENT_SCENARIOS = ("S01", "S03", "S04", "S05", "S06")
+
     def test_scenario_checks_are_registered(self):
         from core.real_tests.scenarios import _scenario_checks
-        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+        for scenario_id in self.CURRENT_SCENARIOS:
             for name in _scenario_checks(scenario_id):
                 assert name in CHECK_REGISTRY, f"{scenario_id}: '{name}' not registered"
 
     def test_success_policy_is_pass_only(self):
         from core.real_tests.scenarios import get_scenario_success_policy
-        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+        for scenario_id in self.CURRENT_SCENARIOS:
             assert get_scenario_success_policy(scenario_id) == {CheckStatus.PASS}
 
     def test_success_policy_blocks_close_gate_statuses(self):
         from core.real_tests.scenarios import get_scenario_success_policy
         blocked = {CheckStatus.WARNING, CheckStatus.SKIPPED,
                    CheckStatus.FAIL, CheckStatus.NOT_CONFIGURED}
-        for scenario_id in ("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"):
+        for scenario_id in self.CURRENT_SCENARIOS:
             policy = get_scenario_success_policy(scenario_id)
             assert not policy & blocked
             assert policy <= {CheckStatus.PASS}
@@ -2150,64 +2153,6 @@ def test_run_progress_endpoint_exists(admin_client, monkeypatch):
     assert data["progress"] == "progress: 1/2"
 
 
-def test_web_ui_remote_state_exists():
-    """Issue #255 #176.1: Web UI shared state/mutation infrastructure exists."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "remote_state",
-        "web-v2/src/app/core/state/remote-state.ts"
-    )
-    # File exists check
-    import pathlib
-    p = pathlib.Path("web-v2/src/app/core/state/remote-state.ts")
-    assert p.is_file()
-    content = p.read_text(encoding="utf-8")
-    assert "RemoteState" in content
-    assert "RemoteMutation" in content
-
-
-def test_web_ui_media_mutation_routes_exist():
-    """Issue #255 #184.2/#184.4: Web UI media mutation routes exist."""
-    import pathlib
-    routes_path = pathlib.Path("web-v2/src/app/app.routes.ts")
-    assert routes_path.is_file()
-    content = routes_path.read_text(encoding="utf-8")
-    # Routes for jobs, workflows, published should be present
-    assert "jobs" in content.lower()
-    assert "workflows" in content.lower()
-    # Core API job helpers exist
-    helpers_path = pathlib.Path("core/api/job_helpers")
-    assert helpers_path.is_dir()
-    helpers_content = "".join(
-        path.read_text(encoding="utf-8") for path in sorted(helpers_path.glob("*.py")))
-    assert "create_job" in helpers_content or "prepare_job" in helpers_content
-
-
-def test_backup_service_confirmation_durable():
-    """Issue #257 #186.5: CORE/Web/Telegram confirmation→execute→live progress."""
-    import pathlib
-    backup_path = pathlib.Path("services/backup_service.py")
-    assert backup_path.is_file()
-    content = backup_path.read_text(encoding="utf-8")
-    # Confirmation flow must be present
-    assert "confirm" in content.lower()
-    assert "progress" in content.lower()
-    # System state checks
-    assert "system_state" in content.lower() or "system" in content.lower()
-
-
-def test_backup_snapshot_version_integrity():
-    """Issue #257 #186.6: snapshot version/integrity negative scenarios."""
-    import pathlib
-    backup_path = pathlib.Path("services/backup_service.py")
-    content = backup_path.read_text(encoding="utf-8")
-    # Version/integrity checks must exist
-    assert "version" in content.lower()
-    assert "hash" in content.lower() or "checksum" in content.lower()
-    # Fail-closed behavior
-    assert "fail" in content.lower() or "error" in content.lower()
-
-
 def test_backup_browser_telegram_rbac(monkeypatch, tmp_path):
     """The preserved API/Telegram boundary enforces role and system-state gates."""
     import json
@@ -2269,77 +2214,7 @@ def test_backup_browser_telegram_rbac(monkeypatch, tmp_path):
     assert len(calls) == 2 and get_system_state()["state"] == "READ_ONLY"
 
 
-def test_mpt_lifecycle_exists():
-    """Issue #257 #182: MPT lifecycle exists."""
-    import pathlib
-    persistent_path = pathlib.Path("core/persistent_data.py")
-    assert persistent_path.is_file()
-    content = persistent_path.read_text(encoding="utf-8")
-    assert "persistent" in content.lower()
     # MPT lifecycle is implemented elsewhere, check persistent data module exists
-
-
-def test_media_harness_backup_restore_smoke():
-    """Issue #257 #189: media harness backup/restore smoke."""
-    import pathlib
-    harness_path = pathlib.Path("tests/test_full_media_harness.py")
-    assert harness_path.is_file()
-    content = harness_path.read_text(encoding="utf-8")
-    # Harness must contain backup/restore checks
-    assert "backup" in content.lower() or "restore" in content.lower()
-    assert "media" in content.lower()
-
-
-def test_web_ui_live_disposable_backend():
-    """Issue #255 #184.2: Web UI live disposable backend with Browser history/revision/regenerate."""
-    import pathlib
-    # Check that real-tests component has polling and history
-    component_path = pathlib.Path("web-v2/src/app/real-tests/real-tests.component.ts")
-    assert component_path.is_file()
-    content = component_path.read_text(encoding="utf-8")
-    assert "pollRunCompletion" in content
-    assert "getRunProgress" in content or "listRuns" in content
-    # History support
-    assert "runs" in content.lower()
-    assert "history" in content.lower() or "load" in content.lower()
-
-
-def test_web_ui_external_transports_control():
-    """Issue #255 #184.5: control only external transports."""
-    import pathlib
-    # Check API service uses HttpClient for external calls
-    api_path = pathlib.Path("web-v2/src/app/core/api/real-tests.api.ts")
-    assert api_path.is_file()
-    content = api_path.read_text(encoding="utf-8")
-    assert "HttpClient" in content
-    assert "baseUrl" in content
-    # No direct DOM manipulation for external calls
-    assert "window.fetch" not in content or "HttpClient" in content
-
-
-def test_web_ui_pageerror_collectors():
-    """Issue #255 #184.6: pageerror collectors, exact-SHA CI, backend missing = failure."""
-    import pathlib
-    e2e_path = pathlib.Path("tests/test_browser_e2e.py")
-    assert e2e_path.is_file()
-    content = e2e_path.read_text(encoding="utf-8")
-    # Page error collectors must exist
-    assert "pageerror" in content.lower() or "error" in content.lower()
-    # Exact SHA CI check
-    assert "sha" in content.lower() or "commit" in content.lower()
-    # Backend missing should fail, not skip
-    assert "skip" in content.lower() or "has_live_server" in content.lower()
-
-
-def test_web_ui_error_handler_service():
-    """Issue #255 #184.6: Web UI error handler service exists."""
-    import pathlib
-    error_path = pathlib.Path("web-v2/src/app/core/error-handler.service.ts")
-    assert error_path.is_file()
-    content = error_path.read_text(encoding="utf-8")
-    assert "GlobalErrorHandlerService" in content
-    assert "HttpClient" in content
-    assert "/api/errors/collect" in content
 
 
 def test_error_collection_endpoint_exists(admin_client, monkeypatch):
@@ -2352,49 +2227,6 @@ def test_error_collection_endpoint_exists(admin_client, monkeypatch):
     }, auth=("admin", "secret123"))
     assert resp.status_code == 200
     assert resp.json()["accepted"] is True
-
-
-def test_exact_sha_ci_for_page_errors():
-    """Issue #255 #184.6: exact-SHA CI check for page errors."""
-    import pathlib
-    e2e_path = pathlib.Path("tests/test_browser_e2e.py")
-    assert e2e_path.is_file()
-    content = e2e_path.read_text(encoding="utf-8")
-    # CI must verify exact SHA
-    assert "sha" in content.lower()
-    # Must fail if backend missing
-    assert "fail" in content.lower() or "has_live_server" in content.lower()
-    # Errors must be collected
-    assert "pageerror" in content.lower() or "error" in content.lower()
-
-
-def test_rbac_system_state_integration():
-    """Issue #257 #186.7: RBAC and system state integration."""
-    import pathlib
-    api_path = pathlib.Path("core/api/real_tests.py")
-    assert api_path.is_file()
-    content = api_path.read_text(encoding="utf-8")
-    assert "operation_allowed" in content
-    assert "real_test" in content
-    # Check for RBAC checks
-    assert "admin" in content.lower() or "auth" in content.lower()
-
-
-def test_vram_attestation_routing():
-    """Issue #256 #178.5: VRAM routing, attestation, failure handling."""
-    import pathlib
-    dispatcher_path = pathlib.Path("core/dispatcher.py")
-    assert dispatcher_path.is_file()
-    content = dispatcher_path.read_text(encoding="utf-8")
-    # Check for VRAM checks
-    assert "vram" in content.lower() or "VRAM" in content
-    # Check for failure handling
-    assert "fail" in content.lower() or "error" in content.lower()
-    # Attestation may be in worker code
-    worker_path = pathlib.Path("worker/service.py")
-    if worker_path.is_file():
-        wcontent = worker_path.read_text(encoding="utf-8")
-        assert "signature" in wcontent.lower() or "attestation" in wcontent.lower() or True
 
 
 if __name__ == "__main__":

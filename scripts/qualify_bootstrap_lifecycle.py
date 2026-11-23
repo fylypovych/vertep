@@ -103,7 +103,7 @@ EXECUTOR_TRUST_DIMENSIONS = {
         "tests/test_update_security.py::test_recover_if_interrupted_unreadable_status_with_evidence",
         "tests/test_update_security.py::test_recover_blocks_on_cancel_fence",
         "tests/test_update_security.py::test_rollback_invokes_vertep_script",
-        "tests/test_update_security.py::test_process_request_triggers_rollback_on_failure",
+        "tests/test_update_security.py::test_failed_health_check_rolls_back",
         "tests/test_update_security.py::test_update_timeout_rolls_back_and_reports_correlated_error",
         "tests/test_update_security.py::test_run_fenced_stops_apply_and_delayed_side_effect_on_cancel_fence",
         "tests/test_update_security.py::test_run_fenced_kills_child_processes_of_apply",

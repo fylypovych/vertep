@@ -85,6 +85,7 @@ def test_audio_module_resource_query():
     from modules.audio.audio_module import AudioModule
     module = AudioModule()
     res = module.resource_query()
+    assert res["module"] == "audio"
     assert res["gpu_required"] is False
     assert res["min_vram_mb"] == 0
 

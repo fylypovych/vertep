@@ -75,3 +75,32 @@ def test_health_reports_the_global_state_next_to_the_component_checks(monkeypatc
     monkeypatch.setattr(observability, "_run_health_checks", lambda _: {})
     monkeypatch.setattr("core.system_state.get_system_state", lambda: {"state": "EMERGENCY"})
     assert observability.health()["system_state"] == "EMERGENCY"
+
+
+def test_restore_removes_directories_created_after_the_snapshot(monkeypatch, tmp_path):
+    """#442 stand: a brand created after the backup left an empty brands/<id>/ behind, so
+    the brand was gone from the list yet could not be created again (409)."""
+    config, storage = tmp_path / "config", tmp_path / "storage"
+    (config / "brands" / "kept").mkdir(parents=True)
+    (config / "brands" / "kept" / "brand.json").write_text("{}", encoding="utf-8")
+    (config / "empty-in-snapshot").mkdir()
+    storage.mkdir()
+    for name, value in {"BACKUP_CONFIG_ROOT": config, "BACKUP_STORAGE_ROOT": storage,
+                        "BACKUP_ROOT": tmp_path / "backups"}.items():
+        monkeypatch.setenv(name, str(value))
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"f" * 32).decode("ascii"))
+    for name in ("BACKUP_PG_DUMP_CMD", "BACKUP_REDIS_DUMP_CMD", "BACKUP_PG_RESTORE_CMD"):
+        monkeypatch.setenv(name, "")
+    monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
+    monkeypatch.setattr(backup_service, "_core_available", lambda: True)
+    monkeypatch.setattr(backup_service, "_set_system_state", lambda *_, **__: None)
+    monkeypatch.setattr(backup_service, "_post_restore_health_check", lambda _: None)
+    client = TestClient(backup_service.app)
+    snapshot = client.post("/snapshots", json={"job_id": "job-1", "request": {}}).json()["snapshot_id"]
+    (config / "brands" / "added" / "nested").mkdir(parents=True)
+    (config / "brands" / "added" / "brand.json").write_text("{}", encoding="utf-8")
+
+    assert _restore(client, snapshot).status_code == 200
+    assert not (config / "brands" / "added").exists()
+    assert (config / "brands" / "kept" / "brand.json").is_file()
+    assert (config / "empty-in-snapshot").is_dir()  # an empty directory of the snapshot is restored

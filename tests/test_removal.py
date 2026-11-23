@@ -1,6 +1,7 @@
 """Removal safety with disposable filesystem and simulated OS/Docker, never the host runtime."""
 import copy
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,7 +39,7 @@ class Runtime:
         if self.fail and self.fail(args):raise RuntimeError("injected interruption")
         output=""
         if args[0]=="systemctl":
-            if args[1]=="show":output=self.states.get(args[2],"inactive")
+            if args[1]=="stop":self.states[args[2]]="inactive"
         elif args[1]=="ps":output="\n".join(self.containers)
         elif args[1]=="inspect":output=json.dumps([self.containers[x] for x in args[2:]])
         elif args[1]=="exec":output=json.dumps(self.ready)
@@ -119,19 +120,45 @@ def test_explicit_purge_only_confirmed_files_and_volume(install):
     assert "foreign" in runtime.containers
 
 
-@pytest.mark.parametrize("fault",["jobs","inflight","dispatch","worker","executor","queued"])
-def test_active_work_refuses_before_any_stop_or_delete(install,fault):
-    host,runtime,journal=install
-    selected=r.plan(host)
-    if fault=="jobs":runtime.ready["active_jobs"]=["job"]
-    elif fault=="inflight":runtime.ready["inflight"]=1
-    elif fault=="dispatch":runtime.ready["queue_paused"]=False
-    elif fault=="worker":runtime.ready["busy_workers"]=["worker"]
-    elif fault=="executor":runtime.states["vertep-update.service"]="active"
-    else:(host.root/"config/deployment-request.json").write_text("{}")
-    with pytest.raises(RuntimeError):r.execute(host,selected,journal)
-    assert "own" in runtime.containers
-    assert not any(call[1]=="disable" or "rm" in call for call in runtime.calls)
+def test_removal_stops_active_runtime_without_waiting_for_core_drain(install):
+    host, runtime, journal = install
+    runtime.ready.update(active_jobs=["job"], busy_workers=["worker"], inflight=1, queue_paused=False)
+    (host.root / "config/deployment-request.json").write_text("{}")
+    selected = r.plan(host)
+
+    def check_marker(args):
+        if args[:3] == ["docker", "rm", "-f"]:
+            assert (host.root / "config/removal-in-progress.json").is_file()
+        return False
+
+    runtime.fail = check_marker
+    assert r.execute(host, selected, journal)["state"] == "SUCCEEDED"
+    assert set(runtime.containers) == {"foreign"}
+    assert not any(call[:2] == ["docker", "exec"] for call in runtime.calls)
+
+
+def test_removal_stops_update_triggers_and_recovery_before_acquiring_fence(install, monkeypatch):
+    host, runtime, journal = install
+    recovery = "vertep-startup-recovery.service"
+    trigger = "vertep-update.path"
+    for name in (recovery, trigger):
+        host.unit_path(name).write_text("owned unit")
+    ledger_path = host.root / "config/removal-ownership.json"
+    ledger = json.loads(ledger_path.read_text())
+    ledger["units"].update({name: r.digest(host.unit_path(name)) for name in (recovery, trigger)})
+    ledger_path.write_text(json.dumps(ledger))
+    runtime.states[recovery] = "active"
+    selected = r.plan(host)
+
+    @contextmanager
+    def fence(root):
+        assert root == host.root
+        assert runtime.states[recovery] == "inactive"
+        assert runtime.calls.index(["systemctl", "stop", trigger]) < runtime.calls.index(["systemctl", "stop", recovery])
+        yield
+
+    monkeypatch.setattr(r, "fence", fence)
+    assert r.execute(host, selected, journal)["state"] == "SUCCEEDED"
 
 
 def test_shared_images_networks_and_volumes_are_retained(install):
@@ -211,12 +238,6 @@ def test_cli_dispatches_remove_before_sourcing_environment():
     assert '"$ROOT/scripts/remove-vertep.py" --root "$ROOT" "$@"' in text
 
 
-def test_bundle_contains_removal_executor():
-    root=Path(__file__).parents[1]
-    assert '"remove-vertep.py"' in (root/"scripts/build-runtime-bundle.py").read_text()
-    assert '"scripts/remove-vertep.py"' in (root/"scripts/release-bundle.py").read_text()
-
-
 def test_removal_marker_fences_core_even_if_operator_sets_normal(tmp_path,monkeypatch):
     from core import system_state
     monkeypatch.setenv("CONFIG_ROOT",str(tmp_path))
@@ -251,7 +272,8 @@ def test_systemd_dropin_is_not_silently_removed(install):
     assert r.plan(host)["blocked"]
 
 
-def test_dry_run_and_unconfirmed_noninteractive_request_do_not_mutate(install,monkeypatch,capsys):
+@pytest.mark.parametrize("answer", [None, "", "NO", "YES"])
+def test_removal_confirmation(install, monkeypatch, answer):
     host,runtime,_=install
     monkeypatch.setattr(r.sys,"platform","linux")
     monkeypatch.setattr(r.os,"geteuid",lambda:0,raising=False)
@@ -267,9 +289,22 @@ def test_dry_run_and_unconfirmed_noninteractive_request_do_not_mutate(install,mo
         return real_stat(path,*args,**kwargs)
     monkeypatch.setattr(Path,"stat",stat)
     monkeypatch.setattr(r,"Host",lambda root:host)
-    monkeypatch.setattr(r.sys.stdin,"isatty",lambda:False)
+    monkeypatch.setattr(r.sys.stdin, "isatty", lambda: answer is not None)
+    prompts = []
+    def reply(prompt):
+        prompts.append(prompt)
+        return answer
+    monkeypatch.setattr("builtins.input", reply)
+    executed = []
+    def execute(host, selected, journal, *, resume):
+        executed.append(selected["plan_sha256"])
+        return {"state": "SUCCEEDED"}
+    monkeypatch.setattr(r, "execute", execute)
     assert r.main(["--root",str(host.root),"--dry-run"])==0
-    assert r.main(["--root",str(host.root)])==1
+    assert not prompts and not executed
+    assert r.main(["--root", str(host.root)]) == (0 if answer == "YES" else 1)
+    assert prompts == (["Підтвердити видалення за цим переліком? [YES/NO]: "] if answer is not None else [])
+    assert executed == ([r.plan(host)["plan_sha256"]] if answer == "YES" else [])
     assert "own" in runtime.containers
     assert not any("rm" in call or "disable" in call for call in runtime.calls)
     assert (host.root/"scripts/vertep").exists()

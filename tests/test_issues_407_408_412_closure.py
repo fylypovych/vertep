@@ -106,8 +106,3 @@ def test_restored_row_and_key_open_on_a_new_host(monkeypatch, tmp_path):
     table.clear()
     table["row"] = row
     assert first_run.ensure_secret_store()["youtube_access_token"] == SECRET
-
-
-def test_snapshot_keeps_the_store_key():
-    source = Path("services/backup_service.py").read_text(encoding="utf-8")
-    assert '_SNAPSHOT_EXCLUDED = {"backup.key"}' in source

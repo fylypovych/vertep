@@ -664,17 +664,14 @@ def test_verify_release_rejects_missing_runtime_bundle(tmp_path, monkeypatch):
 
 
 def test_release_workflow_supports_dispatch_and_only_publishes_from_release_commit():
+    # Dispatch, the tag push and "never commits to main" are checked in
+    # test_release_commit_is_complete_and_ci_never_commits_to_main.
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "workflow_dispatch" in workflow
     # The release is created as a draft from the tag, its id taken from the create
     # response (the release list is eventually consistent), and published last.
     assert '-f tag_name="$version"' in workflow and "-F draft=true" in workflow
     assert "--jq .id" in workflow and "-F draft=false" in workflow
     assert "vertep-runtime-$version.tar.gz" in workflow
-    assert 'git push origin "refs/tags/$version"' in workflow
-    # Workflow must not commit or push to main.
-    assert "git commit" not in workflow
-    assert "HEAD:main" not in workflow
 
 
 def test_verify_release_dereferences_annotated_tag(tmp_path, monkeypatch):

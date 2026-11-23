@@ -10,7 +10,6 @@ import pytest
 # Import the module from scripts
 from scripts.qualify_infrastructure import (
     SCENARIOS,
-    VALID_RT_ISSUES,
     collect_scenarios,
     load_version,
     git_commit,
@@ -52,10 +51,11 @@ def test_load_version_returns_string():
 
 
 def test_git_commit_returns_string():
+    import subprocess
+    head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     c = git_commit()
-    assert isinstance(c, str)
-    # Should be a short SHA (e.g., c83be834) or "unknown"
-    assert len(c) > 0
+    # In a checkout the short SHA of HEAD, never the "unknown" placeholder.
+    assert head and c != "unknown" and head.startswith(c) and len(c) >= 7
 
 
 def test_environment_dict():
@@ -285,11 +285,6 @@ def test_validate_rt_issues_rejects_out_of_set():
 def test_validate_rt_issues_rejects_missing():
     problems = validate_rt_issues([{"id": "S99"}])
     assert len(problems) == 1
-
-
-def test_all_scenarios_have_valid_rt_issue():
-    for scenario in SCENARIOS:
-        assert scenario["rt_issue"] in VALID_RT_ISSUES, scenario["id"]
 
 
 def test_main_plan_mode_exits_one(monkeypatch, capsys):

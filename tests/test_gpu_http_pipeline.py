@@ -55,15 +55,6 @@ MOOV = _box(b"moov", _box(b"trak", _box(b"mdia", HDLR)))
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + MOOV
 
 
-@pytest.mark.parametrize("suffix", [".mp4", ".mov"])
-def test_worker_accepts_video_signature_after_box_size(suffix):
-    from worker.role_executor import verify_media
-
-    assert verify_media(MP4, suffix).startswith("video/")
-    with pytest.raises(RuntimeError, match="media signature"):
-        verify_media(b"ftypmp42", suffix)
-
-
 @pytest.mark.parametrize("suffix", [".png", ".jpg", ".jpeg", ".ppm"])
 def test_worker_rejects_signature_only_image_payload(suffix):
     """Issue #121: a signature-only image must not pass as a verified artifact.

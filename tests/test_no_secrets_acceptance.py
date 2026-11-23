@@ -58,18 +58,6 @@ SECRET_CORPUS = {
 }
 
 
-def _make_log_record(msg, **extra):
-    """Helper to create a minimal log record dict."""
-    record = {
-        "msg": msg,
-        "level": "INFO",
-        "name": "test",
-        "timestamp": "2026-01-01T00:00:00+00:00",
-    }
-    record.update(extra)
-    return record
-
-
 def test_log_write_redacts_secrets():
     """secret_redact must redact all corpus secrets from plain key=value form."""
     for key, value in SECRET_CORPUS.items():
@@ -372,4 +360,3 @@ def test_secret_corpus_never_crosses_real_surfaces(monkeypatch, tmp_path):
             state.store.root = old_root
             state.store.repository = old_repo
             state.store.jobs.pop("j-sec", None)
-

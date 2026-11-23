@@ -504,15 +504,17 @@ def test_alerts_endpoint_empty_store_returns_list(monkeypatch, tmp_path):
 def test_alerts_endpoint_always_returns_json_not_html(monkeypatch, tmp_path):
     """Even unusual queries return a structured JSON list, not raw HTML/skeleton."""
     client, _ = _client(monkeypatch, tmp_path, NODE_API_TOKEN=None)
-    # Invalid int param -> FastAPI validation error, still JSON (not raw HTML).
+    # An unknown state value or a small limit still answers with a JSON list.
     for params in [{"state": "???ziM"}, {"limit": 1, "state": "firing"}]:
         resp = client.get("/api/alerts", params=params)
         assert resp.status_code == 200
         assert "application/json" in resp.headers.get("content-type", "")
         assert isinstance(resp.json(), list)
-    # Unknown query keys are ignored, response stays structured JSON.
+    # A non-integer limit is a validation error, reported as JSON with its field.
     resp = client.get("/api/alerts", params={"limit": "abc"})
+    assert resp.status_code == 422
     assert "application/json" in resp.headers.get("content-type", "")
+    assert "limit" in str(resp.json())
 
 
 # ── /metrics Prometheus text format (Issue #53, #19) ──────────────────

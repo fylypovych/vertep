@@ -69,8 +69,9 @@ class TestFileRepositoryChannels:
         repo.save_channel(ch)
         channel_file = tmp_path / ".channels.json"
         assert channel_file.exists()
-        # No .tmp file should remain
-        assert not (tmp_path / ".channels.json.tmp").exists()
+        # The write goes through a temporary file that is renamed away (.channels.tmp).
+        assert list(tmp_path.glob("*.tmp")) == []
+        assert json.loads(channel_file.read_text(encoding="utf-8"))["ch-1"]["target"] == "@t"
 
 
 class TestFileRepositoryJobs:
@@ -170,19 +171,13 @@ class TestMemoryRepository:
 
 class TestRepositoryInterface:
     def test_state_repository_abstract_methods(self):
-        """Verify StateRepository defines all required abstract methods."""
-        import inspect
-        methods = [
-            "next_job_sequence", "load_jobs", "save_job", "delete_job",
-            "save_worker", "load_workers", "append_event", "record_task",
-            "has_telegram_update", "record_telegram_update",
-            "list_channels", "get_channel", "save_channel", "delete_channel",
-        ]
-        for method in methods:
-            assert hasattr(StateRepository, method)
-            attr = getattr(StateRepository, method)
-            # Check if it's an abstractmethod by inspecting the function
-            assert inspect.isfunction(attr) or hasattr(attr, '__isabstractmethod__')
+        """Every storage backend must implement the state operations (abstract methods);
+        channel storage has a shared default implementation."""
+        assert {"next_job_sequence", "load_jobs", "save_job", "delete_job",
+                "save_worker", "load_workers", "append_event", "record_task",
+                "has_telegram_update", "record_telegram_update"} <= StateRepository.__abstractmethods__
+        for method in ("list_channels", "get_channel", "save_channel", "delete_channel"):
+            assert callable(getattr(StateRepository, method))
 
 
 class TestFileRepositoryWorkers:

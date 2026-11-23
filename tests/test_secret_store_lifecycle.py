@@ -43,7 +43,7 @@ def test_rotation_re_seals_under_a_new_data_key(store):
     assert first_run.ensure_secret_store()["telegram_bot_token"] == "token-before"
 
 
-def test_rotation_is_reversible_from_the_backup_key(store):
+def test_rotation_keeps_a_backup_key_and_the_retired_key_no_longer_opens_the_store(store):
     first_run.ensure_secret_store()
     first_run.set_integration_secret("smtp_password", "mail-pass-1")
     backup_before = (store / "secret-store.key.prev")
@@ -81,7 +81,7 @@ def test_interrupted_rotation_restores_the_readable_key(store, monkeypatch):
     assert first_run.ensure_secret_store()["smtp_password"] == "mail-pass-1"
 
 
-def test_deleted_key_file_is_recreated_without_losing_the_payload(store):
+def test_a_deleted_key_file_fails_closed_instead_of_returning_an_empty_store(store):
     first_run.ensure_secret_store()
     first_run.set_integration_secret("telegram_bot_token", "token-value")
     key_file(store).unlink()
@@ -119,11 +119,17 @@ def test_sealed_store_survives_a_process_restart(store):
     first_run.ensure_secret_store()
     first_run.set_integration_secret("telegram_bot_token", "token-value")
 
-    # The value must come from the on-disk envelope, not from any module state.
-    assert "_secret_key_cache" not in vars(first_run)
-
-    reloaded = first_run.ensure_secret_store()
-    assert reloaded["telegram_bot_token"] == "token-value"
+    # The value must come from the on-disk envelope, not from any module state:
+    # a new process with the same configuration reads it back.
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    reloaded = subprocess.run(
+        [sys.executable, "-c", "from core import first_run; print(first_run.ensure_secret_store()['telegram_bot_token'])"],
+        cwd=root, env={**os.environ, "PYTHONPATH": str(root)}, capture_output=True, text=True, timeout=60)
+    assert reloaded.returncode == 0, reloaded.stderr
+    assert reloaded.stdout.strip() == "token-value"
     assert first_run.inspect_data_key()["sealed"] is True
 
 
@@ -178,3 +184,19 @@ def test_key_file_permissions_are_owner_only(store):
     first_run.ensure_secret_store()
     assert first_run._secret_key()  # forces the sealed key file to exist
     assert key_file(store).stat().st_mode & 0o077 == 0
+
+def test_a_process_that_loses_the_key_creation_race_keeps_the_winners_key(store, monkeypatch):
+    """#520: the loser of os.link must read the winner's key, never delete it."""
+    import base64
+    winner = os.urandom(32)
+    path = key_file(store)
+
+    def winner_links_first(source, destination):
+        first_run._write_sealed_key(destination, winner)  # the other process finished first
+        raise FileExistsError(destination)
+    assert not path.exists()
+    with monkeypatch.context() as race:
+        race.setattr(first_run.os, "link", winner_links_first)
+        assert first_run._secret_key() == winner
+    assert first_run._secret_key() == winner  # the winner's key is still the one on disk
+    assert list(store.glob(".secret-store.key.*.tmp")) == []

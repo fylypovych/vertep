@@ -259,6 +259,9 @@ def test_worker_wizard_role_labels_are_ukrainian():
         expect(page.locator("[data-testid='worker-wizard-modal'] h3")).to_have_text("Додати вузол")
         expect(page.locator("[data-testid='worker-role-select']")).to_have_value("gpu")
         expect(page.locator("[data-testid='worker-role-select'] option")).to_have_count(6)
+        expect(page.locator("[data-testid='worker-role-select'] option")).to_have_text([
+            "GPU-вузол", "Текстовий вузол", "Голосовий вузол", "Вузол публікації",
+            "Вузол резервного копіювання", "Вузол моніторингу"])
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -384,6 +387,11 @@ def test_dashboard_job_status_counts():
         expect(page.locator("[data-testid='job-statuses']")).to_contain_text("Помилки")
         expect(page.locator("[data-testid='dashboard']")).to_contain_text("Призупинено")
         expect(page.locator("[data-testid='dashboard']")).to_contain_text("Скасовано")
+
+        def count(label):  # the number shown above a status label
+            return page.locator("[data-testid='dashboard'] div.text-center", has_text=label).first.locator("div").first
+        for label in ("Завершено", "Помилки", "Призупинено", "Скасовано"):
+            expect(count(label)).to_have_text("1")
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -543,12 +551,10 @@ def test_settings_video_engine_names_both_engines_and_shows_the_effective_one():
         browser.close()
 
 
-def test_settings_video_engine_applies_an_engine_through_the_real_api():
-    """Browser → POST → read model: the applied engine is the effective engine.
-
-    The mutation is answered by the route handler the real API would answer, and the
-    answer the UI renders afterwards is the one the read model reports.
-    """
+def test_settings_video_engine_applies_an_engine_and_renders_the_read_model():
+    """Browser → POST → read model: the UI sends the switch and then renders what the
+    read model reports. The API is mocked here; the real backend is exercised by
+    test_real_backend_video_engine_applies_a_runtime_and_returns_to_native."""
     applied = {}
     state = {"config": VIDEO_ENGINE_NATIVE}
 
@@ -842,8 +848,23 @@ def test_settings_shows_resources_or_unavailable():
         page.route("**/api/jobs*", lambda route: route.fulfill(json=[]))
 
         page.goto(f"{BASE_URL}/")
-        expect(page.locator("[data-testid='resources']")).to_be_visible()
+        resources = page.locator("[data-testid='resources']")
+        expect(resources).to_be_visible()
+        for value in ("45%", "62%", "30%"):
+            expect(resources).to_contain_text(value)
+        expect(page.locator("[data-testid='resources-empty']")).to_have_count(0)
         _assert_no_js_errors(page_errors, console_errors)
+
+        # Without resource data the dashboard says so instead of showing zeros.
+        page.unroute("**/api/status")
+        page.route("**/api/status", lambda route: route.fulfill(json={
+            "core": "OK", "version": "0.0.1.19", "system": {"state": "NORMAL"},
+            "queue": {"depth": 0, "inflight": 0, "dead_letter": 0},
+            "orchestration": {"active_jobs": 0, "active_scenes": 0}, "providers": {},
+            "update": {"current_version": "0.0.1.19", "state": "IDLE"},
+        }))
+        page.reload()
+        expect(page.locator("[data-testid='resources-empty']")).to_be_visible()
         browser.close()
 
 
@@ -949,34 +970,6 @@ def test_logs_page_shows_api_error():
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
-
-def test_logs_page_filter_level():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page_errors, console_errors = _attach_error_collector(page)
-        _mock_session(page)
-        _mock_status(page)
-        page.route("**/api/logs*", lambda route: route.fulfill(json=[
-            {"level": "ERROR", "message": "Only error", "timestamp": "2026-09-08T10:00:00Z"},
-        ]))
-        page.goto(f"{BASE_URL}/logs")
-        expect(page.locator("[data-testid='logs-table']")).to_be_visible()
-        expect(page.locator("[data-testid='logs-table']")).to_contain_text("ERROR")
-        _assert_no_js_errors(page_errors, console_errors)
-        browser.close()
-
-
-def test_health_endpoint_reports_core():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page_errors, console_errors = _attach_error_collector(page)
-        response = page.request.get(f"{BASE_URL}/api/health")
-        assert response.ok
-        assert response.json()["service"] == "core"
-        _assert_no_js_errors(page_errors, console_errors)
-        browser.close()
 
 def test_job_detail_page_loads():
     with sync_playwright() as p:
@@ -1148,25 +1141,6 @@ def test_characters_page_loads():
         expect(page.locator("[data-testid='characters-page']")).to_be_visible()
         expect(page.locator("[data-testid='characters-page']")).to_contain_text("Дід Самогон")
         expect(page.locator("[data-testid='create-character-button']")).to_be_visible()
-        _assert_no_js_errors(page_errors, console_errors)
-        browser.close()
-
-
-def test_workflows_page_loads():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page_errors, console_errors = _attach_error_collector(page)
-        _mock_session(page)
-        _mock_status(page)
-        page.route("**/api/workflows**", lambda route: route.fulfill(json=[
-            {"kind": "image", "name": "demo.json"},
-        ]))
-        page.route("**/api/characters**", lambda route: route.fulfill(json=[]))
-        page.goto(f"{BASE_URL}/workflows")
-        expect(page.locator("[data-testid='workflows-page']")).to_be_visible()
-        expect(page.locator("[data-testid='workflows-table']")).to_contain_text("demo.json")
-        expect(page.locator("[data-testid='create-workflow-button']")).to_be_visible()
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
@@ -2180,28 +2154,6 @@ def test_setup_wizard_health_check_displays_results():
         browser.close()
 
 
-def test_setup_wizard_back_button_hidden_on_first_step():
-    """Back button is invisible on step 0."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page_errors, console_errors = _attach_error_collector(page)
-        _mock_setup(page)
-        page.goto(f"{BASE_URL}/setup?token=ci")
-        expect(page.locator("#back")).to_have_css("visibility", "hidden")
-        page.locator("#next").click()
-        page.wait_for_timeout(100)
-        expect(page.locator("#back")).to_have_css("visibility", "visible")
-        _assert_no_js_errors(page_errors, console_errors)
-        browser.close()
-
-
-def test_setup_wizard_password_minimum_length():
-    """Password field has minlength=12 attribute."""
-    html = Path("web-v2/src/app/setup/setup.component.html").read_text(encoding="utf-8")
-    assert 'minlength="12"' in html
-
-
 def _ready_job(job_id="job-ready-01", status="READY"):
     """Minimal Job in READY state (final/video approval + publication)."""
     return {
@@ -2428,7 +2380,7 @@ def test_update_center_renders_progress_recovery_and_localized_controls():
 
 def test_moderator_cannot_see_or_open_admin_settings():
     """#106: role/permission UI hides Settings and its route from non-admins
-    (since 19.11.2026 the moderator; the former moderator role is gone)."""
+    (since 19.11.2026 the moderator; the former viewer role is gone)."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()

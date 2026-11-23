@@ -34,10 +34,6 @@ class TestBrandsModuleCatalog:
 
 
 class TestBrandsModuleCompatibility:
-    def test_brands_no_gpu_required(self):
-        manifest = ModuleManifest.from_dict(bundled_manifest("brands"))
-        assert manifest.placement["requires_gpu"] is False
-
     def test_brands_schema_version_2(self):
         manifest = ModuleManifest.from_dict(bundled_manifest("brands"))
         assert manifest.schema_version == "2.0"

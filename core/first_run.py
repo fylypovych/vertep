@@ -186,12 +186,9 @@ def _secret_key() -> bytes:
         os.link(temporary, path)
         temporary.unlink()
     except FileExistsError:
+        # Another Core process won the race: its key may already seal secrets, so
+        # it is kept and read instead of being replaced (#520).
         temporary.unlink(missing_ok=True)
-        if path.exists():
-            try:
-                path.unlink()
-            except OSError:
-                pass
         return _secret_key()
     return key
 

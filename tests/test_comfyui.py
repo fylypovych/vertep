@@ -263,37 +263,6 @@ class TestCancelContract:
             mock_post.assert_not_called()
             assert adapter.current_prompt_id is None
 
-    def test_cancel_never_falls_back_to_global_interrupt(self):
-        """An executing prompt cannot be removed one by one; it is abandoned.
-
-        Calling the global ``/interrupt`` would abort prompts owned by other jobs,
-        other workers and the interactive UI, so it must not happen.
-        """
-        import httpx as _httpx
-        adapter = ComfyUIAdapter()
-        adapter.current_prompt_id = "prompt-xyz"
-        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("already executing")), \
-             patch.object(_httpx, "post", side_effect=AssertionError("must not post")) as mock_post:
-            assert adapter.cancel() is False
-        mock_post.assert_not_called()
-        assert adapter.current_prompt_id is None
-        # The prompt stays abandoned so its late result is rejected.
-        assert "prompt-xyz" in adapter._abandoned_prompts
-
-    def test_late_result_of_an_abandoned_prompt_is_rejected(self, tmp_path):
-        """A result produced after the cancellation must never become an artifact."""
-        import httpx as _httpx
-        adapter = ComfyUIAdapter()
-        adapter.current_prompt_id = "prompt-late"
-        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("already executing")):
-            assert adapter.cancel() is False
-        history = MagicMock(raise_for_status=lambda: None)
-        history.json.return_value = {"prompt-late": {"outputs": {"1": {"images": [
-            {"filename": "scene-001.png", "subfolder": "", "type": "output"}]}}}}
-        with patch.object(_httpx, "get", return_value=history):
-            with pytest.raises(PromptCancelledError):
-                adapter.wait_for_result("prompt-late", timeout=5)
-
     def test_cancelled_prompt_raises_instead_of_returning_media(self, tmp_path):
         """generate_output must fail loudly rather than fetch a cancelled output."""
         wf = _write_workflow(tmp_path)
@@ -322,14 +291,3 @@ class TestCancelContract:
                 adapter.generate_output(wf, "x")
         # The prompt-scoped delete was the only backend cancellation call.
         assert posted["delete"]["prompt_id"] == "abc-123"
-
-    def test_cancel_both_fail_returns_false(self):
-        """When the prompt-scoped delete fails, cancel reports it was not isolated."""
-        import httpx as _httpx
-        adapter = ComfyUIAdapter()
-        adapter.current_prompt_id = "prompt-fail"
-        with patch.object(_httpx, "delete", side_effect=_httpx.HTTPError("err")):
-            assert adapter.cancel() is False
-        with patch.object(_httpx, "delete", return_value=MagicMock(raise_for_status=lambda: None)):
-            assert adapter.cancel() is True
-

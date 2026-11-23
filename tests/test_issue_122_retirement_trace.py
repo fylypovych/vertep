@@ -93,7 +93,8 @@ def test_an_empty_registry_is_refused(trace_module):
 
 
 def test_the_table_ends_at_the_next_section(trace_module):
-    rows = trace_module.parse_registry(body_with(KEPT))
+    # A table row after the next heading belongs to another section and is not read.
+    rows = trace_module.parse_registry(body_with(KEPT) + RETIRED_WITH_CHAIN)
 
     assert len(rows) == 1
     assert rows[0]["issue"] == "#61"

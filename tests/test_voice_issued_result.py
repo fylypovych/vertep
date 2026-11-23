@@ -44,10 +44,6 @@ def _worker_token(monkeypatch):
     monkeypatch.setenv("NODE_API_TOKEN", _WORKER_TOKEN)
 
 
-def _worker_headers():
-    return {"x-vertep-token": _WORKER_TOKEN}
-
-
 def _make_wav(duration: float = 0.5, rate: int = 22050) -> bytes:
     buffer = io.BytesIO()
     handle = wave.open(buffer, "wb")

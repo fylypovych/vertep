@@ -328,7 +328,7 @@ def test_characters_get_nested_routes_and_migration_endpoint(monkeypatch):
         assert response.status == 200, body
         assert body == {"allowed": True, "reasons": [], "owner_brand_id": None}
         assert request_json("POST", "/characters/character-a/activate?brand_id=brand-a", "moderator")[0] == 403
-        assert request_json("POST", "/migrate", "editor", {"default_owner_brand": "brand-a"})[0] == 403
+        assert request_json("POST", "/migrate", "moderator", {"default_owner_brand": "brand-a"})[0] == 403
         assert request_json("POST", "/migrate", "admin")[0] == 400
         assert request_json("POST", "/migrate", "admin", {"default_owner_brand": " brand-a "}) == (
             200, {"owner": "brand-a"}

@@ -118,24 +118,6 @@ class TestAudioModuleMigration:
         assert result is not None
         assert len(result) > 0
 
-    def test_audio_module_health_check(self):
-        """Module health check returns correct status."""
-        from modules.audio.audio_module import AudioModule
-        module = AudioModule()
-        health = module.health_check()
-        assert health["module"] == "audio"
-        assert health["status"] == "READY"
-
-    def test_audio_module_resource_query(self):
-        """Module resource query reports CPU-only needs."""
-        from modules.audio.audio_module import AudioModule
-        module = AudioModule()
-        resources = module.resource_query()
-        assert resources["module"] == "audio"
-        assert resources["gpu_required"] is False
-        assert resources["min_vram_mb"] == 0
-
-
 class TestModuleParity:
     """Parity comparison between role and module execution."""
 

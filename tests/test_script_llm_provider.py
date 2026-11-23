@@ -163,13 +163,6 @@ def test_unavailable_backend_fails_explicitly(worker_env, monkeypatch, caplog):
     assert worker_env["calls"] == []
 
 
-def test_script_executor_has_no_backend_protocol():
-    import inspect
-    source = inspect.getsource(role_executor.execute_script)
-    assert "/api/generate" not in source and "OLLAMA_URL" not in source
-    assert "providers.llm()" in source
-
-
 def test_unsupported_backend_delivery_is_a_failed_activation(worker_env):
     import os
     observed = deliver("mystery-llm")

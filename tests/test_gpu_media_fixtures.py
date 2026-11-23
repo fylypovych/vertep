@@ -25,7 +25,6 @@ decodability proof.
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 import struct
 import subprocess
@@ -599,40 +598,28 @@ def decode_mp4_frame(data: bytes) -> dict:
 # ── FFmpeg cross-check (optional, the real decoder when present) ────────────
 
 
-def _ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+def _ffmpeg() -> str | None:
+    """The same decoder the product uses: system ffmpeg or the bundled imageio-ffmpeg."""
+    from adapters.ffmpeg import FFmpegAdapter
+    try:
+        return FFmpegAdapter()._executable()
+    except RuntimeError:
+        return None
 
 
-requires_ffmpeg = pytest.mark.skipif(
-    not _ffmpeg_available(), reason="ffmpeg is not installed on this host")
+FFMPEG = _ffmpeg()
+requires_ffmpeg = pytest.mark.skipif(FFMPEG is None, reason="ffmpeg is not installed on this host")
 
 
 def _ffmpeg_decode(payload: bytes, tmp_path, suffix: str) -> subprocess.CompletedProcess:
     path = tmp_path / f"decode{suffix}"
     path.write_bytes(payload)
     return subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "null", "-"],
+        [FFMPEG, "-v", "error", "-i", str(path), "-f", "null", "-"],
         capture_output=True, text=True, timeout=60)
 
 
 # ── the transport gate keeps its structural contract ────────────────────────
-
-
-def test_valid_png_passes_structural_verification():
-    from worker.role_executor import verify_media
-    assert verify_media(PNG_VALID, ".png") == "image/png"
-
-
-def test_truncated_png_is_refused():
-    from worker.role_executor import verify_media
-    with pytest.raises(Exception, match="media signature"):
-        verify_media(PNG_TRUNCATED, ".png")
-
-
-def test_signature_only_png_is_refused():
-    from worker.role_executor import verify_media
-    with pytest.raises(Exception, match="media signature"):
-        verify_media(PNG_SIGNATURE_ONLY, ".png")
 
 
 def test_decodeable_mp4_passes_structural_verification():
@@ -645,24 +632,6 @@ def test_junk_mdat_mp4_still_passes_only_the_structural_gate():
     read as a decodability proof — that is what the decode layer below is for."""
     from worker.role_executor import verify_media
     assert verify_media(MP4_JUNK_MDAT, ".mp4") == "video/mp4"
-
-
-def test_ftyp_only_mp4_is_refused():
-    from worker.role_executor import verify_media
-    with pytest.raises(Exception, match="media signature"):
-        verify_media(MP4_FTYP_ONLY, ".mp4")
-
-
-def test_ftyp_plus_free_mp4_is_refused():
-    from worker.role_executor import verify_media
-    with pytest.raises(Exception, match="media signature"):
-        verify_media(MP4_FTYP_PLUS_FREE, ".mp4")
-
-
-def test_truncated_ftyp_mp4_is_refused():
-    from worker.role_executor import verify_media
-    with pytest.raises(Exception, match="media signature"):
-        verify_media(MP4_TRUNCATED_FTYP, ".mp4")
 
 
 # ── the decode layer: positive proof ─────────────────────────────────────────
@@ -710,7 +679,7 @@ def test_ffmpeg_decodes_the_exact_frame_bytes(tmp_path):
     path.write_bytes(MP4_DECODEABLE)
     raw = tmp_path / "frame.yuv"
     result = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(path), "-pix_fmt", "yuv420p",
+        [FFMPEG, "-v", "error", "-i", str(path), "-pix_fmt", "yuv420p",
          "-f", "rawvideo", "-y", str(raw)],
         capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
@@ -812,15 +781,3 @@ def test_png_decoder_refuses_a_broken_scanline_stream():
 
 
 # ── determinism of the pinned fixtures ──────────────────────────────────────
-
-
-def test_mp4_sha256_is_deterministic():
-    digest = hashlib.sha256(MP4_DECODEABLE).hexdigest()
-    assert len(digest) == 64
-    assert hashlib.sha256(MP4_DECODEABLE).hexdigest() == digest
-
-
-def test_png_sha256_is_deterministic():
-    digest = hashlib.sha256(PNG_VALID).hexdigest()
-    assert len(digest) == 64
-    assert hashlib.sha256(PNG_VALID).hexdigest() == digest

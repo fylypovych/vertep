@@ -425,10 +425,10 @@ def voice_cancel_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dic
 def voice_worker_loss_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
     """Drop the Voice Worker registration and let recovery requeue the task."""
     task = _claim_voice(client, job_id, node_name=node_name)
-    from core.telegram.handlers import store
-    store.workers.pop(node_name, None)
+    # The heartbeat timeout path for exactly this node (popping the worker first would
+    # hide it from recovery, which then never releases its lease).
     from core.api.job_helpers import _recover_stale_workers
-    _recover_stale_workers()
+    _recover_stale_workers({node_name})
     return {"task": task, **SUPPORTED_VOICE_PARAMS}
 
 
@@ -488,10 +488,10 @@ def voice_duplicate_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> 
 def voice_stale_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> dict:
     """Lose the lease and then submit a late audio result; it must be refused."""
     task = _claim_voice(client, job_id, node_name=node_name)
-    from core.telegram.handlers import store
-    store.workers.pop(node_name, None)
+    # The heartbeat timeout path for exactly this node (popping the worker first would
+    # hide it from recovery, which then never releases its lease).
     from core.api.job_helpers import _recover_stale_workers
-    _recover_stale_workers()
+    _recover_stale_workers({node_name})
     audio = make_wav()
     artifact = role_executor._artifact("scene.wav", "voice", audio)
     late = client.post("/api/tasks/result", json={
@@ -507,7 +507,8 @@ def voice_restart_row(client, job_id: str, *, node_name: str = VOICE_NODE) -> di
     from core.telegram.handlers import store
     from core.orchestration import recover_after_restart
     job = store.jobs[job_id]
-    recovered = recover_after_restart(job)
+    from core.state import task_queue
+    recovered = recover_after_restart(job, discard=task_queue.discard)  # as the startup reconcile does
     return {"task": task, "recovered_status": recovered.status, **SUPPORTED_VOICE_PARAMS}
 
 
@@ -1116,6 +1117,7 @@ def text_restart_row(client, job_id: str, *, node_name: str = TEXT_NODE) -> dict
     task = claim_task(client, job_id, node_name, task="storyboard")
     from core.telegram.handlers import store
     job = store.jobs[job_id]
-    recovered = recover_after_restart(job)
+    from core.state import task_queue
+    recovered = recover_after_restart(job, discard=task_queue.discard)  # as the startup reconcile does
     return {"task": task, "recovered_status": recovered.status}
 

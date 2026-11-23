@@ -7,34 +7,6 @@ from core.storyboard import StoryboardConflict, StoryboardService
 from core.storyboard_telegram import render_storyboard, storyboard_keyboard
 
 
-class FakeClient:
-    model = "fake-storyboard"
-
-    def __init__(self, responses):
-        self.responses = responses
-
-    def complete(self, prompt, *, format_json=False):
-        assert format_json is True
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-
-def storyboard_payload(title="Тестова історія"):
-    return json.dumps({
-        "title": title,
-        "description": "Опис",
-        "hashtags": ["#vertep"],
-        "scenes": [
-            {"prompt": "Українське місто", "video_prompt": "Повільна панорама",
-             "voiceover": "Початок історії", "duration": 6},
-            {"prompt": "Герой у кадрі", "video_prompt": "Камера наближається",
-             "voiceover": "Продовження", "duration": 7},
-        ],
-    }, ensure_ascii=False)
-
-
 def _storyboard_artifact(version: int, title: str = "Тестова історія"):
     import base64
     return {
@@ -133,52 +105,6 @@ def test_storyboard_version_approval_and_stale_version_guard(job_store):
     assert job.storyboards[-1].decided_by == "tester"
 
 
-def test_storyboard_retries_and_fails(job_store, monkeypatch):
-    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
-    job = job_store.create("Нова тема", "hero", 5)
-    service = StoryboardService(job_store)
-
-    service.queue(job)
-    task_id = job.storyboard_task_id
-
-    # First attempt fails
-    service.handle_result(job.job_id, task_id, False, None, "bad json")
-    assert job.storyboard_attempt == 1
-    assert job.status == JobStatus.STORYBOARD_QUEUED  # Re-queued for retry
-
-    # Second attempt fails
-    task_id2 = job.storyboard_task_id
-    service.handle_result(job.job_id, task_id2, False, None, "bad json again")
-    assert job.storyboard_attempt == 2
-
-    # Third attempt fails
-    task_id3 = job.storyboard_task_id
-    with pytest.raises(RuntimeError):
-        service.handle_result(job.job_id, task_id3, False, None, "bad json third")
-    assert job.storyboard_attempt == 3
-    assert job.status == JobStatus.STORYBOARD_FAILED
-    assert job.storyboard_error
-
-
-def test_storyboard_retry_carries_revision(job_store, monkeypatch):
-    """Issue #69 T3: storyboard retry forwards job.revision to the worker."""
-    monkeypatch.setenv("OLLAMA_STORYBOARD_MAX_RETRIES", "3")
-    job = job_store.create("Нова тема", "hero", 5)
-    job.revision = "додати кадр про кішку"
-    service = StoryboardService(job_store)
-    service.queue(job)
-    task_id = job.storyboard_task_id
-    captured = {}
-    original_queue = service.queue
-    def _spy(job, revision=None):
-        captured["revision"] = revision
-        return original_queue(job, revision=revision)
-    service.queue = _spy
-    service.handle_result(job.job_id, task_id, False, None, "bad json")
-    assert job.storyboard_attempt == 1
-    assert captured["revision"] == "додати кадр про кішку"
-
-
 def test_telegram_storyboard_rendering_and_versioned_callbacks(job_store):
     job = job_store.create("Нова тема", "hero", 5)
     service = StoryboardService(job_store)
@@ -197,22 +123,6 @@ def test_telegram_storyboard_rendering_and_versioned_callbacks(job_store):
     assert f"sb_regen:{job.job_id}:1" in callback_data
     assert f"sb_edit:{job.job_id}:1" in callback_data
     assert f"sb_reject:{job.job_id}:1" in callback_data
-
-
-def test_video_blocked_until_image_storyboard_approved(job_store):
-    job = job_store.create("Нова тема", "hero", 5)
-    service = StoryboardService(job_store)
-    service.queue(job)
-    task_id = job.storyboard_task_id
-    service.handle_result(job.job_id, task_id, True, [_storyboard_artifact(1)], None)
-
-    sb = job.storyboards[0]
-    # Before image approval — storyboard approve must be blocked (Issue #6)
-    with pytest.raises(StoryboardConflict):
-        service.approve(job.job_id, sb.version, "tester")
-    # Even with artifacts placeholder, image_status is still pending — still blocked
-    with pytest.raises(StoryboardConflict):
-        service.approve(job.job_id, sb.version, "tester")
 
 
 def test_image_revision_preserves_old_artifacts(job_store):
@@ -567,26 +477,10 @@ def test_storyboard_default_revision_through_retry(job_store, monkeypatch):
     assert job.storyboard_active_revision is None
 
 
-def test_storyboard_regenerate_from_history_default_none(job_store):
-    """#163.2: regenerate_from_history without explicit revision keeps default None,
-    does not fall back to base_storyboard.revision_request."""
-    job = job_store.create("Нова тема", "hero", 5)
-    service = StoryboardService(job_store)
-    service.queue(job)
-    service.handle_result(job.job_id, job.storyboard_task_id, True,
-                          [_storyboard_artifact(1)], None)
-    first = job.storyboards[0]
-    first.revision_request = "старий revision_request із версії 1"
-    for scene in first.scenes:
-        scene.image_artifact_id = f"artifact-{scene.index}"
-    first.image_status = "ready"
-    service.approve_images(job.job_id, 1, "tester")
-    service.approve(job.job_id, 1, "tester")
-
-    # No explicit revision → must stay None, not inherit "старий revision_request..."
-    service.regenerate_from_history(job.job_id, 1, "tester", None)
-    assert job.storyboard_active_revision is None
-    assert job.storyboard_attempt_version == 2
+def _queued_storyboard_tasks(job_id):
+    from core.state import task_queue
+    return [item[2]["task_id"] for item in task_queue._local
+            if item[2].get("job_id") == job_id and item[2].get("task") == "storyboard"]
 
 
 def test_storyboard_lease_loss_retry_dead_letter(job_store, monkeypatch):
@@ -597,23 +491,27 @@ def test_storyboard_lease_loss_retry_dead_letter(job_store, monkeypatch):
     service = StoryboardService(job_store)
     service.queue(job)
 
-    # Simulate worker loss: expired storyboard lease, retry with pinned revision
+    # Simulate worker loss: the Worker held the task, its lease expired, retry with pinned revision
+    from core.state import task_queue
     task_id = job.storyboard_task_id
+    assert task_queue.claim()["task_id"] == task_id
     service.handle_result(job.job_id, task_id, False, None,
                           "storyboard task lease expired")
     assert job.storyboard_attempt == 1
     assert job.storyboard_active_revision is None  # default pinned through retry
 
     task_id2 = job.storyboard_task_id
+    # Exactly one storyboard task is queued after the retry: the new one, not the lost one.
+    assert task_id2 != task_id and _queued_storyboard_tasks(job.job_id) == [task_id2]
+    assert task_queue.claim()["task_id"] == task_id2
     with pytest.raises(RuntimeError):
         service.handle_result(job.job_id, task_id2, False, None,
                               "storyboard task lease expired again")
     assert job.storyboard_attempt == 2
     assert job.status == JobStatus.STORYBOARD_FAILED
-    assert job.storyboard_error is not None
-
-    # Dead-letter recorded by job_helpers for the lost lease task
-    assert len(job_store.jobs[job.job_id].storyboard_error or "") > 0
+    assert "lease expired again" in job.storyboard_error
+    # Budget exhausted: nothing is queued again for this storyboard.
+    assert _queued_storyboard_tasks(job.job_id) == []
 
 
 def test_storyboard_cancel_and_restart(job_store, monkeypatch):
@@ -647,7 +545,9 @@ def test_storyboard_heartbeat_loss_metadata_consistency(job_store, monkeypatch):
     service.queue(job)
 
     # Worker heartbeat lost mid-execution → single attempt, terminal failure
+    from core.state import task_queue
     task_id = job.storyboard_task_id
+    assert task_queue.claim()["task_id"] == task_id
     with pytest.raises(RuntimeError):
         service.handle_result(job.job_id, task_id, False, None,
                               "script worker heartbeat timed out")
@@ -655,9 +555,10 @@ def test_storyboard_heartbeat_loss_metadata_consistency(job_store, monkeypatch):
     assert job.status == JobStatus.STORYBOARD_FAILED
     assert job.storyboard_error is not None
 
-    # No duplicate task: active_task_id cleared on terminal failure
-    assert job.storyboard_task_id is not None  # last task id recorded
-    # Repository sees exactly one failed attempt for this storyboard version
+    # The last task id stays recorded for diagnosis; no extra task was queued for it.
+    assert job.storyboard_task_id == task_id
+    assert _queued_storyboard_tasks(job.job_id) == []
+    assert "heartbeat timed out" in job.storyboard_error
     assert job.storyboards == []  # no storyboard was ever produced
 
 

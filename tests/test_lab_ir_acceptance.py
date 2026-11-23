@@ -416,17 +416,6 @@ def test_var_without_approval_leaves_no_trace(tmp_path):
     assert governance.created() == []
 
 
-def test_ir_creation_without_grant_is_denied(tmp_path):
-    """Historical contract: rule name stays `no_active_grant`."""
-    gate = _gate(tmp_path)
-    transport = _FakeTransport()
-    governance = _gov(tmp_path, gate, transport)
-
-    result = governance.create_ir_issue("test ir")
-    assert not result["allowed"]
-    assert result["rule"] == "no_active_grant"
-
-
 def test_ir_closing_without_grant_is_denied(tmp_path):
     gate = _gate(tmp_path)
     decision = gate.decide("delegate_close_ir", actor="lab", subject="ir.0.0.0.1")

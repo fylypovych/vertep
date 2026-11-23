@@ -430,15 +430,6 @@ class TestSetupBackendFieldAlignment:
         assert re.search(r"\bbackend:\s", payload) is None
         assert "backend_url:" in payload
 
-    def test_server_reads_ai_backend(self):
-        source = (ROOT / "core" / "api" / "setup.py").read_text(encoding="utf-8")
-        assert 'payload.get("ai_backend", "skip")' in source
-
-    def test_server_reads_ai_backend_field(self):
-        """i.0.0.0.98: the complete endpoint reads ``ai_backend``."""
-        source = (ROOT / "core" / "api" / "setup.py").read_text(encoding="utf-8")
-        assert 'payload.get("ai_backend", "skip")' in source
-
     def test_external_backend_requires_url(self, monkeypatch):
         """i.0.0.0.98: the ``external`` backend must require ``backend_url``."""
         import asyncio

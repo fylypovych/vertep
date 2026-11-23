@@ -334,16 +334,20 @@ def test_publish_retry_uses_bounded_backoff(monkeypatch):
     job.publish_task_ids = {"task-1": "youtube"}
     store = _make_store()
     monkeypatch.setenv("PUBLISH_RETRY_BACKOFF_BASE", "2")
-    monkeypatch.setenv("PUBLISH_RETRY_BACKOFF_CAP", "4")
+    monkeypatch.setenv("PUBLISH_RETRY_BACKOFF_CAP", "3")
     enqueued = []
+
+    delays = []
 
     def fake_enqueue(js, jb, ch, delay=0):
         enqueued.append(ch)
+        delays.append(delay)
         return {"task_id": f"retry-{len(enqueued)}"}
 
     with patch("core.api.job_helpers.publish._enqueue_publish_task", side_effect=fake_enqueue):
         for i in range(3):
             _handle_publish_result(store, job, {"success": False, "task_id": f"task-{i+1}", "error": "boom"}, [], "youtube")
     assert len(enqueued) == 2
+    assert delays == [2.0, 3.0]  # 2**1, then 2**2 bounded by the cap
     assert job.publish_retry_count["youtube"] == 3
     assert job.status == JobStatus.FAILED

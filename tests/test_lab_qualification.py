@@ -233,8 +233,10 @@ class TestCollectors:
 
     def test_gpu_passthrough_is_observed(self):
         facts = collect_gpu_passthrough_facts()
-        assert "passthrough" in facts
         assert isinstance(facts["devices"], list)
+        assert all(device.startswith("/dev/nvidia") for device in facts["devices"])
+        # Passthrough is reported exactly when a GPU device node is visible.
+        assert facts["passthrough"] is bool(facts["devices"])
 
     def test_evidence_directory_stays_outside_the_repository(self):
         configured = default_evidence_dir()

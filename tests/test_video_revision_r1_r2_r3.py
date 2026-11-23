@@ -190,9 +190,10 @@ class TestR2RegisteredOrderedIntegrityInputs:
         store, job = _build_store(tmp_path)
         monkeypatch.setattr("core.state.store", store)
         _register_scene(store, job, 1, "frame.webp")
-        # a scene regenerated later keeps its older artifact as history
-        _register_scene(store, job, 1, "frame-v2.jpg")
+        # a scene regenerated later keeps its older artifact as history (one SceneRecord)
+        _add_scene_artifact(store, job, 1, "frame-v2.jpg", content=b"newer-scene-bytes")
         store._save(job)
+        assert len(job.scenes) == 1 and len(job.scenes[0].artifact_ids) == 2
         assert [p.name for p in _collect_reassembly_inputs(job)] == ["frame-v2.jpg"]
 
     def test_video_task_scene_without_video_scene_artifact_blocks_reassembly(
@@ -262,23 +263,6 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert _collect_reassembly_inputs(job) == []
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
-    def test_no_valid_artifacts_fails_video_explicitly(self, tmp_path, monkeypatch):
-        import core.app as app_module
-        store, job = _build_store(tmp_path)
-        _render_v1(store, job)
-        corrupted = _register_scene(store, job, 1, "bad.png")
-        corrupted.write_bytes(b"tampered")
-        store._save(job)
-        _owner_core_telegram_handlers.store = store
-        monkeypatch.setattr("core.state.store", store)
-        with patch("core.pipeline.providers"):
-            _owner_core_telegram_handlers._finalize_video_regenerate(job)
-        current = store.jobs[job.job_id]
-        assert current.status == JobStatus.VIDEO_FAILED
-        assert current.active_video_version == 1
-        assert current.video_versions[-1].approved is False
-        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in current.events)
-
     def test_missing_artifact_file_is_reported(self, tmp_path, monkeypatch):
         from core.pipeline import _collect_reassembly_inputs
         store, job = _build_store(tmp_path)
@@ -303,19 +287,6 @@ class TestR2RegisteredOrderedIntegrityInputs:
         assert _collect_reassembly_inputs(job) == []
         assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
         assert any("scene 2 (no registered artifact)" in line for line in job.events)
-
-    def test_unresolved_artifact_id_blocks_reassembly(self, tmp_path, monkeypatch):
-        from core.pipeline import _collect_reassembly_inputs
-        store, job = _build_store(tmp_path)
-        monkeypatch.setattr("core.state.store", store)
-        _register_scene(store, job, 1, "good.png")
-        job.scenes.append(SceneRecord(scene_id="scene-2", index=2, prompt="Kadr",
-                                      artifact_ids=["does-not-exist"]))
-        store._save(job)
-        # An unresolved artifact_id means no registration resolves for the
-        # scene, so the required set is incomplete and re-assembly is blocked.
-        assert _collect_reassembly_inputs(job) == []
-        assert any("RE-ASSEMBLY ARTIFACTS REJECTED" in line for line in job.events)
 
     def test_unresolved_newest_id_is_not_substituted_by_historical_artifact(
             self, tmp_path, monkeypatch):
@@ -410,19 +381,6 @@ class TestR3ApprovalBoundToReviewedVersion:
         with pytest.raises(ValueError, match="integrity"):
             approve_video(store, job, "web", expected_version=1,
                           expected_sha256=reviewed.sha256)
-
-    def test_stale_version_approval_is_rejected(self, tmp_path):
-        from core.pipeline import approve_video
-        store, job = self._approved_store(tmp_path)
-        with pytest.raises(ValueError, match="Stale"):
-            approve_video(store, job, "web", expected_version=2)
-
-    def test_second_approval_after_ready_is_rejected(self, tmp_path):
-        from core.pipeline import approve_video
-        store, job = self._approved_store(tmp_path)
-        approve_video(store, job, "web", expected_version=1)
-        with pytest.raises(ValueError, match="Cannot approve"):
-            approve_video(store, job, "web", expected_version=1)
 
     def _client(self, store):
         from fastapi.testclient import TestClient

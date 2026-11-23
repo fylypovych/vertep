@@ -67,7 +67,7 @@ def test_enqueue_rejects_unknown_roles(environment, gate, ledger):
         Orchestrator(environment, gate, ledger).enqueue("fix", role="cctv")
 
 
-def test_static_checks_are_run_before_any_ai_call(environment, gate, ledger, tmp_path):
+def test_static_checks_are_run_before_any_ai_call(environment, gate, ledger, tmp_path, monkeypatch):
     provider = FakeResourceProvider()
     orchestrator = Orchestrator(environment, gate, ledger, provider=provider,
                                 actor="lab", executor=_stub_executor)
@@ -76,6 +76,19 @@ def test_static_checks_are_run_before_any_ai_call(environment, gate, ledger, tmp
     assert result["checks"]["passed"] is True
     assert "role reviewer" in result["reason"]
     assert "role executor" in result["reason"]
+
+    # When the static checks fail, no role executor (AI call) runs at all.
+    import lab.orchestrator as orchestration
+    monkeypatch.setattr(orchestration.StaticChecks, "run", lambda self: {"passed": False, "results": []})
+    calls = []
+    # A fresh budget: the first run left its usage unreconciled, which pauses the next call.
+    fresh = BudgetLedger(tmp_path / "state-second")
+    failing = Orchestrator(environment, gate, fresh, provider=FakeResourceProvider(), actor="lab",
+                           executor=lambda *args, **kwargs: calls.append(args))
+    blocked = failing.run_once()
+    assert blocked["state"] == RunState.FAILED.value
+    assert blocked["reason"] == "static checks failed before any AI call"
+    assert calls == []
 
 
 def test_run_without_an_executor_is_blocked_not_completed(environment, gate, ledger,

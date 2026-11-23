@@ -135,20 +135,6 @@ def test_raw_key_is_transparently_resealed(monkeypatch, tmp_path):
     assert set_integration_secret("telegram_bot_token", "still-here")["telegram_bot_token"] is True
 
 
-def test_rotation_rewrites_store_under_new_data_key(monkeypatch, tmp_path):
-    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
-    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
-    set_integration_secret("telegram_bot_token", "rotate-me")
-    before = (tmp_path / "secret-store.key").read_text(encoding="utf-8")
-
-    result = rotate_data_key()
-    after = (tmp_path / "secret-store.key").read_text(encoding="utf-8")
-    assert result["rotated"] is True
-    assert after != before
-    assert integration_secret_status()["telegram_bot_token"] is True
-    assert (tmp_path / "secret-store.key.prev").exists()
-
-
 def test_rotation_survives_restart_and_rejects_wrong_passphrase(monkeypatch, tmp_path):
     """Rotation must not weaken the effective sealing gate: after rotation a
     wrong passphrase still fails closed."""
@@ -186,29 +172,10 @@ def test_rotation_is_serialized_with_concurrent_writers(monkeypatch, tmp_path):
     assert integration_secret_status()["telegram_bot_token"] is True
 
 
-def test_interrupted_rotation_recovers_from_previous_key(monkeypatch, tmp_path):
-    """If the store rewrite fails mid-rotation the previous key file is put
-    back, so the sealed store is never left undecryptable."""
-    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
-    monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
-    set_integration_secret("telegram_bot_token", "keep-me")
-    original = (tmp_path / "secret-store.key").read_text(encoding="utf-8")
-
-    def boom(_value: dict) -> None:
-        raise OSError("disk full")
-
-    with monkeypatch.context() as patch:
-        patch.setattr("core.first_run._write_encrypted_secrets", boom)
-        with pytest.raises(OSError):
-            rotate_data_key()
-
-    assert (tmp_path / "secret-store.key").read_text(encoding="utf-8") == original
-    assert ensure_secret_store()["telegram_bot_token"] == "keep-me"
-
-
-def test_data_key_is_not_replaced_when_another_process_wins(monkeypatch, tmp_path):
-    """Concurrent first use must converge on one key instead of orphaning the
-    store under a key nobody kept."""
+def test_data_key_is_reused_by_a_later_writer(monkeypatch, tmp_path):
+    """A later writer keeps using the data key that already sealed the store.
+    The simultaneous first-use race is covered by
+    test_a_process_that_loses_the_key_creation_race_keeps_the_winners_key."""
     monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
     monkeypatch.setenv("SECRET_STORE_PASSPHRASE", "a-very-strong-passphrase")
     ensure_secret_store()

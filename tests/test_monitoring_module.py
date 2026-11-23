@@ -1,6 +1,3 @@
-import pytest
-import yaml
-from pathlib import Path
 from core.module.catalog import BUNDLED_LABELS
 from core.module.lifecycle import BUNDLED, bundled_manifest
 from core.module.manifest import ModuleManifest
@@ -29,30 +26,7 @@ class TestMonitoringModuleCatalog:
         assert manifest.health.get("timeout_seconds") is not None
 
 
-class TestMonitoringModuleLifecycle:
-    @pytest.mark.asyncio
-    async def test_monitoring_install_activate(self):
-        from core.module.lifecycle import ModuleManager
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            mgr = ModuleManager(Path(tmp))
-            manifest_path = Path("modules/monitoring/manifest.yaml")
-            assert manifest_path.exists(), "manifest.yaml not found"
-            manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-            manifest = ModuleManifest.from_dict(manifest_data)
-            pkg = {"manifest": manifest, "version": "1.0.0", "sha256": "test"}
-            result = await mgr.install("monitoring", pkg)
-            assert result["status"] == "installed"
-            result = await mgr.activate("monitoring")
-            assert result["status"] == "active"
-
-
 class TestMonitoringModuleCompatibility:
-    def test_monitoring_no_gpu_required(self):
-        manifest = ModuleManifest.from_dict(bundled_manifest("monitoring"))
-        assert manifest.placement["requires_gpu"] is False
-
     def test_monitoring_schema_version_2(self):
         manifest = ModuleManifest.from_dict(bundled_manifest("monitoring"))
         assert manifest.schema_version == "2.0"

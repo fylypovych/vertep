@@ -968,7 +968,15 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
                         continue
                     if existing.is_file() or (existing.is_symlink() and not existing.is_dir()):
                         existing.unlink(missing_ok=True)
-                        
+                # #442: a directory absent from the snapshot (a deleted brand) must not survive
+                # empty; stores treat the directory itself as the record. Deepest first.
+                for existing in sorted(destination.rglob("*"), key=lambda path: len(path.parts), reverse=True):
+                    if existing not in snapshot_files and existing.is_dir() and not existing.is_symlink():
+                        try:
+                            existing.rmdir()
+                        except OSError:
+                            pass  # still holds protected files: keep it
+
             _set_restore_progress(snapshot_id, 70, "Відновлення бази даних...")
             db_root = extracted / "db"
             if db_root.is_dir():

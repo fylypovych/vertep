@@ -12,7 +12,6 @@ import httpx
 from fastapi.testclient import TestClient
 
 from adapters.tts import TTSAdapter
-from adapters.ffmpeg import FFmpegAdapter
 from adapters.llm import LLMAdapter
 from core.security import _hash_secret
 from core.app import app
@@ -56,7 +55,8 @@ def test_mock_tts_creates_wav_manifest(tmp_path):
     assert output.with_suffix(".json").is_file()
 
 
-def test_tts_stage_retries_until_success(monkeypatch, tmp_path):
+def test_preparation_stops_at_script_approval_before_any_tts(monkeypatch, tmp_path):
+    """TTS runs only after the script is approved: preparing a job never synthesizes voice."""
     from core.pipeline import JobStore
 
     monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "true")
@@ -68,16 +68,11 @@ def test_tts_stage_retries_until_success(monkeypatch, tmp_path):
 
     def synthesize(self, text, output, duration=3, voice=None):
         calls["count"] += 1
-        if calls["count"] < 3:
-            return {"status": "FAILED", "error": "temporary TTS error"}
-        output.write_bytes(b"RIFFtest-wave")
         return {"status": "READY"}
 
     monkeypatch.setattr(TTSAdapter, "synthesize", synthesize)
-    monkeypatch.setattr(FFmpegAdapter, "concat_audio",
-                        lambda self, sources, output: output.write_bytes(b"RIFFjoined") or output)
     store = JobStore(str(tmp_path), MemoryRepository())
-    job = store.create("TTS retries", "did_samogon", 5)
+    job = store.create("TTS after approval", "did_samogon", 5)
 
     prepare_job(store, job)
 

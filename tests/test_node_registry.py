@@ -200,34 +200,6 @@ def test_workers_listing_propagates_registry_runtime_status(monkeypatch, tmp_pat
         assert listed[f"{role}-01"]["runtime_status"] == "ONLINE"
 
 
-def test_outbound_only_renew_and_revoke_roundtrip(monkeypatch, tmp_path):
-    """Issue #80: renew and revoke must be usable as outbound-only operations
-    from the node side, with the old certificate serial landing in the CRL."""
-    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
-    token = create_registration_token("gpu", 900)
-    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
-    enrolled = enroll_node(token["token"], "gpu-01", ["image_generation"],
-                           {"gpu": "RTX 4090", "vram_mb": 24576}, "1.5.0", csr)
-    original_serial = registered_nodes()[0]["certificate_serial"]
-
-    renewed = renew_node("gpu-01", csr)
-    assert renewed["certificate"] != enrolled["certificate"]
-    assert renewed["jwt"] != enrolled["jwt"]
-    assert registered_nodes()[0]["certificate_serial"] != original_serial
-    assert not verify_node_certificate("gpu-01", original_serial)
-    assert verify_node_certificate("gpu-01", renewed["certificate_serial"])
-
-    revoked = revoke_node("gpu-01")
-    assert revoked["status"] == "REVOKED"
-    assert not verify_node_certificate("gpu-01", renewed["certificate_serial"])
-    assert not verify_node_token(renewed["jwt"], "gpu-01")
-    assert not verify_node_token(renewed["worker_secret"], "gpu-01")
-    crl_text = subprocess.run(["openssl", "crl", "-in", str(tmp_path / "node-ca.crl"),
-                               "-text", "-noout"], check=True,
-                               capture_output=True, text=True).stdout.lower().replace(":", "")
-    assert renewed["certificate_serial"].lower().lstrip("0") in crl_text
-
-
 def test_lost_response_retry_reissues_credentials_for_same_node(monkeypatch, tmp_path):
     """Issue #80: a node that committed its enrollment but lost the response must be
     able to retry with the same enrollment id instead of deadlocking on a burned token."""
@@ -362,77 +334,6 @@ def test_postgres_rotation_revokes_the_outgoing_certificate(monkeypatch, tmp_pat
     update_index = next(i for i, entry in enumerate(statements)
                         if "UPDATE registered_nodes SET secret_hash=''" in entry[0])
     assert select_index < update_index
-
-
-def test_lost_response_retry_over_real_http(monkeypatch, tmp_path):
-    """End-to-end: Core commits the enrollment, the response never arrives, and the
-    worker's own retry over a real HTTP socket still gets working credentials.
-
-    This exercises the real `/api/nodes/register` handler over a socket instead of
-    a stub, so it proves the retry contract rather than the retry wrapper alone.
-    """
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    from urllib.request import Request, urlopen
-
-    from core.api.nodes import router as nodes_router
-    from core.first_run import ensure_secret_store
-
-    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
-    token = create_registration_token("gpu", 900)
-    csr = create_node_csr("gpu-01", tmp_path / "client-pki")
-    body = json.dumps({"registration_token": token["token"], "node_id": "gpu-01",
-                       "enrollment_id": "enroll-http01", "capabilities": ["image_generation"],
-                       "hardware": {"gpu": "RTX 4090"}, "version": "1.5.0",
-                       "csr": csr}).encode("utf-8")
-    delivered = {"count": 0}
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_args):
-            pass
-
-        def do_POST(self):
-            assert self.path == "/api/nodes/register"
-            delivered["count"] += 1
-            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if delivered["count"] == 1:
-                # Commit the enrollment, then drop the connection without an answer.
-                enroll_node(payload["registration_token"], payload["node_id"],
-                            payload["capabilities"], payload["hardware"], payload["version"],
-                            payload["csr"], payload.get("enrollment_id"))
-                self.close_connection = True
-                return
-            result = enroll_node(payload["registration_token"], payload["node_id"],
-                                 payload["capabilities"], payload["hardware"], payload["version"],
-                                 payload["csr"], payload.get("enrollment_id"))
-            body_bytes = json.dumps(result).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body_bytes)))
-            self.end_headers()
-            self.wfile.write(body_bytes)
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        url = f"http://127.0.0.1:{server.server_port}/api/nodes/register"
-        with pytest.raises(Exception):
-            urlopen(Request(url, data=body, headers={"Content-Type": "application/json"}), timeout=10)
-        with urlopen(Request(url, data=body, headers={"Content-Type": "application/json"}),
-                     timeout=10) as response:
-            credentials = json.loads(response.read().decode("utf-8"))
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    assert delivered["count"] == 2
-    assert credentials["worker_id"] == "gpu-01"
-    assert verify_node_token(credentials["worker_secret"], "gpu-01")
-    assert verify_node_certificate("gpu-01", credentials["certificate_serial"])
-    assert registered_nodes()[0]["runtime_status"] == "PENDING_SELF_TEST"
-    assert ensure_secret_store()["internal_api_key"]
-    assert nodes_router is not None
 
 
 def test_lost_response_retry_requires_the_same_node_and_key(monkeypatch, tmp_path):

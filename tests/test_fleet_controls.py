@@ -79,7 +79,7 @@ def test_drain_ack_and_resume(client):
     _add_worker("drn-01")
     resp = _control(client, "drn-01", "drain")
     assert resp.status_code == 200
-    assert resp.json()["status"] in ("DRAINING", "READY")
+    assert resp.json()["status"] == "DRAINING"
     resp2 = _control(client, "drn-01", "resume")
     assert resp2.status_code == 200
     assert resp2.json()["status"] == "READY"
@@ -97,7 +97,7 @@ def test_disable_enable(client):
     d = client.get("/api/nodes/dis-01").json()
     assert d["status"] == "OFFLINE"
     _control(client, "dis-01", "enable")
-    assert client.get("/api/nodes/dis-01").json()["status"] in ("READY", "ERROR")
+    assert client.get("/api/nodes/dis-01").json()["status"] == "READY"
 
 def test_self_test_ack(client):
     _add_worker("st-01")
@@ -164,6 +164,9 @@ def test_revoke_ack(client):
     _add_worker("rev-01")
     resp = client.post("/api/nodes/rev-01/revoke")
     assert resp.status_code == 200
+    assert resp.json()["status"] == "REVOKED"
+    detail = client.get("/api/nodes/rev-01").json()
+    assert detail["status"] == "REVOKED" and detail["update_state"]["desired_state"] == "REVOKED"
 
 def test_unknown_node_action_404(client):
     assert client.post("/api/nodes/no-such/actions", json={"action": "drain"}).status_code == 404
@@ -175,15 +178,3 @@ def test_invalid_action_rejected(client):
 def test_busy_worker_rejects_self_test(client):
     _add_worker("bst-01", status="BUSY", current_task="task-x")
     assert client.post("/api/nodes/bst-01/actions", json={"action": "self-test"}).status_code == 409
-
-# ── State transition machine ───────────────────────────────────
-
-def test_ready_busy_ready_cycle(client):
-    _add_worker("tc-01")
-    store.workers["tc-01"]["status"] = "BUSY"
-    store.workers["tc-01"]["current_task"] = "t-1"
-    store.save_worker(store.workers["tc-01"])
-    assert client.get("/api/nodes/tc-01").json()["status"] == "BUSY"
-    store.workers["tc-01"].update({"status": "READY", "current_task": None})
-    store.save_worker(store.workers["tc-01"])
-    assert client.get("/api/nodes/tc-01").json()["status"] == "READY"

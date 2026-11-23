@@ -1,5 +1,6 @@
 import base64
 import json
+import subprocess
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -205,9 +206,14 @@ def test_platform_preset_and_watermark(tmp_path):
     logo = tmp_path / "logo.ppm"
     scene.write_bytes(b"P6\n4 4\n255\n" + bytes((20, 30, 40)) * 16)
     logo.write_bytes(b"P6\n2 2\n255\n" + bytes((255, 255, 255)) * 4)
-    output = FFmpegAdapter().assemble(tmp_path / "square.mp4", images=[scene], durations=[0.2],
-                                      preset="square", watermark=logo)
+    adapter = FFmpegAdapter()
+    output = adapter.assemble(tmp_path / "square.mp4", images=[scene], durations=[0.2],
+                              preset="square", watermark=logo)
     assert output.stat().st_size > 100
+    # The square preset is applied to the encoded stream, not only requested.
+    info = subprocess.run([adapter._executable(), "-hide_banner", "-i", str(output)],
+                          capture_output=True, text=True)
+    assert "1080x1080" in info.stderr, info.stderr
 
 
 def test_publisher_never_fakes_success(monkeypatch):
@@ -302,6 +308,9 @@ def test_publish_partial_failure_mixed_channels(monkeypatch):
     job = client.get(f"/api/jobs/{job_id}").json()
     assert job["publication_results"]["youtube"]["status"] == "PUBLISHED"
     assert "youtube" in job["published_to"]
+    # The failed channel is not reported as published.
+    assert "tiktok" not in job["published_to"]
+    assert job["publication_results"].get("tiktok", {}).get("status") != "PUBLISHED"
     assert job["status"] in ("FAILED", "PUBLISHING")
 
 
@@ -352,20 +361,12 @@ def test_publish_cancels_pending_tasks_on_job_cancel(monkeypatch):
     _heartbeat_publisher(client)
     published = client.post(f"/api/jobs/{job_id}/publish", json=["youtube"]).json()
     assert published["status"] == "PUBLISHING"
-    headers = {"X-Vertep-Token": "worker-token"}
-    task = _claim_publish_task(client, job_id)
-    if task:
-        [artifact] = role_executor.execute_role_task("publisher", task)
-        client.post("/api/tasks/result", json={
-            "job_id": job_id, "task_id": task["task_id"], "node_name": "pub-worker",
-            "success": True, "artifacts": [artifact]}, headers=headers)
-    else:
-        client.post(f"/api/jobs/{job_id}/cancel")
-        job = client.get(f"/api/jobs/{job_id}").json()
-        assert job["status"] == "CANCELLED"
-        assert job["publish_task_ids"] == {}
-
-        return
+    assert published["publish_task_ids"]  # a publish task is pending
+    client.post(f"/api/jobs/{job_id}/cancel")
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["status"] == "CANCELLED"
+    assert job["publish_task_ids"] == {}
+    assert _claim_publish_task(client, job_id) is None  # the discarded task is never handed out
 
 
 def _heartbeat_text_worker(client, node_name="text-worker"):
@@ -452,15 +453,18 @@ def test_script_task_cancellation_via_api(monkeypatch):
                         lambda self, topic, sp="", ch=None: {
                             "title": topic,
                             "scenes": [{"prompt": topic, "voiceover": "", "duration": 1}]})
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
     client = TestClient(app)
     _heartbeat_text_worker(client)
     job_id = client.post("/api/jobs", json={"topic": "Cancel script"}).json()["job_id"]
-    job = wait_for(client, job_id, statuses=("SCRIPT_GENERATING", "SCRIPT_PENDING_APPROVAL"))
-    if job["status"] == "SCRIPT_GENERATING":
-        client.post(f"/api/jobs/{job_id}/cancel")
-        updated = client.get(f"/api/jobs/{job_id}").json()
-        assert updated["status"] == "CANCELLED"
-        assert updated["script_task_id"] is None
+    claimed = client.post("/api/tasks/claim", json={"node_name": "text-worker", "vram_mb": 0},
+                          headers={"X-Vertep-Token": "worker-token"}).json()["task"]
+    assert claimed["task"] == "script" and claimed["job_id"] == job_id
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "SCRIPT_GENERATING"
+    client.post(f"/api/jobs/{job_id}/cancel")
+    updated = client.get(f"/api/jobs/{job_id}").json()
+    assert updated["status"] == "CANCELLED"
+    assert updated["script_task_id"] is None
 
 
 def test_character_crud_validation(monkeypatch, tmp_path):
@@ -471,8 +475,10 @@ def test_character_crud_validation(monkeypatch, tmp_path):
               "generation": {"workflow": "workflows/image/demo.json"}, "publishing": {}}
     assert client.put("/api/characters/tester", json=config).status_code == 200
     assert client.get("/api/characters/tester").json()["visual"]["aspect_ratio"] == "9:16"
-    invalid = dict(config, id="../escape")
-    assert client.put("/api/characters/../escape", json=invalid).status_code >= 400
+    # httpx normalizes "../" away before the request, so an unsafe id is checked directly.
+    refused = client.put("/api/characters/bad.id", json=dict(config, id="bad.id"))
+    assert refused.status_code == 422 and "string_pattern_mismatch" in refused.text
+    assert not (tmp_path / "bad.id").exists()
 
 
 def test_job_rejects_workflow_outside_registry(monkeypatch):
@@ -840,33 +846,35 @@ def test_recover_stale_workers_releases_orphaned_asset_task():
 def test_claim_task_skips_busy_or_draining_text_worker(monkeypatch):
     """Issue #69 T6: a Text Worker that is busy (current_task set) or draining
     must refuse a script-task claim so it is not over-subscribed."""
-    from core.state import store, task_queue
     from core.app import app
     from fastapi.testclient import TestClient
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
+    headers = {"X-Vertep-Token": "worker-token"}
     client = TestClient(app)
-    # clean slate
-    store.workers.clear()
-    store.jobs.clear()
-    task_queue._local.clear()
-    task_queue._inflight.clear()
-    # enque a script task
-    job_id = "job-t6"
-    task_queue.enqueue({"job_id": job_id, "task": "script", "task_id": "scr-1",
-                        "priority": 5, "topic": "t6"}, new_attempt=True)
-    from core.models import Job, JobStatus, utc_now
-    store.jobs[job_id] = Job(job_id=job_id, topic="t6", character_id="c", priority=5,
-                             status=JobStatus.SCRIPT_QUEUED, created_at=utc_now(),
-                             script_task_id="scr-1")
+
+    def text_worker(name, **extra):
+        response = client.post("/api/workers/heartbeat", headers=headers, json={
+            "node_name": name, "vram_mb": 0, "role": "text", "capabilities": ["text_generation"],
+            "supported_tasks": ["text"], **extra})
+        assert response.status_code == 200, response.text
+
+    def claim(name):
+        return client.post("/api/tasks/claim", json={"node_name": name, "vram_mb": 0}, headers=headers).json()
+
+    text_worker("text-busy", current_task="other-task")
+    text_worker("text-draining")
+    assert client.post("/api/nodes/text-draining/actions", json={"action": "drain"}).status_code == 200
+    job_id = client.post("/api/jobs", json={"topic": "t6"}).json()["job_id"]  # queues its script task
     # Case 1: busy worker -> no task
-    client.post("/api/workers/heartbeat", json={"node_name": "text-busy", "vram_mb": 0,
-                                        "capabilities": ["text_generation"], "current_task": "other-task"})
-    resp = client.post("/api/tasks/claim", json={"node_name": "text-busy", "capabilities": ["text_generation"]})
-    assert resp.json().get("task") is None
-    # Case 2: draining worker -> no task
-    client.post("/api/workers/heartbeat", json={"node_name": "text-draining", "vram_mb": 0,
-                                        "capabilities": ["text_generation"], "desired_state": "DRAINING"})
-    resp = client.post("/api/tasks/claim", json={"node_name": "text-draining", "capabilities": ["text_generation"]})
-    assert resp.json().get("task") is None
+    assert claim("text-busy").get("task") is None
+    # Case 2: draining worker (set through the node action, as the administrator does) -> no task
+    assert claim("text-draining").get("task") is None
+    # Control: an idle Text Worker does get the same script task, so the refusals above
+    # come from the busy/draining state and not from a mismatch of role or task type.
+    text_worker("text-idle")
+    task = claim("text-idle")["task"]
+    assert task["task"] == "script" and task["job_id"] == job_id
 
 
 def _repo_task_record(store, task_id: str) -> dict | None:
@@ -1005,3 +1013,37 @@ def test_recover_after_restart_clears_all_inflight_task_pointers():
     assert recovered.assembly_task_ids == {}
     assert recovered.assembly_task_id is None
     assert recovered.active_task_id is None
+
+
+def test_recovery_after_restart_removes_the_stale_queue_claims(monkeypatch, tmp_path):
+    """#520: a Job recovered at startup drops its queue tasks; the stale claims leave the
+    queue at once instead of staying leased until they expire."""
+    from core.models import JobStatus
+    from core.orchestration import recover_after_restart
+    from core.pipeline import JobStore
+    from core.queue import TaskQueue
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/0")  # the local queue
+    queue = TaskQueue()
+    for task_id in ("asm-1", "pub-1", "other"):
+        queue.enqueue({"task_id": task_id})
+    claimed = {queue.claim()["task_id"] for _ in range(2)}  # two of them are in flight
+
+    first = JobStore(root=str(tmp_path / "jobs"))
+    job = first.create("restart", "did_samogon", 5)
+    job.status = JobStatus.ASSEMBLY
+    job.assembly_task_ids = {"asm-1": 1}
+    job.publish_task_ids = {"pub-1": "youtube"}
+    first.repository.save_job(job)
+
+    restarted = JobStore(root=str(tmp_path / "jobs"))  # a CORE restart loads the persisted Job
+    assert restarted.jobs[job.job_id].status == JobStatus.NEW
+    assert sorted(restarted.restart_dropped_tasks) == ["asm-1", "pub-1"]
+    for task_id in restarted.restart_dropped_tasks:  # what core.state does once the queue exists
+        queue.discard(task_id)
+    remaining = {item[2]["task_id"] for item in queue._local} | set(queue._inflight)
+    assert remaining == {"other"}, (claimed, remaining)
+
+    # The same drop through the recovery function directly.
+    dropped = []
+    recover_after_restart(job.model_copy(update={"publish_task_ids": {"pub-2": "tiktok"}}), discard=dropped.append)
+    assert "pub-2" in dropped

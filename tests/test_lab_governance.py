@@ -80,15 +80,15 @@ def test_duplicate_is_refused_on_retry(governance):
     assert second["issue"]["number"] == 77
 
 
-def test_not_a_lab_issue_is_refused(governance, monkeypatch):
-    monkeypatch.setattr("lab.governance.validate_lab_finding",
-                        lambda f: {"valid": False, "problems": ["nope"]})
-    with pytest.raises(GovernanceError):
+def test_not_a_lab_issue_is_refused(governance):
+    """A product idea (kind "idea") is refused by the real finding validation, not a stub."""
+    with pytest.raises(GovernanceError) as error:
         governance.propose_lab_issue(
             {"identifier": "lab.0.0.0.3", "kind": "idea", "title": "Ідея",
              "evidence": "d", "reproduction": "d", "risk": "d",
              "expected_result": "d", "boundaries": "d", "source": "s",
              "approved_scope": "s"})
+    assert "not a channel for product ideas" in str(error.value)
 
 
 def test_edit_issue_is_refused(governance):

@@ -373,7 +373,7 @@ def test_required_scopes_defined_for_all_platforms():
         assert len(cls.required_scopes) > 0, f"{cls.channel} missing required_scopes"
 
 
-def test_missing_scopes_empty_when_no_token(monkeypatch):
+def test_missing_scopes_are_all_required_scopes_without_a_token(monkeypatch):
     """When no token is present, missing_scopes returns required_scopes."""
     monkeypatch.delenv("YOUTUBE_ACCESS_TOKEN", raising=False)
     monkeypatch.setenv("PUBLISHER_MOCK", "false")

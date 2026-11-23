@@ -394,25 +394,6 @@ def test_oauth_reconnect_invalidates_and_refreshes(monkeypatch):
     assert provider._cached_token == "new-token"
 
 
-# ── #167.2: ready/configured/scopes with actual Worker secret store ──
-
-
-def test_publisher_configured_requires_credential_or_mock(monkeypatch):
-    """Issue #167.2: configured() is False without credentials and not in mock mode."""
-    monkeypatch.delenv("YOUTUBE_ACCESS_TOKEN", raising=False)
-    monkeypatch.setenv("PUBLISHER_MOCK", "false")
-    pub = YoutubePublisher(transport=FakeTransport([]))
-    assert pub.configured() is False
-
-
-def test_publisher_ready_requires_token_and_scopes(monkeypatch):
-    """Issue #167.2: ready() is False when required scopes are missing."""
-    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", "test-token")
-    monkeypatch.setenv("PUBLISHER_MOCK", "false")
-    pub = YoutubePublisher(transport=FakeTransport([]))
-    assert pub.configured() is True
-
-
 # ── Real orchestration: CORE → queue → Worker → adapter → CORE ──
 
 
@@ -605,4 +586,3 @@ def test_publish_measured_backoff_through_real_flow(monkeypatch, tmp_path):
     # now must not return it before the delay expires (only this task is queued).
     assert task_queue.depth() >= 1
     assert task_queue.claim() is None
-

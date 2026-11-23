@@ -77,11 +77,6 @@ def _job(**overrides) -> Job:
     return job
 
 
-def _client():
-    return TestClient(app, raise_server_exceptions=False,
-                      headers={"x-vertep-token": _WORKER_TOKEN})
-
-
 # ── contract ────────────────────────────────────────────────────
 
 
@@ -243,22 +238,6 @@ def test_maintenance_blocks_claim_and_keeps_job(client, monkeypatch):
 
 
 # ── storyboard task dispatch (Issue #82) ────────────────────────
-
-
-def test_storyboard_queue_keeps_task_claimable_by_text_worker(client, monkeypatch):
-    """CORE must not consume the storyboard task it just queued.
-
-    ``StoryboardService.queue()`` used to self-claim and ack its own task, so no
-    Text Worker could ever see it and the Job stayed in STORYBOARD_QUEUED forever.
-    """
-    monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "false")
-    job = store.create("storyboard dispatch", "did_samogon", 5)
-    StoryboardService(store).queue(job)
-
-    assert job.status == JobStatus.STORYBOARD_QUEUED
-    assert job.storyboard_task_id
-    assert task_queue.depth() >= 1
-    assert not task_queue._inflight
 
 
 def test_storyboard_claim_does_not_require_job_vram(client, monkeypatch):

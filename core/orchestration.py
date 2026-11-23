@@ -105,9 +105,24 @@ def all_scenes_ready(job: Job) -> bool:
     return bool(job.scenes) and all(scene.status == StageStatus.READY for scene in job.scenes)
 
 
-def recover_after_restart(job: Job) -> Job:
-    """Make persisted in-progress state safely dispatchable after process restart."""
+def restart_task_ids(job: Job) -> list[str]:
+    """Every queue task a Job still points at; a restart drops them all."""
+    ids = [job.active_task_id, job.assembly_task_id, job.storyboard_task_id, job.script_task_id,
+           *job.active_task_ids, *job.assembly_task_ids, *job.tts_active_task_ids,
+           *job.publish_task_ids, *job.image_storyboard_task_ids,
+           *(scene.task_id for scene in job.scenes)]
+    return list(dict.fromkeys(str(task_id) for task_id in ids if task_id))
+
+
+def recover_after_restart(job: Job, discard=None) -> Job:
+    """Make persisted in-progress state safely dispatchable after process restart.
+
+    ``discard`` receives every task id the Job drops, so the caller removes the stale
+    claims from the queue instead of leaving them leased until they expire (#520)."""
     now = utc_now()
+    if discard is not None:
+        for task_id in restart_task_ids(job):
+            discard(task_id)
     job.active_task_id = None
     job.active_task_ids.clear()
     job.assigned_worker = None

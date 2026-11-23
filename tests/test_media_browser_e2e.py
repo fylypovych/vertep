@@ -142,10 +142,6 @@ def _health_probe(base: str) -> tuple[bool, str]:
         return False, repr(exc)
 
 
-def _healthy(base: str) -> bool:
-    return _health_probe(base)[0]
-
-
 @pytest.fixture
 def browser(core):
     """Authenticated Chromium context with pageerror/console collectors."""

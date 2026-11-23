@@ -34,11 +34,6 @@ def test_snapshot_download_streams_every_part_without_the_key(monkeypatch, tmp_p
     assert client.get("/snapshots/..%2Fbackup/download").status_code in {400, 404}
 
 
-def test_only_an_administrator_may_download():
-    source = Path("core/api/auth.py").read_text(encoding="utf-8")
-    assert 'request.url.path.endswith("/download")' in source
-
-
 def _engine(monkeypatch, jobs):
     runtime = SimpleNamespace(engine=SimpleNamespace(_lock=RLock(), _jobs=jobs))
     monkeypatch.setattr(mode, "dynamic_definitions_root", lambda: "/definitions")

@@ -336,6 +336,7 @@ class LeaseManager:
         self.lease: Lease | None = None
         self.stopped_at_control_point = False
         self.state_dir = state_dir
+        self.reconciled_release: dict | None = None  # the release a restart performed
         self._restore()
 
     # -- persistence -----------------------------------------------------
@@ -355,7 +356,8 @@ class LeaseManager:
         record = read_json(self._state_path, default={}) or {}
         if not record or not record.get("lease_id"):
             return
-        self.release(record["lease_id"], reason="restart reconciliation")
+        self.reconciled_release = {**self.release(record["lease_id"], reason="restart reconciliation"),
+                                   "lease_id": record["lease_id"]}
 
     # -- lifecycle -------------------------------------------------------
     def status(self) -> dict:

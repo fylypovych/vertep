@@ -483,11 +483,15 @@ def test_tts_budget_is_scene_scoped_and_persisted(monkeypatch, tmp_path):
     _dispatch_tts(store, job)
     assert job.tts_max_retries == 2
     assert scene.scene_id in job.tts_active_task_ids.values()
-    # The dispatched task must not be re-schedulable before the backoff elapsed.
+    # The first attempt is due at once: only a retry waits for the backoff.
     task = next(iter(job.tts_active_task_ids))
     queued = task_queue.find(task)
     assert queued is not None
     assert "not_before" not in queued
+    # The scene budget is persisted with the Job, not only held in memory.
+    persisted = {item.job_id: item for item in store.repository.load_jobs()}[job.job_id]
+    assert persisted.tts_max_retries == 2
+    assert scene.scene_id in persisted.tts_active_task_ids.values()
 
 
 def test_tts_backoff_delay_is_carried_into_enqueue(monkeypatch, tmp_path):

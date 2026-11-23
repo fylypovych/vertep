@@ -395,12 +395,23 @@ class TestWorkflowAPI:
     def test_delete_workflow_force_parameter(self, tmp_path):
         self._setup_workflow_registry(tmp_path)
         try:
+            from core.models import Job, JobStatus, utc_now
+            from core.state import store
             workflow = {"1": {"class_type": "KSampler", "inputs": {"seed": 123}}}
             client.put("/api/workflows/image/delete_test.json", json=workflow)
+            store.jobs["wf-user"] = Job(job_id="wf-user", topic="uses it", character_id="c", priority=5,
+                                        status=JobStatus.NEW, created_at=utc_now(),
+                                        workflow="workflows/image/delete_test.json")
 
-            resp = client.delete("/api/workflows/image/delete_test.json")
-            assert resp.status_code == 200
+            # A workflow a job still uses is kept unless the deletion is forced.
+            refused = client.delete("/api/workflows/image/delete_test.json")
+            assert refused.status_code == 409 and "wf-user" in refused.text
+            forced = client.delete("/api/workflows/image/delete_test.json", params={"force": "true"})
+            assert forced.status_code == 200
+            assert client.get("/api/workflows/image/delete_test.json").status_code == 404
         finally:
+            from core.state import store as _store
+            _store.jobs.pop("wf-user", None)
             from core.state import workflow_registry
             import core.state
             core.state.workflow_registry = WorkflowRegistry()
@@ -488,34 +499,6 @@ class TestRBACAuthorization:
         resp = client.delete("/api/session", cookies=cookies)
         assert resp.status_code == 200
         assert resp.json()["authenticated"] is False
-
-    def test_moderator_change_password_reaches_validation(self, monkeypatch):
-        cookies, headers = self._auth(monkeypatch, "reader", "moderator")
-        resp = client.put("/api/session/password",
-                          json={"old_password": "old", "new_password": "short"},
-                          cookies=cookies, headers=headers)
-        # Not role-blocked (403): security validation runs.
-        assert resp.status_code == 400
-        # Issue #75 S3: the policy is reported by the server in the UI language.
-        assert "12" in resp.json()["detail"]
-
-    def test_moderator_change_password_wrong_old_rejected(self, monkeypatch):
-        cookies, headers = self._auth(monkeypatch, "reader", "moderator")
-        import hashlib
-        import hmac
-        from core.security import _hash_secret, _session_token
-        token = _session_token("reader", "moderator")
-        csrf = hmac.new("rbac-fallback-password".encode(), token.encode(),
-                        hashlib.sha256).hexdigest()
-        cookies = {"vertep_session": token, "vertep_csrf": csrf}
-        headers = {"x-csrf-token": csrf}
-        monkeypatch.setenv("USERS_JSON", json.dumps({
-            "reader": {"password_hash": _hash_secret("correct-old"), "role": "moderator"}}))
-        resp = client.put("/api/session/password",
-                          json={"old_password": "wrong-old", "new_password": "newlongpassword12"},
-                          cookies=cookies, headers=headers)
-        assert resp.status_code == 400
-        assert "incorrect" in resp.json()["detail"]
 
     def test_admin_mutation_requires_csrf(self, monkeypatch):
         cookies, _ = self._auth(monkeypatch, "admin", "admin")
@@ -799,10 +782,16 @@ class TestLocalDataRoots:
                 default_update_state_dir(), _data_storage()]
 
     def test_unset_roots_resolve_inside_project(self, monkeypatch):
-        for path in self._defaults(monkeypatch):
+        """On Windows a local run stays inside the project; on Linux the defaults are the
+        appliance paths of the installed system."""
+        paths = self._defaults(monkeypatch)
+        for path in paths:
             assert path.is_absolute()
             if os.name == "nt":
                 assert str(path.resolve()).lower().startswith(str(self.PROJECT).lower()), path
+        if os.name != "nt":
+            assert [str(path) for path in paths] == [
+                "/data/config", "/data/storage", "/data/config/update", "/data/storage"]
 
     def test_environment_overrides_win(self, monkeypatch, tmp_path):
         from core.first_run import default_config_root, default_storage_root, default_update_state_dir

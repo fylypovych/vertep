@@ -644,6 +644,16 @@ class TestIdempotency:
         patch_telegram(monkeypatch, "TelegramAdapter", lambda: adapter)
         patch_telegram(monkeypatch, "is_admin_chat", lambda chat_id: True)
         _owner_core_telegram_handlers._telegram_system_callbacks.clear()
+        cb = {"id": "cb-dedup", "data": "sys_cancel",
+              "message": {"chat": {"id": "42"}}}
+        _owner_core_telegram_handlers._handle_telegram_callback(cb)
+        first_call = adapter.answer_callback.called
+        adapter.reset_mock()
+        _owner_core_telegram_handlers._handle_telegram_callback(cb)
+        second_call_text = adapter.answer_callback.call_args[0][1] if adapter.answer_callback.called else ""
+        assert first_call
+        assert "вже оброблено" in second_call_text
+        _owner_core_telegram_handlers._telegram_system_callbacks.clear()
 
     def test_duplicate_callback_dedup_survives_process_state_reset(self, monkeypatch):
         module = importlib.import_module("core.app")
@@ -660,16 +670,6 @@ class TestIdempotency:
         adapter.reset_mock()
         _owner_core_telegram_handlers._handle_telegram_callback(cb)
         assert "вже оброблено" in adapter.answer_callback.call_args[0][1]
-        _owner_core_telegram_handlers._telegram_system_callbacks.clear()
-        cb = {"id": "cb-dedup", "data": "sys_cancel",
-              "message": {"chat": {"id": "42"}}}
-        _owner_core_telegram_handlers._handle_telegram_callback(cb)
-        first_call = adapter.answer_callback.called
-        adapter.reset_mock()
-        _owner_core_telegram_handlers._handle_telegram_callback(cb)
-        second_call_text = adapter.answer_callback.call_args[0][1] if adapter.answer_callback.called else ""
-        assert first_call
-        assert "вже оброблено" in second_call_text
         _owner_core_telegram_handlers._telegram_system_callbacks.clear()
 
 
@@ -885,7 +885,8 @@ class TestCallbackRouting:
         patch_telegram(monkeypatch, "is_admin_chat", lambda chat_id: True)
         cb = {"id": "cb-unk", "data": "unknown_action", "message": {"chat": {"id": "42"}}}
         _owner_core_telegram_handlers._handle_telegram_callback(cb)
-        assert adapter.answer_callback.called
+        callback_id, text = adapter.answer_callback.call_args[0][:2]
+        assert callback_id == "cb-unk" and text == "Job not found"  # answered, nothing acted on
 
 
 class TestDurableCallbackCrashRecovery:

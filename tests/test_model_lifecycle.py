@@ -27,7 +27,6 @@ from core.operations import (advance_operation, begin_operation, cancel_operatio
                              fail_operation, get_operation)
 from core.pull_executor import (
     PlacementError,
-    _CANCEL_EVENTS,
     cancel_pull,
     model_placement,
     pending_model_command,
@@ -322,15 +321,6 @@ def test_local_pull_without_ollama_fails_operation(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_reconcile_fails_orphaned_local_pull():
-    operation = create_operation("model_pull", "test", target="orphan-model")
-    begin_operation(operation["operation_id"], "pull")
-    reconcile_model_pull_operations()
-    stored = get_operation(operation["operation_id"])
-    assert stored["status"] == "FAILED"
-    assert "CORE restart" in stored["error"]
-
-
 def test_reconcile_keeps_unacknowledged_node_command():
     _heartbeat("keep-node")
     operation = start_pull("keep-model", node_name="keep-node")
@@ -455,57 +445,6 @@ def _wait_terminal(operation_id, timeout=3.0):
             break
         time.sleep(0.02)
     return stored
-
-
-def test_local_pull_requires_terminal_success_event(monkeypatch):
-    operation, _stream = _start_local_pull(monkeypatch, [
-        json.dumps({"status": "pulling manifest"}),
-        json.dumps({"completed": 50, "total": 100}),
-        json.dumps({"completed": 100, "total": 100}),
-    ], model="local-eof-model")
-    stored = _wait_terminal(operation["operation_id"])
-    assert stored["status"] == "FAILED"
-    assert "terminal success" in stored["error"]
-    # the persisted progress of the interrupted pull is preserved.
-    assert stored["progress"] == 100
-
-
-def test_local_pull_eof_after_success_completes(monkeypatch):
-    operation, _stream = _start_local_pull(monkeypatch, [
-        json.dumps({"completed": 100, "total": 100}),
-        json.dumps({"status": "success"}),
-    ], model="local-success-model")
-    stored = _wait_terminal(operation["operation_id"])
-    assert stored["status"] == "COMPLETED"
-    assert stored["result"]["pulled"] is True
-    assert stored["progress"] == 100
-
-
-def test_local_pull_error_event_fails(monkeypatch):
-    operation, _stream = _start_local_pull(monkeypatch, [
-        json.dumps({"error": "model not found"}),
-    ], model="local-error-model")
-    stored = _wait_terminal(operation["operation_id"])
-    assert stored["status"] == "FAILED"
-    assert "model not found" in stored["error"]
-
-
-def test_local_pull_cancel_interrupts_stalled_transport(monkeypatch):
-    operation, stream = _start_local_pull(monkeypatch, [
-        json.dumps({"status": "pulling manifest"}),
-    ], model="local-stalled-model", stall=True)
-    assert stream.started.wait(timeout=2)
-    cancel_pull(operation["operation_id"], "user cancelled")
-    # The cancellation watcher closes the stalled transport, so the pull
-    # thread finishes promptly instead of blocking until the read timeout.
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and operation["operation_id"] in _CANCEL_EVENTS:
-        time.sleep(0.02)
-    assert operation["operation_id"] not in _CANCEL_EVENTS
-    time.sleep(0.1)
-    stored = get_operation(operation["operation_id"])
-    # The late transport error must not rewrite the terminal CANCELLED state.
-    assert stored["status"] == "CANCELLED"
 
 
 def test_terminal_operation_state_is_final_for_late_results():

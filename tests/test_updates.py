@@ -475,15 +475,15 @@ def test_update_agent_keeps_tls_verification_for_remote_core(monkeypatch):
 
 
 def test_update_api_requires_admin_role(monkeypatch, tmp_path):
-    password = "operator-password-long"
+    password = "moderator-password-long"
     monkeypatch.setenv("ADMIN_PASSWORD", "fallback-admin-password")
-    monkeypatch.setenv("USERS_JSON", json.dumps({"operator": {
-        "password_hash": _hash_secret(password), "role": "operator"}}))
+    monkeypatch.setenv("USERS_JSON", json.dumps({"moderator": {
+        "password_hash": _hash_secret(password), "role": "moderator"}}))
     monkeypatch.setenv("WEB_UPDATE_ENABLED", "true")
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
     client = TestClient(app)
-    assert client.get("/api/system/update", auth=("operator", password)).status_code == 200
-    assert client.post("/api/system/update/check", auth=("operator", password)).status_code == 403
+    assert client.get("/api/system/update", auth=("moderator", password)).status_code == 200
+    assert client.post("/api/system/update/check", auth=("moderator", password)).status_code == 403
     queued = client.post("/api/system/update/check", auth=("admin", "fallback-admin-password"))
     assert queued.status_code == 200
     assert queued.json()["state"] == "PENDING"

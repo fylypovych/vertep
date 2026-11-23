@@ -4,14 +4,13 @@ Criteria covered locally (unit/integration, no real upstream container/FFmpeg):
 - #179.1/#179.2: deterministic early audio stage — the runtime must receive the
   approved voice before any byte is generated; missing/tampered voice is refused
   before POST; no TTS fallback or voice race on the first valid submit.
-- #180.1/#180.2: separate CORE and Worker objects with different storage roots;
-  CORE does not render MPT directly.
-- #180.3: two revisions produce immutable history; stale/duplicate revision is
-  rejected after a newer one is approved.
 - #180.6: lost submit response — recovery without automatically re-submitting an
   ambiguous key; mapping/ownership recovery or UNKNOWN.
-- #179.3: engine restart via re-instantiation recovers submit key without deleting
-  approved inputs.
+- #179.3: engine restart via re-instantiation keeps the approved inputs.
+
+#180.1–#180.3 had only placeholder checks here and were removed (#520): CORE never
+renders (tests/test_core_generation_gate.py), version history and stale approvals are
+covered by tests/test_video_revision_*.py and tests/test_assembly_worker_route.py.
 - #180.7: upstream submission count — a repeat of the same submit key does not
   create duplicate upstream work; submit key idempotency via runtime 409.
 - #180.8: bounded polling timeout/429/5xx/malformed; queued/running cancel, busy
@@ -37,7 +36,6 @@ from adapters.providers.video_engines import (
     RELEASE_UNCONFIRMED,
     REASON_VOICE_STAGING_UNSUPPORTED,
 )
-from core.models import Job, JobStatus, VideoVersion, VideoRevision
 from tests.test_mpt_media_matrix import PinnedRuntime, _png
 
 
@@ -155,49 +153,7 @@ def test_submission_count_is_one_per_submit(engine, runtime, tmp_path):
     assert payload["video_count"] == 1
 
 
-def test_two_submits_are_distinct_tasks(runtime, tmp_path):
-    """#180.7: two submit calls produce two distinct upstream tasks."""
-    engine1 = MoneyPrinterEngine(url="http://engine:8000", transport=runtime,
-                                 poll_interval=0.01)
-    engine2 = MoneyPrinterEngine(url="http://engine:8000", transport=runtime,
-                                 poll_interval=0.01)
-
-    request1 = dict(_base_request(), video_subject="test-1")
-    engine1._submit_task(request1, submit_key=None)
-
-    request2 = dict(_base_request(), video_subject="test-2")
-    engine2._submit_task(request2, submit_key=None)
-
-    # Two distinct attempts → two submits, each with its own subject.
-    assert len(runtime.submits) == 2
-    assert runtime.submits[0]["video_subject"] != runtime.submits[1]["video_subject"]
-
-
 # ── #180.8: bounded polling timeout/429/5xx/malformed ──
-
-
-def test_polling_malformed_status_is_refused(engine, runtime, tmp_path,
-                                             monkeypatch):
-    """#180.8: a malformed upstream status payload is refused, not guessed as
-    success or failure."""
-    # First submit so _status has a task to return.
-    request = _base_request()
-    engine._submit_task(request, submit_key=None)
-
-    original_answer = runtime._answer
-
-    def flaky_answer(method, path, kwargs):
-        if path.startswith("/api/v1/tasks/"):
-            return httpx.Response(200, json={"state": "not-an-integer"})
-        return original_answer(method, path, kwargs)
-
-    runtime._answer = flaky_answer
-    try:
-        with pytest.raises(BridgeContractError) as exc:
-            engine.map_upstream_status({"state": "not-an-integer"})
-        assert exc.value.code == "upstream_status_malformed"
-    finally:
-        runtime._answer = original_answer
 
 
 def test_unreachable_runtime_is_refused_not_held_forever(engine, runtime, tmp_path,
@@ -230,19 +186,27 @@ def test_429_5xx_are_bounded_retries_not_infinite(engine, runtime, tmp_path,
     request = _base_request()
     engine._submit_task(request, submit_key=None)
 
+    calls = []
+
     class Always503Transport:
         def get(self, url, **kwargs):
+            calls.append(url)
             return httpx.Response(503, json={"data": {"state": 1}})
         def post(self, url, **kwargs):
             return httpx.Response(503, json={"data": {"state": 1}})
 
+    monkeypatch.setattr("adapters.providers.video_engines.remote.time.sleep", lambda seconds: None)
     original_transport = engine._transport
     engine._transport = Always503Transport()
     try:
-        with pytest.raises(BridgeContractError):
-            engine._get_with_retry("/api/v1/tasks/task-1", 1, "task status")
+        # A deadline far ahead: only the attempt limit can stop the retries.
+        far = __import__("time").monotonic() + 3600
+        with pytest.raises(BridgeContractError) as refusal:
+            engine._get_with_retry("/api/v1/tasks/task-1", far, "task status")
     finally:
         engine._transport = original_transport
+    assert refusal.value.code == "upstream_transient_failure"
+    assert len(calls) == engine._max_read_attempts > 1
 
 
 def test_release_state_is_unconfirmed_for_remote_engine():
@@ -258,63 +222,6 @@ def test_release_state_is_unconfirmed_for_remote_engine():
 # #180.1/#180.2: separate CORE and Worker objects with different storage roots;
 #                CORE does not render MPT directly (NativeVertepEngine is CORE-only)
 # ---------------------------------------------------------------------------
-
-
-def test_separate_core_and_worker_have_different_storage_roots(tmp_path):
-    """#180.1/#180.2: CORE and Worker are separate objects with independent tmp dirs.
-
-    Vertep never shares a storage root between the CORE object and the Worker object.
-    Each engine instance holds its own transport that points to its own root, so a
-    write to one root does not appear in the other.
-    """
-    core_root = tmp_path / "core-storage"
-    worker_root = tmp_path / "worker-storage"
-    core_root.mkdir()
-    worker_root.mkdir()
-
-    core_runtime = PinnedRuntime(core_root)
-    worker_runtime = PinnedRuntime(worker_root)
-
-    core_engine = MoneyPrinterEngine(url="http://engine:8000",
-                                     transport=core_runtime, poll_interval=0.01)
-    worker_engine = MoneyPrinterEngine(url="http://engine:8000",
-                                       transport=worker_runtime, poll_interval=0.01)
-
-    # The two engines are distinct objects with distinct runtimes.
-    assert core_engine is not worker_engine
-    assert core_runtime is not worker_runtime
-    assert core_runtime.root != worker_runtime.root
-
-    # A voice staged through the CORE engine appears in the CORE root only.
-    voice = _make_wav(core_root / "voice.wav")
-    core_engine._stage_approved_voice(voice)
-    digest = __import__("hashlib").sha256(voice.read_bytes()).hexdigest()
-    assert (core_runtime.root / f"{digest}.wav").is_file(), \
-        "staged voice must be in the CORE (engine1) storage root"
-    assert not (worker_runtime.root / f"{digest}.wav").is_file(), \
-        "CORE stage must not bleed into the Worker storage root"
-
-
-def test_core_does_not_render_mpt_directly(tmp_path):
-    """#180.2: NativeVertepEngine (the CORE renderer) never calls the MPT upstream.
-
-    The Native engine is Vertep's own FFmpeg pipeline; dispatching a job to an
-    external engine is the Worker's responsibility. A NativeVertepEngine therefore
-    has no transport and does not know the upstream URL — the two objects are clearly
-    different classes serving different roles.
-    """
-    native = NativeVertepEngine()
-    mpt = MoneyPrinterEngine(url="http://engine:8000",
-                             transport=PinnedRuntime(tmp_path))
-
-    # They are different classes.
-    assert type(native) is not type(mpt)
-    # The Native engine has no URL and no upstream transport.
-    assert not hasattr(native, "_url") or not getattr(native, "_url", ""), \
-        "NativeVertepEngine must not carry an upstream URL"
-    # The MPT engine has a URL and a transport.
-    assert mpt._url, "MoneyPrinterEngine must have an upstream URL"
-    assert mpt._transport is not None
 
 
 # ---------------------------------------------------------------------------
@@ -368,101 +275,6 @@ def test_submit_key_idempotency_409_resolves_to_existing_task(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_two_video_revisions_keep_every_accepted_version_immutable(tmp_path):
-    """#180.3: two revision loops each add a VideoVersion; existing versions are
-    never mutated or removed when a new revision is approved.
-    """
-    from datetime import datetime, timezone
-    import uuid
-
-    job = Job(
-        job_id=str(uuid.uuid4()),
-        topic="test-revision-history",
-        character_id="did_samogon",
-        priority=5,
-        status=JobStatus.NEW,
-        created_at=datetime.now(timezone.utc).isoformat(),
-    )
-
-    # Simulate first render: approved version 1.
-    v1_path = tmp_path / "video-v1.mp4"
-    v1_path.write_bytes(b"fake-video-v1")
-    sha1 = __import__("hashlib").sha256(v1_path.read_bytes()).hexdigest()
-    v1 = VideoVersion(version=1, path=str(v1_path), sha256=sha1, approved=True)
-    job.video_versions.append(v1)
-    job.active_video_version = 1
-
-    # Simulate revision request.
-    r1 = VideoRevision(version=1, text="make it darker", actor="user")
-    job.video_revisions.append(r1)
-
-    # Simulate second render: approved version 2.
-    v2_path = tmp_path / "video-v2.mp4"
-    v2_path.write_bytes(b"fake-video-v2")
-    sha2 = __import__("hashlib").sha256(v2_path.read_bytes()).hexdigest()
-    v2 = VideoVersion(version=2, path=str(v2_path), sha256=sha2, approved=True)
-    job.video_versions.append(v2)
-    job.active_video_version = 2
-
-    r2 = VideoRevision(version=2, text="crop tighter", actor="user")
-    job.video_revisions.append(r2)
-
-    # Both versions are in the history and immutable.
-    assert len(job.video_versions) == 2
-    assert job.video_versions[0].sha256 == sha1, "version 1 sha256 must not change"
-    assert job.video_versions[1].sha256 == sha2, "version 2 sha256 must not change"
-    assert job.video_versions[0].approved, "version 1 must remain approved"
-    assert job.video_versions[1].approved, "version 2 must remain approved"
-    # Revisions are also immutable.
-    assert len(job.video_revisions) == 2
-    assert job.video_revisions[0].version == 1
-    assert job.video_revisions[1].version == 2
-
-
-def test_stale_revision_does_not_overwrite_approved_version(tmp_path):
-    """#180.3: a revision bound to an older version cannot overwrite the current
-    approved version — the active_video_version pointer stays at the newest.
-    """
-    from datetime import datetime, timezone
-    import uuid
-
-    job = Job(
-        job_id=str(uuid.uuid4()),
-        topic="test-stale-revision",
-        character_id="did_samogon",
-        priority=5,
-        status=JobStatus.NEW,
-        created_at=datetime.now(timezone.utc).isoformat(),
-    )
-
-    v1_path = tmp_path / "video-v1.mp4"
-    v1_path.write_bytes(b"approved-v1")
-    sha1 = __import__("hashlib").sha256(v1_path.read_bytes()).hexdigest()
-    job.video_versions.append(
-        VideoVersion(version=1, path=str(v1_path), sha256=sha1, approved=True)
-    )
-    job.active_video_version = 1
-
-    # New approved version 2 is set.
-    v2_path = tmp_path / "video-v2.mp4"
-    v2_path.write_bytes(b"approved-v2")
-    sha2 = __import__("hashlib").sha256(v2_path.read_bytes()).hexdigest()
-    job.video_versions.append(
-        VideoVersion(version=2, path=str(v2_path), sha256=sha2, approved=True)
-    )
-    job.active_video_version = 2
-
-    # A late stale revision targeting version 1 must not move active_video_version back.
-    stale = VideoRevision(version=1, text="late stale revision", actor="user")
-    # Simulate the guard that Vertep's pipeline enforces: a revision is only
-    # accepted when its version matches the current active version.
-    stale_accepted = stale.version == job.active_video_version
-    assert not stale_accepted, "a stale revision targeting an older version must be rejected"
-    # The current approved version is unchanged.
-    assert job.active_video_version == 2
-    assert job.video_versions[-1].sha256 == sha2
-
-
 # ---------------------------------------------------------------------------
 # #179.3/#180.6: engine restart via re-instantiation recovers submit key
 #                without deleting approved inputs
@@ -471,8 +283,9 @@ def test_stale_revision_does_not_overwrite_approved_version(tmp_path):
 
 def test_engine_restart_via_reinstantiation_recovers_approved_voice(tmp_path):
     """#179.3/#180.6: simulated engine restart (re-instantiation) does not delete
-    the already-staged approved voice. A new engine object pointed at the same
-    runtime can still resolve the existing submit key.
+    the already-staged approved voice, and the new engine object can submit.
+    Resolving a submit key after a restart is covered by
+    test_submit_key_idempotency_409_resolves_to_existing_task.
     """
     runtime = PinnedRuntime(tmp_path)
     voice = _make_wav(tmp_path / "voice.wav")

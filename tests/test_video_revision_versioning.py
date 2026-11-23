@@ -456,6 +456,8 @@ class TestPublishRejection:
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.post(f"/api/jobs/{job.job_id}/publish",
                                json=["youtube"])
-            assert resp.status_code != 409 or "not approved" not in resp.json().get("detail", "")
+            # The approved active version is published: the job moves on, it is not refused.
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["status"] == "PUBLISHING"
         finally:
             jobs_mod.store = original_store

@@ -133,14 +133,6 @@ class TestSeparateBots:
         assert PUBLISHERS["telegram"].credential_env == "TELEGRAM_PUBLISHER_BOT_TOKEN"
         assert type(PUBLISHERS["telegram"]) is type(LIVE_PUBLISHERS["telegram"])  # one implementation
 
-    def test_publishing_code_never_uses_the_request_bot(self):
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[1]
-        for path in ("adapters/publisher.py", "publishers/telegram/__init__.py"):
-            source = (root / path).read_text(encoding="utf-8")
-            assert "TelegramAdapter" not in source, path
-            assert '"TELEGRAM_BOT_TOKEN"' not in source and "telegram_bot_token\"" not in source, path
-
     def test_the_publisher_secret_is_a_known_integration_secret(self):
         from core.first_run import INTAKE_ONLY_SECRET_NAMES, INTEGRATION_SECRET_NAMES
         assert "telegram_publisher_bot_token" in INTEGRATION_SECRET_NAMES

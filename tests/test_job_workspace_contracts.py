@@ -89,9 +89,15 @@ def test_job_list_status_group_filter_consistent_with_all():
     grouped = client.get("/api/jobs", params={"status_group": "queued"}).json()
     assert isinstance(all_jobs, list)
     assert isinstance(grouped, list)
+    from core.api.jobs import STATUS_GROUPS
     all_ids = {job["job_id"] for job in all_jobs}
     grouped_ids = {job["job_id"] for job in grouped}
     assert grouped_ids <= all_ids  # grouped results are a subset
+    # Exactly the jobs whose status belongs to the group, no more and no less.
+    expected = {job["job_id"] for job in all_jobs if job["status"] in STATUS_GROUPS["queued"]}
+    assert grouped_ids == expected and expected
+    finished = client.get("/api/jobs", params={"status_group": "completed"}).json()
+    assert not grouped_ids & {job["job_id"] for job in finished}
 
 
 def test_job_list_search_filter():
@@ -117,14 +123,6 @@ def test_job_list_pagination_envelope():
     page2 = client.get("/api/jobs", params={"page": 2, "per_page": 2}).json()
     assert page2["page"] == 2
     assert page2["has_more"] is False
-
-
-def test_job_list_legacy_array_when_no_page():
-    client = _client()
-    client.post("/api/jobs", json={"topic": "Legacy list contract"})
-    resp = client.get("/api/jobs")
-    assert resp.status_code == 200
-    assert isinstance(resp.json(), list)
 
 
 # ── Artifact integrity does not mask others ──────────────────────
@@ -155,12 +153,12 @@ def test_artifact_integrity_does_not_mask_others():
 
 # ── Job lifecycle action endpoints are wired ─────────────────────
 
-def test_job_lifecycle_actions_respond():
+def test_job_lifecycle_action_routes_exist():
+    """Route contract only: every action route answers 200/400/409, never a dropped route.
+    The behaviour of each action is covered by its own tests."""
     client = _client()
     jid = client.post("/api/jobs", json={"topic": "Action contract"}).json()["job_id"]
     for action in ("pause", "resume", "retry", "regenerate", "cancel", "approve"):
-        job = client.get(f"/api/jobs/{jid}").json()
-        # Mutations only ever receive 200/400/409 — never a dropped route.
         resp = client.post(f"/api/jobs/{jid}/{action}")
         assert resp.status_code in (200, 400, 409), f"{action} -> {resp.status_code}"
     assert client.post("/api/jobs/doesnotexist-999/cancel").status_code == 404

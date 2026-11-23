@@ -29,31 +29,24 @@ def test_all_roles_have_valid_plans():
 
 
 def test_installer_supports_all_roles():
-    import sys
-    result = pytest.importorskip("subprocess").run(
-        [sys.executable, "installer/role-plan.py", "installer/manifest.json", "core", "services"],
-        capture_output=True, text=True, check=True
-    )
-    assert "vertep-core" in result.stdout
-
-
-def test_watchdog_module_loads():
-    spec = importlib.util.spec_from_file_location("watchdog", Path("scripts/watchdog.py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert hasattr(module, "run_checks")
-    assert hasattr(module, "health_status")
+    """Every role of the installer manifest resolves to exactly its declared services."""
+    manifest = json.loads(Path("installer/manifest.json").read_text(encoding="utf-8"))
+    assert set(manifest["roles"]) == {"core", "gpu", "text", "voice", "publisher", "backup", "monitoring"}
+    for role, spec in manifest["roles"].items():
+        result = subprocess.run(
+            [sys.executable, "installer/role-plan.py", "installer/manifest.json", role, "services"],
+            capture_output=True, text=True, check=True)
+        assert result.stdout.split() == spec["services"], role
 
 
 def test_health_checks_for_all_roles():
     import sys
     sys.path.insert(0, str(Path(".").resolve()))
-    from core.health_checks import run_checks, health_status
+    from core.health_checks import run_checks
     for role in ("core", "gpu", "text", "voice", "publisher", "backup", "monitoring"):
         checks = run_checks(role)
         assert checks["role"] == role
         assert "checked_at" in checks
-        assert health_status(checks) in ("HEALTHY", "UNHEALTHY")
 
 
 def test_worker_update_agent_accepts_skip_drain():
@@ -81,7 +74,7 @@ def test_setup_wizard_has_manifest_step():
 def test_bootstrap_redirects_to_setup():
     script = Path("bootstrap.sh").read_text(encoding="utf-8")
     assert "/setup?token=" in script
-    assert "xdg-open" in script or "open" in script
+    assert "xdg-open" in script
 
 
 def test_setup_alias_preserves_token(monkeypatch):
@@ -95,20 +88,8 @@ def test_setup_alias_preserves_token(monkeypatch):
     response = client.get("/setup?token=one-time-code", follow_redirects=False)
     assert response.status_code != 503, "the wizard page must open before configuration"
     assert client.get("/", follow_redirects=False).headers["location"] == "/setup"
-    assert client.get("/v1/setup.html", follow_redirects=False).status_code != 200 or not Path("web").exists()
     if Path("web-v2/dist/vertep-admin-v2").is_dir():
         assert response.status_code == 200 and "<app-root" in response.text
-
-
-def test_server_side_worker_filtering():
-    sys.path.insert(0, str(Path(".").resolve()))
-    from core.app import app
-    from fastapi.testclient import TestClient
-    client = TestClient(app)
-    response = client.get("/api/workers")
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
 
 
 def test_bootstrap_supports_push_based_enrollment():
@@ -121,25 +102,3 @@ def test_domain_support_in_setup():
     html = Path("web-v2/src/app/setup/setup.component.html").read_text(encoding="utf-8")
     assert "domain" in html.lower()
     assert "WEB_DOMAIN" in Path("core/first_run.py").read_text(encoding="utf-8")
-
-
-def test_rolling_update_order():
-    sys.path.insert(0, str(Path(".").resolve()))
-    from core.rolling_update import _write, rollout_status
-    _write({"state": "IDLE", "nodes": []})
-    from core.rolling_update import start_rollout
-    for order in ("workers-first", "core-first"):
-        rollout = start_rollout("1.0.0", ["worker-1", "worker-2"], order=order)
-        assert rollout["order"] == order
-        assert rollout["state"] == "RUNNING"
-        _write({"state": "IDLE", "nodes": []})
-
-
-def test_health_history_endpoint():
-    sys.path.insert(0, str(Path(".").resolve()))
-    from core.app import app
-    from fastapi.testclient import TestClient
-    client = TestClient(app)
-    response = client.get("/api/health/history")
-    assert response.status_code == 200
-    assert "history" in response.json()

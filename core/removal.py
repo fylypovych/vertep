@@ -382,33 +382,20 @@ def plan(host, purge=False):
     return result
 
 
-def activity(host):
-    # Running executors and queued requests fence removal before any stop/delete.
-    for name in ["vertep-update.service", "vertep-deployment.service", "vertep-startup-recovery.service"]:
-        output = host.command(["systemctl", "show", name, "--property=ActiveState", "--value"]).strip()
-        if output in {"active", "activating", "deactivating"}:
-            raise RuntimeError("Активний системний executor: " + name)
-    if (host.root / "config/deployment-request.json").exists() or list((host.root / "config/update/requests").glob("*.json")):
-        raise RuntimeError("Є запити deployment/update; спочатку завершіть або окремо скасуйте їх")
-    # Active jobs require live control evidence. No API credentials are sourced or printed.
-    items = [item for item in host.inventory() if owned_container(item, host.root) and (item.get("State") or {}).get("Running")]
-    if not items:
-        # Partial/stopped container installs have no local runtime to kill.
-        for name in ["vertep-core.service", "vertep-worker.service", "vertep-comfyui.service"]:
-            if host.unit_path(name).exists() and host.command(["systemctl", "show", name, "--property=ActiveState", "--value"]).strip() in {"active", "activating"}:
-                raise RuntimeError("Legacy runtime активний; спочатку завершіть задачі й штатно зупиніть " + name)
-        return
-    core = next((item for item in items if ((item.get("Config") or {}).get("Labels") or {}).get("com.docker.compose.service") == "core"), None)
-    if core is None:
-        raise RuntimeError("Worker runtime активний; спочатку завершіть задачі й штатно зупиніть локальні контейнери")
-    script = ("import json,os,urllib.request; "
-              "r=urllib.request.Request('http://127.0.0.1:8080/api/system/update/readiness',headers={'X-Vertep-Internal-Key':os.environ['INTERNAL_API_KEY']}); "
-              "v=json.load(urllib.request.urlopen(r,timeout=10)); "
-              "print(json.dumps({k:v.get(k) for k in ['ready','active_jobs','busy_workers','inflight','queue_paused']}))")
-    evidence = json.loads(host.docker("exec", core["Id"], "python3", "-c", script))
-    if (evidence.get("ready") is not True or evidence.get("queue_paused") is not True or evidence.get("active_jobs") != []
-            or evidence.get("busy_workers") != [] or type(evidence.get("inflight")) is not int or evidence["inflight"] != 0):
-        raise RuntimeError("Є активні задачі або dispatch не призупинено. Спочатку ввімкніть maintenance і завершіть drain через штатний CORE")
+def stop_update_units(host, selected):
+    """Stop owned triggers before services that may hold the update lock."""
+    executors = {
+        "vertep-update.service", "vertep-update-check.service", "vertep-deployment.service",
+        "vertep-startup-recovery.service", "vertep-watchdog.service",
+    }
+    units = selected["units"]
+    triggers = sorted(name for name in UNIT_NAMES if name in units and name.endswith((".path", ".timer")))
+    for name in triggers + sorted(executors & units.keys()):
+        target = host.unit_path(name)
+        if target.is_symlink() or (target.exists() and digest(target) != units[name]):
+            raise RuntimeError("Unit змінився після підтвердження")
+        if target.exists():
+            host.command(["systemctl", "stop", name])
 
 
 def execute(host, selected, journal_dir, resume=False):
@@ -422,16 +409,16 @@ def execute(host, selected, journal_dir, resume=False):
         for directory in [journal_dir.parent,journal_dir]:
             if directory.exists() and (directory.is_symlink() or directory.stat().st_uid!=0 or directory.stat().st_mode & 0o022):
                 raise RuntimeError("Небезпечний каталог recovery journal")
+    if selected["blocked"]:
+        raise RuntimeError("Є ресурси з непідтвердженою належністю: " + "; ".join(selected["blocked"]))
+    if not resume and plan(host, selected["purge_data"]) != selected:
+        raise RuntimeError("Перелік змінився; повторіть dry-run і підтвердження")
+    stop_update_units(host, selected)
     with fence(host.root):
-        activity(host)
-        if not resume:
-            # Acquiring the fence creates a lock file: not part of the data deletion scope.
-            current = plan(host, selected["purge_data"])
-            if current != selected:
-                raise RuntimeError("Перелік змінився; повторіть dry-run і підтвердження")
+        if not resume and plan(host, selected["purge_data"]) != selected:
+            raise RuntimeError("Перелік змінився; повторіть dry-run і підтвердження")
+        # Close CORE admission before stopping the confirmed units and containers.
         atomic(host.root / "config/removal-in-progress.json", {"plan_sha256": selected["plan_sha256"]})
-        # The marker closes admission across CORE processes; recheck drained runtime after publication.
-        activity(host)
         state = _execute(host, selected, journal_dir)
     if selected["purge_data"]:
         # After the fence is released its lock file is no longer needed by any executor.
@@ -490,8 +477,6 @@ def find_journal(base, root):
 
 
 def _execute(host, selected, journal_dir):
-    if selected["blocked"]:
-        raise RuntimeError("Є ресурси з непідтвердженою належністю: " + "; ".join(selected["blocked"]))
     if any(p.is_symlink() for p in [journal_dir,*journal_dir.parents]):
         raise RuntimeError("Symlink у шляху журналу видалення")
     journal_dir = journal_dir.resolve()
@@ -649,13 +634,18 @@ def main(argv=None):
             journal=journal.with_name(journal.name+"-"+selected["plan_sha256"][:16])
         print(json.dumps(selected,ensure_ascii=False,indent=2))
         if args.dry_run: return 0 if not selected["blocked"] else 2
-        if args.confirm != selected["plan_sha256"]:
-            answer=input("Для підтвердження введіть повний SHA256 цього переліку: ") if sys.stdin.isatty() else ""
-            if answer != selected["plan_sha256"]: raise RuntimeError("Видалення не підтверджене")
+        if args.confirm:
+            confirmed = args.confirm == selected["plan_sha256"]
+        elif sys.stdin.isatty():
+            confirmed = input("Підтвердити видалення за цим переліком? [YES/NO]: ").strip().upper() == "YES"
+        else:
+            confirmed = False
+        if not confirmed:
+            raise RuntimeError("Видалення не підтверджене")
         result=execute(host,selected,journal,resume=args.resume)
         print("Результат видалення: " + result["state"] + "; журнал: " + str(journal/"state.json"))
         return 0 if result["state"] == "SUCCEEDED" else 2
-    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+    except (EOFError, OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         print("Видалення заблоковано або не завершено: " + str(error),file=sys.stderr)
         if "journal" in locals() and (journal/"state.json").is_file():
             print("Збережений executor для продовження: "+str(journal/"remove.py"),file=sys.stderr)

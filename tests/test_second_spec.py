@@ -126,7 +126,7 @@ def test_first_run_creates_registration_token_before_committing_setup(monkeypatc
     assert result["registration_token"] == {"token": "one-time"}
 
 
-def test_zero_shell_routes_and_ui_are_present():
+def test_zero_shell_routes_are_present():
     paths = {route.path for route in core_app.app.routes}
     assert {"/api/system/backups", "/api/system/backups/{snapshot_id}/restore",
             "/api/system/models", "/api/system/models/pull",

@@ -34,10 +34,6 @@ class TestStoryboardModuleCatalog:
 
 
 class TestStoryboardModuleCompatibility:
-    def test_storyboard_no_gpu_required(self):
-        manifest = ModuleManifest.from_dict(bundled_manifest("storyboard"))
-        assert manifest.placement["requires_gpu"] is False
-
     def test_storyboard_schema_version_2(self):
         manifest = ModuleManifest.from_dict(bundled_manifest("storyboard"))
         assert manifest.schema_version == "2.0"

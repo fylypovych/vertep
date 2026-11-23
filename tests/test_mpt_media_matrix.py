@@ -153,12 +153,6 @@ def _frame(path: Path, at_seconds: float, width: int, height: int) -> np.ndarray
     return np.frombuffer(completed.stdout, dtype=np.uint8).reshape(height, width, 3)
 
 
-def _mean_colour(path: Path, at_seconds: float) -> list[float]:
-    width, height, _ = _stream_info(path)
-    frame = _frame(path, at_seconds, width, height)
-    return [float(value) for value in frame.reshape(-1, 3).mean(axis=0)]
-
-
 def _narration(path: Path, rate: int = 16000) -> np.ndarray:
     completed = subprocess.run(
         [_ffmpeg(), "-nostdin", "-loglevel", "error", "-i", str(path), "-vn",
@@ -831,6 +825,13 @@ def test_an_unwritable_output_is_refused(engine, runtime, tmp_path):
     assets = _approved_assets(tmp_path)
     blocker = tmp_path / "blocker"
     blocker.write_bytes(b"x")
+
+    # The output directory would sit under a regular file: it can never be created.
+    with pytest.raises(BridgeContractError) as refusal:
+        engine.render(blocker / "final" / "video-v1.mp4", **assets)
+
+    assert refusal.value.code == "output_not_writable"
+    assert runtime.requests == []
 
 
 

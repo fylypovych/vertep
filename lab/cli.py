@@ -206,6 +206,11 @@ def command_gpu(context) -> int:
         _print({"active": True, "lease": leases.lease.as_dict() if leases.lease else None})
         return 0
     if args.gpu_command == "release":
+        if leases.lease is None and leases.reconciled_release is not None:
+            # A lease from an earlier CLI call is released when this process starts
+            # (an unverified lease is never reused); report that release (#520).
+            _print({**leases.reconciled_release, "reason": "released at start: lease of a previous call"})
+            return 0 if leases.reconciled_release.get("released") else 1
         _print(leases.release(reason="cli release"))
         return 0
     _print({"error": f"unknown gpu command {args.gpu_command}"})

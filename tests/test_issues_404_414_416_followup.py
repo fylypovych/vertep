@@ -175,11 +175,6 @@ def test_readiness_route_refuses_a_foreign_node_and_has_no_values(monkeypatch):
     assert set(answer["channels"]["youtube"]) == {"ready", "configured", "missing_scopes", "reason"}
 
 
-def test_stub_publication_is_gone():
-    source = Path("services/publisher_service.py").read_text(encoding="utf-8")
-    assert "PUBLISHED" not in source and "app.post" not in source
-
-
 def test_incompatible_worker_gets_no_task(monkeypatch):
     from core.models import TaskClaim
     monkeypatch.setattr(tasks.store, "workers", {"n": {"worker_api": WORKER_API + 1}})

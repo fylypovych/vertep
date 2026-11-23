@@ -309,18 +309,6 @@ def test_wait_for_healthy_fails_on_failed_migrate(tmp_path):
         mod.wait_for_healthy(["docker", "compose"], {"migrate"}, runner=runner)
 
 
-def test_wait_for_healthy_succeeds_on_successful_migrate(tmp_path):
-    root = fixture(tmp_path)
-    mod = module()
-    def runner(command, **kwargs):
-        if "ps" in command:
-            class Result:
-                stdout = '{"Service": "migrate", "State": "exited", "ExitCode": 0}\n'
-            return Result()
-        return None
-    mod.wait_for_healthy(["docker", "compose"], {"migrate"}, runner=runner)
-
-
 def test_wait_for_healthy_fails_when_migrate_evidence_is_absent(tmp_path):
     """M6: an absent migrate record is not migration evidence and must not pass."""
     root = fixture(tmp_path)

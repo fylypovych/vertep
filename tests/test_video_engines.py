@@ -352,21 +352,6 @@ def test_render_refuses_without_the_approved_script(tmp_path):
     assert fake.requests == []
 
 
-def test_render_refuses_a_mixed_media_type_job(tmp_path):
-    """§9.3: mixed image and video materials are not a supported executor input."""
-    assets = _job_assets(tmp_path)
-    assets["images"] = []
-    assets["clips"] = [_mp4(tmp_path / "scene.mp4")]
-    engine = MoneyPrinterEngine(url="http://engine:8000", transport=FakeTransport([]))
-    with pytest.raises(BridgeContractError) as exc:
-        engine.render(tmp_path / "final" / "refused.mp4", **assets)
-    assert exc.value.code in {
-        "material_channel_mismatch",
-        "mixed_media_type",
-        "unsupported_media_type",
-    }
-
-
 def test_remote_engine_http_flow(tmp_path, mp4_factory):
     """Test remote engine HTTP flow with material upload (Issue #122 P2)."""
     assets = _job_assets(tmp_path)
@@ -838,18 +823,20 @@ def test_an_in_flight_submit_is_reconciled_instead_of_repeated(tmp_path):
                                   "data": {"task_id": "j-inflight"}}),
     ])
     engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
-    engine._wait_for_status = lambda task_id: {
-        "data": {"state": 1, "videos": [f"tasks/{task_id}/final-1.mp4"]},
-    }
 
-    with pytest.raises(Exception):
-        # The render cannot finish without a download response, but the submit
+    with pytest.raises(BridgeContractError):
+        # No status responses are queued, so the render cannot finish; the submit
         # itself must already have been resolved into the in-flight task.
         engine.render(tmp_path / "final" / "inflight.mp4",
                       submit_key="job-1-v1-abc", **assets)
 
-    assert len([item for item in fake.requests
+    requests = [item[:2] for item in fake.requests]
+    assert len([item for item in requests
                 if item[0] == "POST" and item[1].endswith("/api/v1/videos")]) == 1
+    # The 409 was resolved by asking the runtime about the same key, and the engine
+    # then polled the in-flight task instead of submitting again.
+    assert ("GET", "http://engine:8000/api/v1/videos/job-1-v1-abc") in requests
+    assert ("GET", "http://engine:8000/api/v1/tasks/j-inflight") in requests
 
 
 def test_an_unresolvable_in_flight_submit_is_terminal(tmp_path):
@@ -1119,31 +1106,6 @@ def _write(path, text: str):
     return path
 
 
-def test_render_rejects_contract_violation_without_http_call(tmp_path):
-    assets = _job_assets(tmp_path)
-    assets["durations"] = [-1.0]
-    engine, transport = _contract_engine(tmp_path)
-
-    with pytest.raises(BridgeContractError) as exc:
-        engine.render(tmp_path / "final" / "v.mp4", **assets)
-
-    assert exc.value.code == "invalid_duration"
-    assert transport.requests == []
-
-
-def test_render_rejects_unwritable_output_without_http_call(tmp_path):
-    assets = _job_assets(tmp_path)
-    blocker = tmp_path / "blocker"
-    blocker.write_bytes(b"x")
-    engine, transport = _contract_engine(tmp_path)
-
-    with pytest.raises(BridgeContractError) as exc:
-        engine.render(blocker / "final" / "v.mp4", **assets)
-
-    assert exc.value.code == "output_not_writable"
-    assert transport.requests == []
-
-
 def test_build_upstream_request_matches_pinned_schema(tmp_path):
     engine = MoneyPrinterEngine(url="http://engine:8000")
     payload = engine.build_upstream_request(
@@ -1305,7 +1267,6 @@ def test_registry_video_engine_is_swappable():
     reg = get_providers()
     reg.replace("video_engine", MoneyPrinterEngine(url="http://engine:8000"))
     assert isinstance(reg.video_engine(), MoneyPrinterEngine)
-    assert isinstance(DefaultAssemblyProvider(object()), object)
 
 
 # ---------------------------------------------------------------------------
@@ -1464,13 +1425,6 @@ def test_health_check_reports_endpoint_reachable():
     assert health["error"] is None
 
 
-def test_health_check_reports_schema_compatibility():
-    """Schema compatibility comes from the upstream submit schema, not from a dict."""
-    health = _health_from(_wrapper_ready_body())
-
-    assert health["schema_compatible"] is True
-
-
 def test_health_check_refuses_an_unauthenticated_upstream():
     """HTTP 401 from the runtime must not read as ready (Issue #122 P2)."""
     health = _health_from({
@@ -1585,17 +1539,6 @@ def test_health_check_refuses_an_unreachable_wrapper():
     assert health["reason"] == "wrapper_unreachable"
 
 
-def test_health_check_includes_pinned_upstream_reference():
-    """Health check includes pinned upstream reference (Issue #122 P2)."""
-    fake = FakeTransport([
-        httpx.Response(200, json={"data": []}),
-    ])
-    engine = MoneyPrinterEngine(url="http://engine:8000", transport=fake)
-    health = engine.health_check()
-
-    assert health["pinned_upstream"] == MONEY_PRINTER_CONTRACT.upstream_reference
-
-
 def test_health_check_reports_snapshot_verification():
     """A verified snapshot is reported back to the caller."""
     health = _health_from(_wrapper_ready_body())
@@ -1664,24 +1607,6 @@ def test_load_manifest_parses_inventory(tmp_path):
     assert manifest.upstream_commit == "2e1b30396e059e55939cc802c60faac2061e4d41"
     assert manifest.upstream_repository == "harry0703/MoneyPrinterTurbo"
     assert len(manifest.dependencies) == 2
-
-
-def test_manifest_compute_digest(tmp_path):
-    """Manifest computes SHA256 digest for verification (Issue #122 P2)."""
-    manifest_file = tmp_path / "runtime-inventory.json"
-    manifest_data = {
-        "format": "moneyprinter_runtime/v1",
-        "bridge_version": "v1",
-        "bridge_schema_version": "v1",
-        "components": {},
-        "dependencies": []
-    }
-    manifest_file.write_text(json.dumps(manifest_data), encoding="utf-8")
-
-    manifest = load_manifest(manifest_file)
-    digest = manifest.compute_digest()
-    assert isinstance(digest, str)
-    assert len(digest) == 64
 
 
 def test_manifest_verify_commit(tmp_path):

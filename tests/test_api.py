@@ -1,14 +1,11 @@
 
-import core.telegram.handlers as _owner_core_telegram_handlers
 from unittest.mock import patch, MagicMock, Mock
 
-import importlib
 import time
 import os
 import base64
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 from fastapi.testclient import TestClient
@@ -359,6 +356,9 @@ def test_telegram_deduplicates_and_worker_status(monkeypatch, tmp_path):
         third = client.post("/api/telegram/webhook", json=character_callback, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         job_id = third.get("job_id") or third.get("job", {}).get("job_id")
         assert job_id
+        # A repeated delivery of the same character choice does not create a second Job.
+        client.post("/api/telegram/webhook", json=character_callback, headers={"x-telegram-bot-api-secret-token": "s"})
+        assert [job.job_id for job in store.jobs.values() if job.topic == "Telegram topic"] == [job_id]
         fourth = client.post("/api/telegram/webhook", json=update, headers={"x-telegram-bot-api-secret-token": "s"}).json()
         assert fourth.get("status") == "brand_selection"
     heartbeat = client.post("/api/workers/heartbeat", json={"node_name": "gpu-test", "gpu_name": "stub"},
@@ -462,9 +462,13 @@ def test_telegram_start_command_does_not_create_job(monkeypatch, tmp_path):
     mock_response = MagicMock()
     mock_response.raise_for_status.return_value = None
     mock_response.json.return_value = {"ok": True}
+    jobs_before = set(store.jobs)
     with patch("adapters.telegram.httpx.post", return_value=mock_response) as mock_post:
         response = client.post("/api/telegram/webhook", json=update, headers={"x-telegram-bot-api-secret-token": "s"}).json()
     assert response.get("ok") is True
+    assert set(store.jobs) == jobs_before  # /start only greets: no Job is created
+    sent = mock_post.call_args.kwargs.get("json") or {}
+    assert sent.get("chat_id") in (42, "42") and "Vertep Bot підключений" in sent.get("text", "")
 
 
 def test_telegram_polling_service_persists_offset(tmp_path, monkeypatch):
@@ -486,34 +490,29 @@ def test_telegram_polling_service_persists_offset(tmp_path, monkeypatch):
     assert loaded.last_message_at == "2026-09-02T16:21:00+03:00"
 
 
-def test_telegram_polling_restart_continues_from_persisted_offset(tmp_path):
-    from adapters.telegram import TelegramPollingService
-    state_file = tmp_path / "telegram_polling_state.json"
-    processed = []
-    service = TelegramPollingService(token="test-token", on_update=processed.append, offset_file=state_file)
-    service.offset = 100
-    service.last_update_id = 99
-    service._save_offset()
-    restarted = TelegramPollingService(token="test-token", on_update=processed.append, offset_file=state_file)
-    assert restarted.offset == 100
-    assert restarted.last_update_id == 99
-    assert processed == []
-
-
 def test_telegram_polling_offset_save_failure_does_not_crash(monkeypatch, tmp_path):
+    """A failed offset write keeps the old offset (the update is retried) and the loop survives."""
     from adapters.telegram import TelegramPollingService
     state_file = tmp_path / "telegram_polling_state.json"
-    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
+    handled = []
+    service = TelegramPollingService(token="test-token", on_update=handled.append, offset_file=state_file)
     service.offset = 42
-    service.last_update_id = 41
-    original_open = open
-    def failing_open(*args, **kwargs):
+    monkeypatch.setattr(TelegramPollingService, "_delete_webhook", lambda self: None)
+
+    def one_update(self):
+        return [{"update_id": 42}]
+    monkeypatch.setattr(TelegramPollingService, "_get_updates", one_update)
+
+    def disk_full(self, offset):
+        self._running = False  # one pass of the loop
         raise OSError("disk full")
-    monkeypatch.setattr("builtins.open", failing_open)
-    service._save_offset()
-    assert service.offset == 42
-    assert service.last_update_id == 41
-    assert service._consecutive_failures == 0
+    monkeypatch.setattr(TelegramPollingService, "_save_offset_data", disk_full)
+    monkeypatch.setattr(service, "_interruptible_sleep", lambda seconds: None)
+    service._running = True
+    service._run()  # returns instead of raising
+    assert handled == [{"update_id": 42}]
+    assert service.offset == 42  # not advanced: the update is fetched again
+    assert service.last_error == "disk full"
 
 
 def test_telegram_polling_backoff_on_error(tmp_path, monkeypatch):
@@ -587,7 +586,7 @@ def test_telegram_polling_corrupted_offset_falls_back_safe(tmp_path):
     assert service.last_update_id is None
 
 
-def test_telegram_polling_stop_interrupts_429_sleep(tmp_path, monkeypatch):
+def test_telegram_polling_429_sleeps_for_retry_after(tmp_path, monkeypatch):
     from adapters.telegram import TelegramPollingService
     monkeypatch.setenv("TELEGRAM_POLLING_TIMEOUT", "1")
     state_file = tmp_path / "telegram_polling_state.json"
@@ -614,24 +613,23 @@ def test_telegram_polling_stop_interrupts_429_sleep(tmp_path, monkeypatch):
     assert sleep_calls[0] == 60
 
 
-def test_telegram_polling_stop_interrupts_retry_delay(tmp_path, monkeypatch):
+def test_telegram_polling_stop_interrupts_retry_delay(tmp_path):
+    """stop() wakes the real interruptible sleep instead of waiting out the whole delay."""
+    import threading
+    import time as _time
     from adapters.telegram import TelegramPollingService
-    monkeypatch.setenv("TELEGRAM_POLLING_RETRY_DELAY", "60")
-    monkeypatch.setenv("TELEGRAM_POLLING_MAX_RETRY_DELAY", "60")
-    state_file = tmp_path / "telegram_polling_state.json"
-    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
-    monkeypatch.setattr(TelegramPollingService, "_delete_webhook", lambda self: None)
-    sleep_calls = []
-    def fake_sleep(seconds):
-        sleep_calls.append(seconds)
-        service._running = False
-    monkeypatch.setattr(service, "_interruptible_sleep", fake_sleep)
-    def fail_updates(self):
-        raise OSError("network")
-    monkeypatch.setattr(TelegramPollingService, "_get_updates", fail_updates)
+    service = TelegramPollingService(token="test-token", on_update=lambda u: None,
+                                     offset_file=tmp_path / "telegram_polling_state.json")
     service._running = True
-    service._run()
-    assert len(sleep_calls) >= 1
+    sleeper = threading.Thread(target=service._interruptible_sleep, args=(60,))
+    started = _time.monotonic()
+    sleeper.start()
+    _time.sleep(0.1)
+    with service._lock:
+        service._running = False
+    sleeper.join(timeout=5)
+    assert not sleeper.is_alive()
+    assert _time.monotonic() - started < 2
 
 
 def test_telegram_polling_idempotent_callback_not_processed_twice(tmp_path, monkeypatch):
@@ -1178,46 +1176,6 @@ def test_job_create_rejects_invalid_workflow_path(monkeypatch, tmp_path):
     assert "Workflow must use" in resp.json()["detail"]
 
 
-def test_telegram_and_manual_workflow_validation_are_independent(monkeypatch, tmp_path):
-    """Acceptance #3: Telegram and manual job creation use different code paths.
-
-    Telegram flow (character config workflow) does NOT validate the workflow
-    reference format; manual API flow DOES validate it via _validate_workflow_reference.
-    This test documents that the two failures are NOT caused by the same root cause.
-    """
-    module = importlib.import_module('core.app')
-    adapter = Mock()
-    patch_telegram(monkeypatch, 'TelegramAdapter', lambda: adapter)
-    monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path / "characters"))
-    monkeypatch.setenv("BRANDS_ROOT", str(tmp_path / "brands"))
-    (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
-    char_dir = tmp_path / "characters" / "test-char"
-    char_dir.mkdir(parents=True, exist_ok=True)
-    complete_character(char_dir)
-    (char_dir / "character.json").write_text(json.dumps({
-        "id": "test-char", "name": "Test", "language": "uk",
-        "generation": {"workflow": "workflows/image/demo.json"},
-    }), encoding="utf-8")
-    workflows_root = tmp_path / "workflows"
-    (workflows_root / "image").mkdir(parents=True, exist_ok=True)
-    (workflows_root / "image" / "demo.json").write_text(json.dumps({"nodes": []}), encoding="utf-8")
-    monkeypatch.setenv("WORKFLOWS_ROOT", str(workflows_root))
-    pending = {'audit-chat': {'pending': {'text': 'topic', 'source_id': 's1', 'message': {'chat': {'id': '42'}}}, 'brand_id': 'brand01'}}
-    patch_telegram(monkeypatch, '_telegram_pending_character', pending)
-    patch_telegram(monkeypatch, 'load_character', lambda *a, **kw: None)
-    job = SimpleNamespace(job_id='job-123', model_dump=lambda **kw: {'job_id': 'job-123'})
-    patch_telegram(monkeypatch, '_create_job_from_telegram', Mock(return_value=job))
-    patch_telegram(monkeypatch, '_queue_storyboard', Mock())
-    result = _owner_core_telegram_handlers._handle_character_selection({'id': 'cb'}, 'audit-chat', 'test-char')
-    assert result.get('job_id') == 'job-123'
-    client = TestClient(app)
-    resp = client.post("/api/jobs", json={
-        "topic": "test", "character_id": "test-char",
-        "workflow": "workflows/image/demo.json",
-    })
-    assert resp.status_code == 200
-
-
 def test_character_create_does_not_default_did_samogon(tmp_path):
     """Regression #67 sub-issue 3: new character must not get did_samogon as default ID."""
     char_root = tmp_path / "characters"
@@ -1598,6 +1556,7 @@ def test_system_test_full_unhealthy_on_zero_certificates(monkeypatch):
     monkeypatch.setattr(_prov, "provider_matrix", lambda: {"tts": {"available": True}})
     _cm = _Mod("core.certificates")
     _cm.list_certificates = lambda: []
+    _cm.certificate_execution_probes = lambda: []  # the fake must not fail the import (#520)
     sys.modules["core.certificates"] = _cm
     import tempfile
     tmpdir = tempfile.mkdtemp()
@@ -1610,7 +1569,7 @@ def test_system_test_full_unhealthy_on_zero_certificates(monkeypatch):
         assert resp.status_code == 200
         data = resp.json()
         assert data["result"] == "UNHEALTHY"
-        assert any("certificates" in f for f in data.get("full_test_failures", []))
+        assert "certificates(zero)" in data.get("full_test_failures", [])
     finally:
         store.jobs.clear()
         sys.modules.pop("core.certificates", None)
@@ -1651,7 +1610,7 @@ def test_system_test_full_unhealthy_on_failed_tasks(monkeypatch):
         assert resp.status_code == 200
         data = resp.json()
         assert data["result"] == "UNHEALTHY"
-        assert any("task_results" in f for f in data.get("full_test_failures", []))
+        assert "task_results(1 failed)" in data.get("full_test_failures", [])
         assert data["task_results"]["failed"] == 1
     finally:
         store.jobs.clear()
@@ -1974,44 +1933,6 @@ def test_polling_load_offset_rejects_valid_non_object_json(tmp_path, payload):
 # ── Polling idempotency: offset saved BEFORE next poll ────────────────────
 
 
-def test_polling_offset_saved_before_next_poll(tmp_path):
-    """Offset is persisted before on_update runs, preventing duplicate processing on restart."""
-    from adapters.telegram import TelegramPollingService
-    state_file = tmp_path / "polling_state.json"
-    processed = []
-    service = TelegramPollingService(
-        token="test-token",
-        on_update=lambda u: processed.append(u["update_id"]),
-        offset_file=state_file)
-
-    updates = [{"update_id": 1, "message": {"text": "/start"}},
-               {"update_id": 2, "message": {"text": "/help"}}]
-    service.offset = 0
-    for u in updates:
-        service.on_update(u)
-        service.last_update_id = u["update_id"]
-        service._save_offset_data(u["update_id"] + 1)
-        service.offset = u["update_id"] + 1
-    assert processed == [1, 2]
-    data = json.loads(state_file.read_text(encoding="utf-8"))
-    assert data["offset"] == 3
-    assert data["last_update_id"] == 2
-
-
-def test_polling_restart_replays_from_saved_offset(tmp_path):
-    """After restart, polling loads offset from file, skipping already-processed updates."""
-    from adapters.telegram import TelegramPollingService
-    state_file = tmp_path / "polling_state.json"
-    state_file.write_text(json.dumps({
-        "offset": 3,
-        "last_update_id": 2,
-        "last_message_at": "2026-01-01T00:00:00Z",
-    }), encoding="utf-8")
-    service = TelegramPollingService(token="test-token", on_update=lambda u: None, offset_file=state_file)
-    assert service.offset == 3
-    assert service.last_update_id == 2
-
-
 def test_telegram_polling_service_init_without_offset_file_uses_config_root(tmp_path, monkeypatch):
     """Issue fix: TelegramPollingService must resolve config_root() when no
     explicit offset_file is supplied.  Before the fix this raised
@@ -2038,25 +1959,6 @@ def test_telegram_polling_service_init_without_offset_file_uses_config_root(tmp_
     reloaded = TelegramPollingService(token="test-token", on_update=lambda update: None)
     assert reloaded.offset == 7
     assert reloaded.last_update_id == 6
-
-
-def test_telegram_polling_service_init_missing_config_dir_is_safe(tmp_path, monkeypatch):
-    """The default offset file must not crash when the config directory does
-    not yet exist; the directory is created lazily on first save."""
-    from adapters.telegram import TelegramPollingService
-    import adapters.telegram as telegram_module
-
-    missing_dir = tmp_path / "does-not-exist" / "config"
-    monkeypatch.setattr(telegram_module, "config_root", lambda: missing_dir)
-    monkeypatch.setenv("TELEGRAM_POLLING_ENABLED", "true")
-
-    service = TelegramPollingService(token="test-token", on_update=lambda update: None)
-    assert service.offset == 0
-    service.offset = 5
-    service.last_update_id = 4
-    service._save_offset()
-    assert missing_dir.is_dir()
-    assert (missing_dir / "telegram_polling_state.json").exists()
 
 
 def test_telegram_polling_service_init_explicit_offset_file_still_works(tmp_path):

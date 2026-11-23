@@ -188,22 +188,19 @@ def test_cancel_rollout_clears_worker_update_commands(monkeypatch, tmp_path):
 
 def test_cancel_rollout_preserves_ready_nodes(monkeypatch, tmp_path):
     """Nodes already in READY/FAILED/ROLLED_BACK should not be touched."""
+    from core import rolling_update
     monkeypatch.setenv("UPDATE_STATE_DIR", str(tmp_path))
-    start_rollout("2.0.0", ["node-1", "node-2"])
-    # Provide a live worker so DRAINING→UPDATING transition happens
-    workers = {
-        "node-1": {"node_name": "node-1", "status": "FREE", "version": "1.0.0",
-                   "current_task": None},
-        "node-2": {"node_name": "node-2", "status": "FREE", "version": "1.0.0"},
-    }
-    reconcile_rollout(workers)
-    status = rollout_status()
-    # node-1 should be in UPDATING or SELF_TESTING by now
+    start_rollout("2.0.0", ["node-1", "node-2", "node-3", "node-4"])
+    rollout = rollout_status()
+    finished = {"node-1": "READY", "node-2": "FAILED", "node-3": "ROLLED_BACK"}
+    for node in rollout["nodes"]:
+        node["phase"] = finished.get(node["node_id"], node["phase"])
+    rolling_update._write(rollout)  # the persisted state a running rollout has reached
     cancel_rollout()
     status = rollout_status()
     assert status["state"] == "CANCELLED"
-    for node in status["nodes"]:
-        assert node["phase"] == "CANCELLED"
+    phases = {node["node_id"]: node["phase"] for node in status["nodes"]}
+    assert phases == {**finished, "node-4": "CANCELLED"}
 
 
 def test_cancel_idempotent(monkeypatch, tmp_path):

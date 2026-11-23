@@ -408,7 +408,10 @@ def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", base64.b64encode(b"i" * 32).decode("ascii"))
     monkeypatch.setattr(backup_service, "_get_system_state", lambda: None)
     # Mock pg_dump and redis-cli to create dummy dump files
+    commands = []
+
     def mock_run(cmd, shell=False, timeout=None, capture_output=True, env=None):
+        commands.append(cmd if isinstance(cmd, str) else " ".join(cmd))
         if "pg_dump" in cmd:
             pg_dump_path.parent.mkdir(parents=True, exist_ok=True)
             pg_dump_path.write_bytes(b"PG_DUMP_CONTENT")
@@ -429,6 +432,9 @@ def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path
     # Verify inventory includes config, storage, and db
     assert any(item["label"] == "config" for item in receipt["inventory"])
     assert any(item["label"] == "storage" for item in receipt["inventory"])
+    # The database state was dumped into the same snapshot (PostgreSQL and Redis).
+    assert any(command.startswith("pg_dump") for command in commands), commands
+    assert any("BGSAVE" in command for command in commands), commands
     # Wipe ALL data
     (config / "installation.json").unlink()
     (config / "license.json").unlink()
@@ -441,6 +447,8 @@ def test_backup_service_full_integration_config_storage_db(monkeypatch, tmp_path
     # Verify config restored
     assert (config / "installation.json").read_text(encoding="utf-8") == '{"id":"inst-1","secret":"cfg-secret"}'
     assert (config / "license.json").read_text(encoding="utf-8") == '{"key":"license-key"}'
+    # The database dump went back through pg_restore.
+    assert any(command.startswith("pg_restore") for command in commands), commands
     # Verify storage restored
     assert (storage / "characters" / "char1" / "character.json").exists()
     assert (storage / "workflows" / "image" / "wf1.json").exists()

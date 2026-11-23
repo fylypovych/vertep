@@ -221,7 +221,9 @@ def test_gpu_lease_request_and_release_through_the_cli(paths, capsys, production
     rc = main([*paths["base"], "--gpu", "gpu", "release"])
     released = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert isinstance(released, dict)
+    # The lease granted by the earlier call is the one released, and production confirms it.
+    assert released["released"] is True
+    assert released["lease_id"] == granted["lease"]["lease_id"]
 
 
 def test_run_without_an_executor_is_blocked_not_completed(paths, capsys):

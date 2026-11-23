@@ -1,7 +1,7 @@
 """#432 AC3/AC5: simultaneous HTTP claims and the order after CORE reloads its repository."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from threading import Barrier, Lock
+from threading import Barrier
 
 import pytest
 from fastapi import FastAPI
@@ -29,11 +29,16 @@ def client(monkeypatch):
 
 
 def test_simultaneous_claims_never_hand_out_one_task_twice(client, monkeypatch):
-    queue, lock, barrier = ["t1", "t2"], Lock(), Barrier(6)
+    """The real queue hands each task out once under concurrent HTTP claims."""
+    from core.queue import TaskQueue
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:1/0")  # the local queue, never a shared Redis
+    queue, barrier = TaskQueue(), Barrier(6)
+    for task_id in ("t1", "t2"):
+        queue.enqueue({"task_id": task_id})
 
     def claim_one(payload):
-        with lock:
-            return {"task": queue.pop(0) if queue else None}
+        task = queue.claim()
+        return {"task": task["task_id"] if task else None}
     monkeypatch.setattr(tasks, "_claim_task", claim_one)
 
     def post(name):

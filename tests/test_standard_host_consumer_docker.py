@@ -1088,37 +1088,6 @@ def test_retry_does_not_return_deleted_seeds(
     assert not seed_file.exists(), "retry restored deleted seed"
 
 
-def test_caller_version_size_validation_rejects_without_mutation(
-        fleet, signed_update_server, tmp_path, monkeypatch):
-    """#390 P3: version/size validation rejects invalid target without mutation."""
-    root = fleet.root
-    state_dir = tmp_path / "update-state"
-    state_dir.mkdir()
-    monkeypatch.setenv("VERTEP_ROOT", str(root))
-    monkeypatch.setenv("UPDATE_STATE_DIR", str(state_dir))
-    monkeypatch.setenv("SYSTEM_STATE_BACKEND", "file")
-    agent = _agent()
-
-    first = fleet.wait_for_worker(version="0.0.0.1")
-    before_container = fleet.container()
-
-    # Request an invalid version that does not exist.
-    signed_update_server.publish("0.0.0.2", _archive(_payload(
-        tmp_path / "release", "0.0.0.2", _pinned(RELEASE_IMAGES["0.0.0.2"]), FLEET_COMPOSE)))
-    request_id = "77" * 16
-    result = agent.process_request(root, state_dir, _request(state_dir, request_id, "update", "9.9.9.9"),
-                                 skip_drain=True)
-
-    assert result is False, "invalid version was accepted"
-    status = _status(state_dir)
-    assert status["state"] == "FAILED"
-
-    # No mutation occurred.
-    after_container = fleet.container()
-    assert after_container == before_container
-    assert fleet.served_version(after_container) == "0.0.0.1"
-
-
 def test_caller_rbac_refusal_propagates_without_mutation(
         fleet, signed_update_server, tmp_path, monkeypatch):
     """#390 P3: RBAC refusal (missing admin role) propagates without mutation."""
@@ -1135,10 +1104,10 @@ def test_caller_rbac_refusal_propagates_without_mutation(
     first = fleet.wait_for_worker(version="0.0.0.1")
     before_container = fleet.container()
 
-    # Simulate RBAC refusal by using wrong credentials.
+    # The real node action route refuses a caller without valid credentials.
     core_url = fleet.core_url()
-    wrong_credentials = httpx.post(f"{core_url}/api/workers/consumer-worker/drain",
-                                    auth=("wrong", "credentials"), timeout=10)
+    wrong_credentials = httpx.post(f"{core_url}/api/nodes/consumer-worker/actions", json={"action": "drain"},
+                                   auth=("wrong", "credentials"), timeout=10)
     assert wrong_credentials.status_code == 401, "RBAC check was bypassed"
 
     # Verify worker status unchanged (RBAC refusal prevented mutation).

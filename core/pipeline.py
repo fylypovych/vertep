@@ -55,6 +55,9 @@ class JobStore:
         self.sequence = 0
         self.repository = repository or build_repository(root)
         self.executor = executor
+        # Queue tasks of Jobs recovered at startup; the queue is built after the store
+        # (core.state), so it discards them once it exists (#520).
+        self.restart_dropped_tasks: list[str] = []
         self._load()
         self.workers = {worker["node_name"]: worker for worker in self.repository.load_workers()}
 
@@ -107,7 +110,7 @@ class JobStore:
                                           JobStatus.TTS_GENERATING, JobStatus.TTS_READY,
                                           JobStatus.VIDEO_GENERATION, JobStatus.VIDEO_READY,
                                           JobStatus.ASSEMBLY}:
-                    recover_after_restart(job)
+                    recover_after_restart(job, discard=self.restart_dropped_tasks.append)
                     job.status = JobStatus.NEW
                     job.events.append(f"{utc_now()} RECOVERED AFTER RESTART")
                     job.event_log.append(JobEvent(message="RECOVERED AFTER RESTART",

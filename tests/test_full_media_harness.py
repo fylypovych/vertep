@@ -784,35 +784,24 @@ class TestTextReadinessAndRecovery:
         result = harness.text_cancel_row(fleet, job_id)
         job = harness.get_job(fleet, job_id)
         assert job["status"] == JobStatus.CANCELLED.value, job["status"]
+        assert result["task"]["task_id"] not in task_queue._inflight, "the storyboard lease was not released"
         harness.record_row("text_cancel_releases_lease", "CANCELLED", job["status"],
                            job_id=job_id, **result)
 
     def test_text_restart_replays_job_and_releases_stale_claim(self, fleet, monkeypatch,
                                                                tmp_path):
-        """#164.3 restart releases the stale storyboard claim and replays the Job
-        from the stage it was in when CORE came back."""
+        """#164.3 restart releases the stale storyboard claim and keeps the Job on the
+        stage it was in when CORE came back."""
         job_id = harness.create_job(fleet, topic="Text restart")
         harness.approve_script_only(fleet, job_id, monkeypatch)
         result = harness.text_restart_row(fleet, job_id)
+        assert result["task"]["task_id"] not in task_queue._inflight, "the stale storyboard claim was kept"
         assert result["recovered_status"] == JobStatus.STORYBOARD_GENERATING, (
             f"restart must leave the Job on the stage it held, not drop it: "
             f"{result['recovered_status']}")
         harness.record_row("text_restart_releases_stale_claim",
                            JobStatus.STORYBOARD_GENERATING.value,
                            result["recovered_status"].value, job_id=job_id, **result)
-
-    def test_text_evidence_is_sha_anchored(self, fleet, monkeypatch, tmp_path):
-        """#164.3 reuse the exact-SHA evidence pattern for the Text rows."""
-        job_id = harness.create_job(fleet, topic="Text evidence")
-        task = harness.run_script_task(fleet, job_id)
-        job = harness.get_job(fleet, job_id)
-        provenance = harness.run_provenance()
-        assert provenance["sha"] and len(provenance["sha"]) == 40
-        assert provenance["version"] == Path("VERSION").read_text(encoding="utf-8").strip()
-        harness.record_row("text_evidence_sha_anchored", provenance["sha"],
-                           provenance["sha"], job_id=job_id, task=task,
-                           provenance=provenance)
-
 
 # ---------------------------------------------------------------------------
 # Issue #198 / #165.3: actual Text/Storyboard→Voice→audio→assembly harness rows
@@ -835,6 +824,7 @@ class TestVoiceAcceptanceRows:
         result = harness.voice_cancel_row(fleet, job_id)
         job = harness.get_job(fleet, job_id)
         assert job["status"] == JobStatus.CANCELLED.value, job["status"]
+        assert result["task"]["task_id"] not in task_queue._inflight, "the voice lease was not released"
         harness.record_row("voice_cancel_releases_lease", "CANCELLED",
                            job["status"], job_id=job_id, **result)
 
@@ -846,8 +836,12 @@ class TestVoiceAcceptanceRows:
         harness.generate_assets_only(fleet, job_id, monkeypatch)
         result = harness.voice_worker_loss_row(fleet, job_id)
         job = harness.get_job(fleet, job_id)
-        assert job["status"] in {JobStatus.TTS_GENERATING.value,
-                                 JobStatus.ASSET_GENERATION.value}, job["status"]
+        assert job["status"] == JobStatus.TTS_GENERATING.value, job["status"]
+        lost = result["task"]
+        assert lost["task_id"] not in task_queue._inflight, "the lost worker still holds the lease"
+        requeued = [item[2] for item in task_queue._local
+                    if item[2].get("task") == "voice" and item[2].get("scene_id") == lost.get("scene_id")]
+        assert requeued, "the voice task of the lost worker was not requeued"
         harness.record_row("voice_worker_loss_requeues", job["status"],
                            job["status"], job_id=job_id, **result)
 
@@ -887,7 +881,7 @@ class TestVoiceAcceptanceRows:
         harness.approve_script(fleet, job_id, monkeypatch)
         harness.generate_assets_only(fleet, job_id, monkeypatch)
         result = harness.voice_duplicate_row(fleet, job_id)
-        assert result["refused"] is True, result
+        assert result["refused"] is True and result["second_status"] == 409, result
         harness.record_row("voice_duplicate_refused", True, result["refused"],
                            job_id=job_id, **result)
 
@@ -904,12 +898,13 @@ class TestVoiceAcceptanceRows:
                            job_id=job_id, **result)
 
     def test_voice_restart_replays_audio_stage(self, fleet, monkeypatch, tmp_path):
-        """Restart CORE while the Voice Worker owns the audio lease; the stale
-        claim must be released and the audio stage must replay."""
+        """Restart CORE while the Voice Worker owns the audio lease; the stale claim is
+        released and the Job stays on the audio stage."""
         job_id = harness.create_job(fleet, topic="Voice restart")
         harness.approve_script(fleet, job_id, monkeypatch)
         harness.generate_assets_only(fleet, job_id, monkeypatch)
         result = harness.voice_restart_row(fleet, job_id)
+        assert result["task"]["task_id"] not in task_queue._inflight, "the stale voice claim was kept"
         assert result["recovered_status"] == JobStatus.TTS_GENERATING, (
             f"restart must leave the Job on the audio stage: {result}")
         harness.record_row("voice_restart_replays_audio_stage",

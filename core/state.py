@@ -22,6 +22,11 @@ from .workflows import WorkflowRegistry
 executor = ThreadPoolExecutor(max_workers=2)
 store = JobStore(os.getenv("JOB_ROOT", "jobs"))
 task_queue = TaskQueue()
+# Stale claims of Jobs that were in flight when CORE stopped are removed now that the
+# queue exists, instead of staying leased until they expire (#520).
+for _task_id in store.restart_dropped_tasks:
+    task_queue.discard(_task_id)
+store.restart_dropped_tasks.clear()
 logger = configure_logging("core")
 workflow_registry = WorkflowRegistry(os.getenv("WORKFLOWS_ROOT", "workflows"))
 request_windows: dict[str, deque[float]] = defaultdict(deque)

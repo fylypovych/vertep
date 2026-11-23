@@ -242,19 +242,6 @@ def _claim_tts(client, job_id):
     return None
 
 
-def _wait_for(client, job_id, statuses=("READY", "FAILED")):
-    for _ in range(600):
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] == "VIDEO_PENDING_APPROVAL":
-            client.post(f"/api/jobs/{job_id}/video/approve",
-                        json={"actor": "test", "expected_video_version": job["active_video_version"]})
-            continue
-        if job["status"] in statuses:
-            return job
-        time.sleep(0.025)
-    return job
-
-
 # ---------------------------------------------------------------------------
 # Task 1: Contract mandatory
 # ---------------------------------------------------------------------------
@@ -293,6 +280,7 @@ class TestContractMandatory:
             "node_name": "voice-worker", "success": True,
             "artifacts": [artifact]})
         assert resp.status_code == 400
+        assert "audio contract must declare format" in resp.json()["detail"].lower()
 
     def test_reject_tts_result_with_tampered_sha256(self, monkeypatch, tmp_path):
         client = _make_client()
@@ -335,6 +323,7 @@ class TestContractMandatory:
             "node_name": "voice-worker", "success": True,
             "artifacts": [artifact]})
         assert resp.status_code == 400
+        assert "must declare provider" in resp.json()["detail"].lower()
 
     def test_persist_contract_rejects_non_dict(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CHARACTERS_ROOT", str(tmp_path))
@@ -679,6 +668,10 @@ class TestVoiceTaskSnapshot:
         result = SimpleNamespace(task_id="t1", node_name="vw")
         task = _tts_task_for(job, scene)
         job.voice_task_snapshot = {"t1": dict(task)}
+        # The live voice config changes after the claim: the issued snapshot still decides.
+        _write_character(tmp_path, "vc", voice={"provider": "mock", "voice": "uk", "language": "uk",
+                                                "model": "uk_male", "speed": 200})
+        assert task["speed"] == 160
         contract = {"format": "audio_contract/v1", "provider": task["provider"],
                     "voice": task["voice"], "language": task["language"],
                     "model": task["model"], "speed": task["speed"],
@@ -706,6 +699,9 @@ class TestVoiceTaskSnapshot:
         task = _tts_task_for(job, scene)
         # The snapshot records the voice the Worker was dispatched with.
         job.voice_task_snapshot = {"t1": dict(task, speed=160)}
+        # The live config drifts to the value the late result will claim; it must not count.
+        _write_character(tmp_path, "vc", voice={"provider": "mock", "voice": "uk", "language": "uk",
+                                                "model": "uk_male", "speed": 999})
         # The Worker answers against the same speed -> accepted.
         good = {"format": "audio_contract/v1", "provider": task["provider"],
                 "voice": task["voice"], "language": task["language"],

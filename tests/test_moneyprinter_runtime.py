@@ -341,29 +341,6 @@ class _RecordingTransport:
         return self._next(url, kwargs)
 
 
-def _inventory_payload(commit=PINNED_COMMIT, schema_version=BRIDGE_VERSION) -> dict:
-    return {
-        "format": INVENTORY_FORMAT,
-        "components": {
-            "moneyprinter": {
-                "repository": INVENTORY_REPOSITORY,
-                "commit": commit,
-                "version": "2.0.3",
-            }
-        },
-        "bridge_version": BRIDGE_VERSION,
-        "bridge_schema_version": schema_version,
-        "dependencies": ["fastapi==0.115.0"],
-    }
-
-
-def _engine(responses):
-    from adapters.providers import MoneyPrinterEngine
-
-    return MoneyPrinterEngine(url="http://moneyprinter:8098", token="k",
-                              transport=_RecordingTransport(responses))
-
-
 # The engine-side readiness contract (commit drift, schema drift, missing proof)
 # lives in tests/test_video_engines.py. These tests cover the executor side of
 # §9.12: the wrapper only reports ready when it proved auth and schema itself.
@@ -418,19 +395,6 @@ def _raising_check_submit_schema(wrapper, code=None):
         )
 
     return _check
-
-
-def test_wrapper_health_refuses_a_drifted_submit_schema(monkeypatch, tmp_path):
-    from services import moneyprinter_service as wrapper
-
-    client = _wrapper_client(monkeypatch, tmp_path)
-    monkeypatch.setattr(wrapper, "check_upstream_authenticated", lambda *a, **k: None)
-    monkeypatch.setattr(wrapper, "check_submit_schema", _raising_check_submit_schema(wrapper))
-
-    response = client.get("/health")
-
-    assert response.status_code == 503
-    assert response.json()["checks"]["reason"] == "upstream_schema_unsupported"
 
 
 def test_wrapper_health_keeps_independent_gate_results_separate(monkeypatch, tmp_path):
@@ -830,9 +794,11 @@ def test_a_probe_below_the_pinned_minimum_is_refused_before_the_upstream(monkeyp
     assert upstream == []
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not available here")
 def test_a_real_probe_clip_is_encoded_at_the_verified_geometry(tmp_path):
-    """Where FFmpeg exists, the encoded probe is decoded and measured, not assumed."""
+    """Where FFmpeg exists, the encoded probe is decoded and measured, not assumed.
+
+    moviepy is installed at the MPT image pin in the moneyprinter-pinned-image CI job;
+    it encodes with the bundled imageio-ffmpeg, so no system ffmpeg is required."""
     moviepy = pytest.importorskip("moviepy")
     from services import moneyprinter_service as wrapper
 
@@ -988,19 +954,6 @@ def test_dockerfile_pins_the_upstream_tarball():
     assert "MPT_TARBALL_SHA256" in dockerfile
     assert "cc2031d43b0d83d47efd631f1de7f3093df31fe26bb7374a28e7f05fa7d538a2" in dockerfile
     assert "sha256sum -c" in dockerfile
-
-
-def test_dependency_lock_has_no_unpinned_requirement():
-    lock = (MONEYPRINTER_DIR / "requirements.lock").read_text(encoding="utf-8")
-
-    requirements = [
-        line.strip()
-        for line in lock.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
-    assert requirements, "the runtime must ship a dependency inventory"
-    for requirement in requirements:
-        assert "==" in requirement, requirement
 
 
 def test_dependency_lock_declares_where_every_pin_comes_from():
@@ -2074,17 +2027,6 @@ def test_runtime_check_reads_an_empty_repo_digest_list_without_failing():
         '["vertep/moneyprinter-runtime-check@sha256:' + "b" * 64 + '"]'
         if tuple(args) == template else "")
     assert check.registry_digest(check.IMAGE_NAME).endswith("@sha256:" + "b" * 64)
-
-
-def _module_roots(path: Path) -> set[str]:
-    """Top-level module names imported by one Python file."""
-    roots: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Import):
-            roots.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            roots.add(node.module.split(".")[0])
-    return roots
 
 
 class _ImportCollector(ast.NodeVisitor):
