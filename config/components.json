@@ -132,6 +132,28 @@
       "transition_base": "0.0.4.14",
       "legacy_versions": {"1.0.0": "0.0.4.14"}
     },
+    "lab": {
+      "kind": "module",
+      "version_source": "deploy/lab/manifest.yaml",
+      "note": "#491 L5 / #523: the isolated LAB (placement isolated_lab). Its signed package pins lab-control and lab-web by digest and carries the runtime compose file; bootstrap-lab.sh installs it without building.",
+      "image": {"name": "vertep-lab-control", "context": ".", "file": "deploy/lab/Dockerfile", "service": "lab-control"},
+      "extra_images": [{"name": "vertep-lab-web", "context": ".", "file": "deploy/lab/Dockerfile.web", "service": "lab-web"}],
+      "package_files": {"docker-compose.yml": "deploy/lab/docker-compose.web.yml"},
+      "paths": ["lab/**", "deploy/lab/**", "bootstrap-lab.sh", "scripts/lab-orchestrator.py", "installer/vertep-lab.service"],
+      "tests": ["tests/test_lab_acceptance_criteria.py", "tests/test_lab_api_auth.py", "tests/test_lab_boundary.py",
+                "tests/test_lab_budget.py", "tests/test_lab_cli.py", "tests/test_lab_deployment.py",
+                "tests/test_lab_executor.py", "tests/test_lab_github_transport.py", "tests/test_lab_governance.py",
+                "tests/test_lab_gpu_lease.py", "tests/test_lab_ir_acceptance.py", "tests/test_lab_isolation.py",
+                "tests/test_lab_lease_api.py", "tests/test_lab_notifications.py", "tests/test_lab_orchestrator.py",
+                "tests/test_lab_policy_gate.py", "tests/test_lab_qualification.py",
+                "tests/test_lab_report_context.py", "tests/test_lab_reports.py",
+                "tests/test_lab_resource_transport.py", "tests/test_lab_rights_requests.py",
+                "tests/test_lab_role_profiles.py", "tests/test_lab_role_service_concurrency.py",
+                "tests/test_lab_sandbox_isolation.py", "tests/test_lab_sandbox_runtime.py",
+                "tests/test_lab_shared_identity.py", "tests/test_lab_supported_os.py",
+                "tests/test_lab_web_docker.py", "tests/test_lab_web_e2e.py"],
+      "transition_base": "0.0.4.35"
+    },
     "storyboard": {
       "kind": "module",
       "version_source": "modules/storyboard/manifest.yaml",

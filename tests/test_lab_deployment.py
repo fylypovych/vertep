@@ -133,12 +133,15 @@ def test_shipped_compose_keeps_its_own_state_and_volumes(relative):
         assert f"{secret}=" not in text
 
 
-@pytest.mark.parametrize("relative", SHIPPED_COMPOSE)
-def test_shipped_compose_publishes_no_fleet_reachable_port(relative):
-    published = re.findall(r"-\s*[\"']?([0-9.]+):([^\"'\s]+):(\d+)", _read(relative))
-    assert published, f"no published port found in {relative}"
+def test_shipped_compose_publishes_no_fleet_reachable_port():
+    published = re.findall(r"-\s*[\"']?([0-9.]+):([^\"'\s]+):(\d+)", _read("deploy/lab/docker-compose.yml"))
+    assert published, "no published port found in deploy/lab/docker-compose.yml"
     for host, _, _ in published:
-        assert host == "127.0.0.1", f"{relative} publishes a port on {host}"
+        assert host == "127.0.0.1", f"deploy/lab/docker-compose.yml publishes a port on {host}"
+    # #491 L2/L8: the web stack publishes only the HTTPS panel on the VM address
+    # (tests/test_lab_boundary.py::test_panel_publishes_only_a_tls_listener).
+    assert re.findall(r"^\s*- \"(.+)\"$", _read("deploy/lab/docker-compose.web.yml"), re.M) == [
+        "${LAB_WEB_BIND:-0.0.0.0}:${LAB_WEB_PORT:-8444}:8443"]
 
 
 def test_shipped_lab_compose_declares_only_laboratory_volumes():

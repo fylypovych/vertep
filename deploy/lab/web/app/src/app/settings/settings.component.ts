@@ -1,6 +1,7 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { LabApiService } from '../lab-api.service';
+import { LabSettingsComponent } from '../lab-settings/lab-settings.component';
 
 const CHANNELS = ['web', 'telegram'] as const;
 const LEVELS = ['info', 'important', 'critical'] as const;
@@ -9,13 +10,14 @@ const LEVELS = ['info', 'important', 'critical'] as const;
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, LabSettingsComponent],
   template: `
+    <app-lab-settings></app-lab-settings>
     <h1>Налаштування важливості сповіщень</h1>
     <section class="panel">
       <p class="muted">
         Один магазин налаштувань для Web-панелі та Telegram; збереження —
-        акт власника (потрібен owner token), сервер перевіряє все повторно.
+        акт адміністратора (вхід через Vertep або owner token), сервер перевіряє все повторно.
       </p>
       @if (error()) {
         <p class="error" data-testid="notify-error">{{ error() }}</p>

@@ -404,15 +404,24 @@ def module_manifest_document(component: str, root: Path | None = None, registry:
     return data.get("module") if isinstance(data.get("module"), dict) else data.get("manifest", data)
 
 
-def build_package(component: str, *, image: str | None = None, root: Path | None = None,
-                  registry: dict | None = None) -> dict:
-    """Unsigned package: manifest + every file CORE needs (migrations, UI bundle)."""
+PINNED_IMAGE = re.compile(r"[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}")
+
+
+def build_package(component: str, *, image: str | None = None, extra_images: dict[str, str] | None = None,
+                  root: Path | None = None, registry: dict | None = None) -> dict:
+    """Unsigned package: manifest + every file CORE needs (migrations, UI bundle).
+
+    A component with several images (LAB: lab-control + lab-web, #491 L5) also carries
+    ``images.json`` (service -> image pinned by digest) and its ``package_files``
+    (the runtime compose file), all covered by the signature.
+    """
     root = root or ROOT
     registry = registry or load_registry()
+    spec = registry["components"][component]
     manifest = dict(module_manifest_document(component, root, registry))
-    module_dir = (root / registry["components"][component]["version_source"]).parent
+    module_dir = (root / spec["version_source"]).parent
     if image is not None:
-        if not re.fullmatch(r"[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}", image):
+        if not PINNED_IMAGE.fullmatch(image):
             raise ComponentError("Package image must be pinned by digest")
         if not manifest.get("container"):
             raise ComponentError(f"{component} has no container to pin")
@@ -429,6 +438,14 @@ def build_package(component: str, *, image: str | None = None, root: Path | None
         if hashlib.sha256(data).hexdigest() != digest:
             raise ComponentError(f"{component}: ui/{name} does not match the manifest digest")
         files[name] = base64.b64encode(data).decode("ascii")
+    for name, source in (spec.get("package_files") or {}).items():
+        files[name] = base64.b64encode((root / source).read_bytes()).decode("ascii")
+    if spec.get("extra_images") and image is not None:
+        images = {spec["image"]["service"]: image, **(extra_images or {})}
+        expected = {spec["image"]["service"], *(item["service"] for item in spec["extra_images"])}
+        if set(images) != expected or not all(PINNED_IMAGE.fullmatch(ref) for ref in images.values()):
+            raise ComponentError(f"{component}: every image ({', '.join(sorted(expected))}) must be pinned by digest")
+        files["images.json"] = base64.b64encode(json.dumps(images, sort_keys=True).encode()).decode("ascii")
     return {"manifest": manifest, "files": files}
 
 

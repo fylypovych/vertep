@@ -8,6 +8,8 @@
 
 Архів, який створюється перед видаленням модуля (незашифрований, лише для адміністратора), — окремий механізм і system backup не замінює ([Module Contract §16](architecture/contracts/module_contract.md)).
 
+Копія «лише БД» (`scope: db` у receipt, #524) містить PostgreSQL і Redis без файлових джерел; її відновлення повертає БД і не змінює `config`/`storage`. Receipt без `scope` — повна копія. `backup.key` і ownership inventory видалення (`removal-ownership.json`) у копію не входять і відновленням не замінюються.
+
 ## Операції
 
 - Створення, список (ID, час, тип, розмір, checksum/integrity), прогрес — через Web UI (**System → Zero-Shell lifecycle**) або Telegram-меню `Система` (див. `telegram.md`).
@@ -42,6 +44,16 @@ tmpfs `/tmp` (128 MiB). Більший dump потребує окремого п
 використовувати доступні mounts.
 
 Штатний сценарій приймання: backup → контрольована зміна/видалення даних → restore → verified health (файли, записи БД, jobs/history/receipts, checksums). Успішний mock restore доказом не є.
+
+## Копія перед видаленням (`vertep remove`)
+
+`vertep remove` пропонує копію `full`/`db`/`none` ([removal](removal.md#резервна-копія-перед-видаленням)) і зберігає її з ключем шифрування в `/var/backups/vertep/<snapshot_id>/` поза інсталяцією. Відновлення після повторної інсталяції на тому самому сервері:
+
+1. Перед bootstrap: `install -d -m 0700 <root>/config && install -m 0600 /var/backups/vertep/<snapshot_id>/backup.key <root>/config/backup.key` — нова інсталяція використовує той самий ключ, решта стану лишається чистою (майстер першого запуску).
+2. Після майстра: скопіювати `<snapshot_id>.vtbackup*` і `<snapshot_id>.json` у `<root>/backups/`.
+3. Адмін-панель → snapshot → відновлення з підтвердженням; post-restore health обов'язкова.
+
+Без старого ключа копію розшифрувати неможливо. Копія «лише БД» не повертає файли сховища: зашифровані секрети БД, що залежать від файлів `config` старої інсталяції, після такого відновлення можуть бути недоступні.
 
 ## Команди бази даних і віддаленого копіювання
 

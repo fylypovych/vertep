@@ -1,9 +1,14 @@
 """API authorisation for the laboratory grant endpoint (Issue i.0.0.2.50, L4)."""
 
 import pytest
-from fastapi.testclient import TestClient
 
 from lab.api import create_app
+from tests.lab_admin import AdminClient as TestClient, vertep_identity  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _admin(vertep_identity):
+    return vertep_identity
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +33,7 @@ def test_grant_requires_owner_token(monkeypatch, tmp_path):
     response = client.post("/api/lab/grants", json={
         "actor": "lab", "action": "create_lab_issue", "subject": "lab.0.0.0.1",
         "approved_by": "lab", "expires_at": "2099-01-01T00:00:00+00:00",
-    })
+    }, headers={})
     assert response.status_code == 401
 
 
@@ -69,7 +74,7 @@ def test_policy_rejects_self_approval(tmp_path):
 def test_revoke_requires_owner_token(monkeypatch, tmp_path):
     monkeypatch.delenv("LAB_OWNER_TOKEN", raising=False)
     client = build_client(tmp_path)
-    assert client.post("/api/lab/grants/any/revoke").status_code == 401
+    assert client.post("/api/lab/grants/any/revoke", headers={}).status_code == 401
 
     monkeypatch.setenv("LAB_OWNER_TOKEN", "secret")
     assert client.post("/api/lab/grants/any/revoke",
@@ -275,7 +280,7 @@ def test_notifications_write_is_an_owner_act(monkeypatch, tmp_path):
     monkeypatch.delenv("LAB_OWNER_TOKEN", raising=False)
     client = build_client(tmp_path)
     payload = {"settings": {"telegram": {"info": True}}}
-    assert client.put("/api/lab/notifications", json=payload).status_code == 401
+    assert client.put("/api/lab/notifications", json=payload, headers={}).status_code == 401
 
     monkeypatch.setenv("LAB_OWNER_TOKEN", "secret")
     assert client.put("/api/lab/notifications", json=payload,
@@ -320,15 +325,16 @@ def test_ir_close_endpoint_requires_owner_and_complete_evidence(monkeypatch, tmp
     evidence = client.get("/api/lab/evidence").json()
     assert evidence["evidence"][-1]["evidence"]["reviewer"] == "qa-agent"
 
-    assert client.post("/api/lab/ir/close", json=body).status_code == 401
+    assert client.post("/api/lab/ir/close", json=body, headers={}).status_code == 401
     assert client.post("/api/lab/ir/close", json=body,
                        headers={"X-Lab-Owner-Token": "wrong"}).status_code == 401
 
     closed = client.post("/api/lab/ir/close", json=body,
                          headers={"X-Lab-Owner-Token": "secret"})
-    assert closed.json()["closed"] is True
+    # Verified and recorded for the owner; only the owner closes the Issue (23.11.2026).
+    assert closed.json()["closed"] is False and closed.json()["ready_for_owner_close"] is True
     issues = client.get("/api/lab/issues").json()
-    assert "ir.0.0.0.1" in issues["closed"]
+    assert issues["closed"]["ir.0.0.0.1"]["ready_for_owner_close"] is True
 
 
 def test_ir_close_refused_for_incomplete_evidence(monkeypatch, tmp_path):
@@ -375,16 +381,28 @@ def test_consolidation_endpoint_requires_owner(monkeypatch, tmp_path):
                     "transferred_criteria": ["U3 reports"]},
                ]}
     assert client.post("/api/lab/ir/consolidate",
-                       json=payload).status_code == 401
+                       json=payload, headers={}).status_code == 401
     assert client.post("/api/lab/ir/consolidate", json=payload,
                        headers={"X-Lab-Owner-Token": "wrong"}).status_code == 401
 
     outcome = client.post("/api/lab/ir/consolidate", json=payload,
                           headers={"X-Lab-Owner-Token": "secret"}).json()
     assert outcome["allowed"] is True
-    assert outcome["closed"] is True
+    assert outcome["closed"] is False and outcome["ready_for_owner_close"] is True
     assert outcome["created"] == ["ir.0.0.0.4", "ir.0.0.0.5"]
 
     transfers = client.get("/api/lab/transfers").json()
     assert transfers["transfers"]["ir.0.0.0.3"]["successors"] == ["ir.0.0.0.4",
                                                                   "ir.0.0.0.5"]
+
+
+def test_an_issue_surface_probe_is_recorded_in_the_lab_trail(tmp_path):
+    """#523 AC3: a read-only probe of a refused surface is still an audited decision."""
+    client = build_client(tmp_path)
+    before = len(client.get("/api/lab/audit/records", params={"limit": 1000}).json()["records"])
+    probe = client.get("/api/lab/issues/close", params={"subject": "ir.0.0.0.1"})
+    assert probe.status_code == 200
+    records = client.get("/api/lab/audit/records", params={"limit": 1000}).json()["records"]
+    assert len(records) == before + 1
+    assert records[-1]["action"] == "close_issue" and records[-1]["subject"] == "ir.0.0.0.1"
+    assert records[-1]["decision"] in {"DENIED", "FORBIDDEN"}

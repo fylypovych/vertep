@@ -120,7 +120,7 @@ ui:
 
 10. API gateway, extensions і secrets
 ---------------------------------
-- `/api/modules/{namespace}/v{major}/{path}` → READY екземпляр модуля з цим `api.namespace`, лише задекларовані `routes` і лише major з `api.version`. Користувачі проходять автентифікацію/RBAC платформи (moderator — лише читання); модулю передаються `x-vertep-user`/`x-vertep-role`, cookies і `Authorization` не передаються.
+- `/api/modules/{namespace}/v{major}/{path}` → READY екземпляр модуля з цим `api.namespace`, лише задекларовані `routes` і лише major з `api.version`. Користувачі проходять автентифікацію/RBAC платформи (moderator — у межах своїх брендів: Gateway передає `x-vertep-brands`, право на зміну перевіряє модуль); модулю передаються `x-vertep-user`/`x-vertep-role`, cookies і `Authorization` не передаються.
 - Модуль викликає інший модуль лише з власним токеном і лише API, задекларований у його `requires` з сумісною версією; інакше `403`. Деактивований/непогоджений модуль втрачає API, токен, secrets і UI.
 - Secrets: адміністратор зберігає значення лише задекларованих посилань — `PUT /api/nodes/module-registry/secrets/{module_id}`; модуль читає `GET /api/modules/self/secrets` зі своїм токеном і отримує тільки власні посилання з зашифрованого сховища платформи.
 
@@ -208,7 +208,7 @@ Mapping за main 0.0.3.89 (`config/node_roles.json`, `worker/role_executor.py`,
 - Функція без запису lifecycle або лише `INSTALLED` — legacy-шлях ролі без змін.
 - `ACTIVE` — задачу забирає лише вузол із READY розміщеним екземпляром; задача отримує `module_name`, `module_version`, `module_routed: true`, Worker виконує той самий виконавець через модульний шлях (`worker/migration.py`), один attempt — один owner.
 - `INACTIVE`/`FAILED`/під час update — жоден вузол не забирає задачу, вона чекає в черзі (без мовчазного повернення до legacy).
-- `uninstall` повертає функцію на legacy-шлях. Bundled-модулі встановлюються `POST /api/nodes/module-registry/lifecycle/install` `{"bundled": "<text|image|audio|publisher|backup>"}` із manifest поточного релізу (довіра — підписаний реліз); оновлюються разом із релізом, а не окремим `update`.
+- `uninstall` повертає функцію на legacy-шлях. Bundled-модулі (`BUNDLED` у `core/module/lifecycle.py`) встановлюються `POST /api/nodes/module-registry/lifecycle/install` `{"bundled": "<модуль>"}` із manifest поточного релізу (довіра — підписаний реліз). Сам bundled-пакет не оновлюється окремим `update`; bundled-роль, для якої вийшов підписаний контейнерний пакет тієї самої версії компонента, переходить на нього через `update` (#511), а офіційні модулі з контейнером оновлюються підписаним пакетом окремо від CORE (AGENTS.md §2.21). `web-ui` — системний компонент: дії встановлення й активації для нього повертають 409.
 - Worker завжди звітує bundled-модуль своєї ролі з `enabled` (env-прапорець). Без прапорця й без lifecycle екземпляр `NOT_READY` (`bundled_not_managed`) і не додає неперевірених capabilities.
 - Обмеження: job-less voice preview (`voice_dispatch`) лишається на legacy-шляху.
 

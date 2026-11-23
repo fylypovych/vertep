@@ -7,6 +7,7 @@
   history                                           -> JSON: shared release -> first independent version
   manifest --component X --sha SHA --private-key K --output F [--artifact name=path ...] [--image digest]
   package  --component X --private-key K --output F [--image ref@sha256:...] [--key-id ID]
+           [--extra-image service=ref@sha256:...]
                                                     -> signed module package (package.json + .sha256)
 """
 
@@ -70,6 +71,8 @@ def cmd_plan(args) -> dict:
         entry = {"version": version, "kind": spec["kind"]}
         if spec.get("image"):
             entry["image"] = spec["image"]
+        if spec.get("extra_images"):
+            entry["extra_images"] = spec["extra_images"]
         try:
             entry["tag"] = c.check_release(component, version, args.sha, tags)
             entry["publish"] = spec["kind"] == "module" and entry["tag"] not in tags
@@ -144,7 +147,9 @@ def cmd_package(args) -> dict:
         if not keys:
             raise SystemExit("config/module-trust/publishers.json has no vertep key: run scripts/create-module-signing-key.py")
         key_id = list(keys)[-1]
-    package = c.sign_package(c.build_package(args.component, image=args.image), Path(args.private_key).read_bytes(), key_id)
+    extra = dict(item.split("=", 1) for item in args.extra_image or [])
+    package = c.sign_package(c.build_package(args.component, image=args.image, extra_images=extra),
+                             Path(args.private_key).read_bytes(), key_id)
     if key_id in keys:
         # The signature must verify with the public key CORE trusts, before anything is published.
         from core.module.packages import verify_package
@@ -182,6 +187,7 @@ def main() -> None:
     package.add_argument("--output", required=True)
     package.add_argument("--image")
     package.add_argument("--key-id")
+    package.add_argument("--extra-image", action="append", help="service=ref@sha256:... (LAB lab-web)")
     args = parser.parse_args()
     handler = {"impact": cmd_impact, "plan": cmd_plan, "history": cmd_history, "manifest": cmd_manifest,
                "package": cmd_package}[args.command]

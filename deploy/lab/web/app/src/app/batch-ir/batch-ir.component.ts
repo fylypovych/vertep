@@ -11,8 +11,8 @@ import { LabApiService } from '../lab-api.service';
     <h1>Пакетна перевірка ir</h1>
     <section class="panel">
       <p class="muted">
-        Список кандидатів і докази; закриття — лише делеговане рішення власника
-        з повним незалежним доказом (сервер перевіряє все повторно).
+        Список кандидатів і докази. Лабораторія лише перевіряє повний незалежний доказ
+        (сервер перевіряє все повторно) і позначає Issue готовим; закриває його власник.
       </p>
       <button (click)="load()">Оновити</button>
       @if (error()) {
@@ -20,7 +20,7 @@ import { LabApiService } from '../lab-api.service';
       }
       <table>
         <thead>
-          <tr><th></th><th>Issue</th><th>Назва</th><th>Закритий?</th><th>Доказ прийнято?</th></tr>
+          <tr><th></th><th>Issue</th><th>Назва</th><th>Готовий до закриття?</th><th>Доказ прийнято?</th></tr>
         </thead>
         <tbody>
           @for (item of candidates(); track item['identifier']) {
@@ -48,13 +48,13 @@ import { LabApiService } from '../lab-api.service';
         <label>
           <input type="checkbox" data-testid="batch-ir-confirm"
                  [checked]="confirmed()" (change)="setConfirmed($event)">
-          Підтверджую небезпечну операцію делегованого закриття
+          Підтверджую позначку «готово до закриття власником»
         </label>
       </p>
       <button class="danger" data-testid="batch-ir-submit" (click)="submitEvidence()"
               [disabled]="!candidates().length">Прийняти доказ для вибраних</button>
       <button class="danger" data-testid="batch-ir-close" (click)="closeSelected()"
-              [disabled]="!confirmed()">Закрити вибрані (власник)</button>
+              [disabled]="!confirmed()">Позначити вибрані готовими для власника</button>
       @if (results().length) {
         <h2>Результати</h2>
         <pre>{{ json(results()) }}</pre>
@@ -167,7 +167,7 @@ export class BatchIrComponent {
     for (const item of targets) {
       this.api.closeIr(item['identifier'], evidence).subscribe({
         next: (outcome) => outcomes.push(
-          `${item['identifier']}: closed=${outcome['closed']} ` +
+          `${item['identifier']}: ready_for_owner_close=${outcome['ready_for_owner_close'] ?? false} ` +
           `${outcome['reason'] || outcome['rule'] || ''}`),
         error: (err) => outcomes.push(`${item['identifier']}: ${err?.message || err}`),
       });

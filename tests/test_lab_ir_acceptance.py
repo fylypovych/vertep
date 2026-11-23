@@ -28,6 +28,7 @@ class _FakeTransport(IssueTransport):
         super().__init__(dry_run=False)
         self.created = []
         self.closed = []
+        self.comments = []
         self.duplicates = []
         self.calls = 0
 
@@ -55,6 +56,11 @@ class _FakeTransport(IssueTransport):
         self.calls += 1
         self.closed.append({"number": issue_number, "comment": comment, "state_reason": state_reason})
         return {"number": issue_number, "state": "closed"}
+
+    def comment_issue(self, issue_number, comment):
+        self.calls += 1
+        self.comments.append({"number": issue_number, "comment": comment})
+        return {"number": issue_number, "commented": True}
 
 
 class _FlakyCreateTransport(_FakeTransport):
@@ -153,15 +159,16 @@ def test_ir_close_without_evidence_is_refused(tmp_path):
     assert transport.closed == []
 
 
-def test_unconfirmed_remote_close_never_becomes_durable_acceptance(tmp_path):
+def test_the_laboratory_never_asks_the_tracker_to_close(tmp_path):
+    """Owner decision 23.11.2026: only the owner closes Issues; the transport is untouched."""
     gate = _gate(tmp_path)
     _grant(gate, "delegate_close_ir", "ir.0.0.0.1")
-    class RefusedClose(_FakeTransport):
+    class NoClose(_FakeTransport):
         def close_issue(self, issue_number, comment="", state_reason="completed"):
-            return {"number": issue_number, "state": "open"}
-    governance = _gov(tmp_path, gate, RefusedClose())
-    assert not governance.delegate_close_ir("ir.0.0.0.1", _full_evidence())["closed"]
-    assert governance.closed() == {}
+            raise AssertionError("the laboratory must not close an Issue")
+    governance = _gov(tmp_path, gate, NoClose())
+    outcome = governance.delegate_close_ir("ir.0.0.0.1", _full_evidence())
+    assert outcome["closed"] is False and outcome["ready_for_owner_close"] is True
 
 
 def test_partial_test_results_are_rejected(tmp_path):
@@ -213,12 +220,15 @@ def test_close_happens_only_after_grant_and_full_evidence(tmp_path):
     governance = _gov(tmp_path, gate, transport)
 
     outcome = governance.delegate_close_ir("ir.0.0.0.1", _full_evidence())
-    assert outcome["allowed"] and outcome["closed"]
-    assert len(transport.closed) == 1
-    assert "qa-standalone" in transport.closed[0]["comment"]
+    # Verified and recorded as ready; the owner closes the Issue (decision 23.11.2026).
+    assert outcome["allowed"] and outcome["ready_for_owner_close"] and outcome["closed"] is False
+    assert transport.closed == []
+    assert "qa-standalone" in outcome["record"]["comment"]
+    # The laboratory wrote its summary on the Issue itself.
+    assert [c["comment"] for c in transport.comments] == [outcome["record"]["comment"]]
     effects = [r for r in gate.trail.records()
                if r.get("action") == "delegate_close_ir:effect"
-               and r.get("decision") == "CLOSED"]
+               and r.get("decision") == "READY_FOR_OWNER"]
     assert effects and effects[-1]["subject"] == "ir.0.0.0.1"
 
 
@@ -230,9 +240,9 @@ def test_close_retry_never_closes_twice(tmp_path):
 
     first = governance.delegate_close_ir("ir.0.0.0.1", _full_evidence())
     second = governance.delegate_close_ir("ir.0.0.0.1", _full_evidence())
-    assert first["closed"] and second["closed"]
+    assert first["ready_for_owner_close"] and second["ready_for_owner_close"]
     assert second.get("already") is True
-    assert len(transport.closed) == 1
+    assert transport.closed == []
     assert governance.closed().get("ir.0.0.0.1")
 
 
@@ -247,16 +257,17 @@ def test_atomic_ir_transfer_sequence(tmp_path):
     governance = _gov(tmp_path, gate, transport)
 
     outcome = governance.consolidate_ir(_source_ir(), _successors())
-    assert outcome["allowed"] and outcome["closed"]
+    assert outcome["allowed"] and outcome["ready_for_owner_close"] and outcome["closed"] is False
     assert outcome["created"] == ["ir.0.0.0.2", "ir.0.0.0.3"]
 
     # successors first — exactly two, with reserved and explicit numbers
     assert [c["title"] for c in transport.created] == [
         "ir.0.0.0.2 — Перевірка lease: черги", "ir.0.0.0.3 — Перевірка lease: відновлення"]
-    # only the source is closed, and only after verification, as a transfer
-    assert len(transport.closed) == 1
-    assert transport.closed[0]["number"] == 41
-    assert transport.closed[0]["state_reason"] == "not_planned"
+    # the source stays open: the owner closes it (as not_planned) after the verified transfer;
+    # the laboratory comments on the source with the successors
+    assert transport.closed == []
+    assert transport.comments and transport.comments[-1]["number"] == 41
+    assert "ir.0.0.0.2" in transport.comments[-1]["comment"]
 
     records = {r["identifier"]: r for r in governance.created()
                if r.get("identifier")}
@@ -276,7 +287,7 @@ def test_atomic_ir_transfer_sequence(tmp_path):
     # a repeated consolidation is a no-op
     again = governance.consolidate_ir(_source_ir(), _successors())
     assert again.get("already") is True
-    assert len(transport.closed) == 1
+    assert transport.closed == [] and len(transport.created) == 2
 
 
 def test_consolidation_without_grant_creates_nothing(tmp_path):
@@ -362,7 +373,7 @@ def test_crash_between_successors_leaves_source_open_then_retry_completes(tmp_pa
     stable.previous = list(flaky.created)
     governance.transport = stable
     retry = governance.consolidate_ir(_source_ir(), _successors())
-    assert retry["allowed"] and retry["closed"]
+    assert retry["allowed"] and retry["ready_for_owner_close"] and retry["closed"] is False
     assert retry["created"] == ["ir.0.0.0.2", "ir.0.0.0.3"]
     # only the successor missing after the crash is (re)created — exactly one
     assert len(stable.created) == 1
@@ -370,7 +381,7 @@ def test_crash_between_successors_leaves_source_open_then_retry_completes(tmp_pa
     identifiers = [r["identifier"] for r in governance.created()
                    if r.get("kind") == "ir"]
     assert sorted(identifiers) == ["ir.0.0.0.2", "ir.0.0.0.3"]
-    assert len(stable.closed) == 1
+    assert stable.closed == []  # the owner closes the source
 
 
 # -- L5: one approval → exactly one issue ------------------------------
@@ -460,12 +471,13 @@ def test_evidence_issue_number_must_carry_the_identifier(tmp_path):
     assert transport.closed == []
 
 
-def test_accepted_ir_is_closed_as_completed(tmp_path):
+def test_accepted_ir_is_ready_for_the_owner_to_close(tmp_path):
     gate = _gate(tmp_path)
     _grant(gate, "delegate_close_ir", "ir.0.0.0.1")
     transport = _FakeTransport()
-    assert _gov(tmp_path, gate, transport).delegate_close_ir("ir.0.0.0.1", _full_evidence())["closed"]
-    assert transport.closed[0]["state_reason"] == "completed"
+    outcome = _gov(tmp_path, gate, transport).delegate_close_ir("ir.0.0.0.1", _full_evidence())
+    assert outcome["ready_for_owner_close"] and outcome["closed"] is False
+    assert transport.closed == []
 
 
 @pytest.mark.parametrize("issue", ["i.0.0.0.7", "var.0.0.0.7", "lab.0.0.0.7", "ir.0.0.0.7"])

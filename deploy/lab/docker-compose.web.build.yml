@@ -1,0 +1,15 @@
+# Development only: build the LAB images from this checkout instead of the signed
+# package (bootstrap-lab.sh --build-from-source). Production installs never use it.
+services:
+  lab-control:
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile
+  lab-executor:
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile
+  lab-web:
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile.web

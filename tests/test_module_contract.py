@@ -212,6 +212,25 @@ def test_lab_module_only_on_separate_nonproduction_vm_node(tmp_path):
     assert reg.dispatch_targets("lab") == {}
 
 
+def test_a_lab_node_hosts_the_lab_and_no_production_module(tmp_path):
+    """#523 / #491 L1: the LAB node is separate — no production module shares it, and the
+    LAB is not placed on a node that already runs other modules."""
+    reg = registry(tmp_path)
+    lab = v2("lab", kind="application", placement={"target": "isolated_lab"})
+    text = v2("textmod")
+    reg.report_node("labvm", [lab, text])
+    reg.report_node("othervm", [lab, text])
+    for node in ("labvm", "othervm"):
+        reg.set_node_profile(node, "nonproduction", "vm")
+    reg.set_placement("lab", ["labvm"])
+    with pytest.raises(ValueError, match="reserved for the LAB"):
+        reg.set_placement("textmod", ["labvm"])
+    reg.set_placement("textmod", ["othervm"])
+    with pytest.raises(ValueError, match="separate node: textmod"):
+        reg.set_placement("lab", ["othervm"])
+    assert set(reg.dispatch_targets("lab")) == {"labvm"}
+
+
 # -- AC3 / AC6: integration through WorkflowRuntime and Dispatcher -----------------
 
 @pytest.fixture

@@ -42,7 +42,7 @@ services:
           memory: 4G
     healthcheck:
       test: ["CMD", "python", "-c",
-             "import urllib.request,json; d=json.load(urllib.request.urlopen('http://localhost:8000/api/lab/status', timeout=5)); raise SystemExit(0 if d.get('policy',{}).get('activated') else 1)"]
+             "import urllib.request,json; d=json.load(urllib.request.urlopen('http://localhost:8000/api/lab/healthz', timeout=5)); raise SystemExit(0 if d.get('policy_activated') else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -96,7 +96,7 @@ def test_lab_images_set_readable_modes_explicitly():
     assert "chmod -R a+rX $VERTEP_LAB_HOME/lab" in sandbox
 
 
-FINISH = re.compile(r"web_port=\$\(sed -n 's/\^LAB_WEB_PORT=//p'.*?\nprintf 'і відкрийте http://127\.0\.0\.1:%s\\n' \"\$web_port\"\n", re.S)
+FINISH = re.compile(r"web_port=\$\(sed -n 's/\^LAB_WEB_PORT=//p'.*?\nprintf 'Панель \(HTTPS\): https://%s:%s\\n' \"\$vm_address\" \"\$web_port\"\n", re.S)
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
@@ -108,5 +108,6 @@ def test_the_finish_message_names_the_real_address(tmp_path, env_port, expected_
               "hostname(){ echo '192.0.2.10 10.0.0.5'; }\n" + FINISH.search(LAB_BOOTSTRAP).group(0))
     result = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    assert f"ssh -L {expected_port}:127.0.0.1:{expected_port} lab@192.0.2.10" in result.stdout
-    assert f"http://127.0.0.1:{expected_port}" in result.stdout and "<" not in result.stdout
+    # #491 L2/L8: the HTTPS panel is published on the VM address; no SSH tunnel is needed.
+    assert f"https://192.0.2.10:{expected_port}" in result.stdout
+    assert "ssh -L" not in result.stdout and "<" not in result.stdout

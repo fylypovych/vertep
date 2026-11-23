@@ -200,6 +200,7 @@ class ModuleInstanceRegistry:
                 raise ValueError("Unknown module: no node reports this module")
             for manifest in definitions:
                 self._check_placement(manifest, node_ids)
+                self._check_lab_separation(module_id, manifest, node_ids)
             current = self.placement.placement.get(module_id, [])
             if any(m.placement["scaling"] == "single_owner" for m in definitions):
                 owners = [i for i in self._instances.values()
@@ -220,6 +221,21 @@ class ModuleInstanceRegistry:
                 profile = self.placement.node_profile(node_id)
                 if profile != {"environment": "nonproduction", "isolation": "vm"}:
                     raise ValueError("LAB placement requires a separate nonproduction VM node")
+
+    def _lab_modules(self) -> set[str]:
+        manifests = [*(i.manifest for i in self._instances.values()), *self._installed.values()]
+        return {m.module_id for m in manifests if m.placement["target"] == "isolated_lab"}
+
+    def _check_lab_separation(self, module_id: str, manifest: ModuleManifest, node_ids: list[str]) -> None:
+        """#523 / #491 L1: a LAB node is separate — it hosts the LAB and nothing else."""
+        lab_modules = self._lab_modules() | ({module_id} if manifest.placement["target"] == "isolated_lab" else set())
+        for other, placed in self.placement.placement.items():
+            if other == module_id or not set(placed) & set(node_ids):
+                continue
+            if module_id in lab_modules and other not in lab_modules:
+                raise ValueError(f"LAB placement requires a separate node: {other} is placed there")
+            if module_id not in lab_modules and other in lab_modules:
+                raise ValueError(f"The node is reserved for the LAB ({other}); place {module_id} elsewhere")
 
     def set_lifecycle_state(self, module_id: str, state: str | None, manifest: ModuleManifest | None = None) -> None:
         with self._lock:

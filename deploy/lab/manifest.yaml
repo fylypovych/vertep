@@ -1,0 +1,38 @@
+# The isolated Vertep laboratory as a signed component (#491 L5, #523).
+# Placement isolated_lab: a separate nonproduction VM only, no production database
+# schema, Docker socket, Redis or secrets. The component release pins lab-control
+# (container.image) and lab-web by digest; bootstrap-lab.sh verifies the package.
+schema_version: "2.0"
+name: lab
+module_id: lab
+version: "0.0.4.36"
+kind: application
+label: Лабораторія
+core_compatibility: {min: "0.0.4.11", max: "0.0.9.99"}
+dependencies: []
+capabilities: []
+resource_requirements:
+  min_vram_mb: 0
+  min_cpu_cores: 2
+  min_ram_mb: 4096
+placement:
+  target: isolated_lab
+  scaling: single_owner
+  requires_gpu: false
+permissions: []
+secret_refs: []
+migrations: []
+services:
+  - {name: api}
+health:
+  self_test: health
+  timeout_seconds: 15
+publisher: vertep
+provenance:
+  repository: github.com/fylypovych/vertep
+container:
+  image: "ghcr.io/fylypovych/vertep-lab-control@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  port: 8000
+description: >
+  Автономна лабораторія Vertep на окремій VM: власні gate, аудит, GPU-lease і
+  HTTPS-панель адміністратора; вхід обліковим записом адміністратора Vertep.

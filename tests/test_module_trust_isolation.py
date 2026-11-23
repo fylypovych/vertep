@@ -416,6 +416,22 @@ def test_admin_only_governance_and_complete_audit(gateway, monkeypatch):
     assert not any("notes-secret" in json.dumps(e) for e in trail)
 
 
+def test_lab_is_refused_on_a_production_node_and_gets_no_database_both_audited(gateway):
+    """#523 AC1/AC3: the HTTP placement of the LAB on a production node is refused and
+    audited; with its own module token the LAB gets no production database."""
+    client = gateway["client"]
+    refused = client.put("/api/nodes/module-registry/placement/lab", json={"node_ids": ["app-node"]})
+    assert refused.status_code == 422 and "nonproduction" in refused.json()["detail"]
+    database = client.get("/api/modules/self/database", headers={"x-vertep-module-token": token("lab", "lab-vm")})
+    assert database.status_code == 404
+    trail = client.get("/api/nodes/module-registry/audit").json()["events"]
+    placement = [e for e in trail if e["action"] == "module.placement" and e["outcome"] == "denied"]
+    assert placement and placement[-1]["module"] == "lab" and "nonproduction" in placement[-1]["reason"]
+    assert any(e["action"] == "module.database" and e["outcome"] == "denied" and e.get("module") == "lab"
+               and e.get("reason") == "no_module_schema" for e in trail)
+    assert set(gateway["registry"].dispatch_targets("lab")) == {"lab-vm"}  # the refusal changed nothing
+
+
 def test_worker_token_issue_requires_placement_approval_and_worker_auth(gateway, monkeypatch):
     client = gateway["client"]
     monkeypatch.setenv("NODE_API_TOKEN", "node-token")

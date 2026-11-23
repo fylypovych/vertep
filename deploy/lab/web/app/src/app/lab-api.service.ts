@@ -85,6 +85,15 @@ export class LabApiService {
       { source, successors, reason }, { headers: this.owner.headers() });
   }
 
+  /** #491 L4: one LAB settings store; secrets are write-only (only «set» comes back). */
+  labSettings(): Observable<Record<string, any>> {
+    return this.http.get<Record<string, any>>(`${BASE}/settings`);
+  }
+
+  saveLabSettings(settings: Record<string, any>): Observable<Record<string, any>> {
+    return this.http.put<Record<string, any>>(`${BASE}/settings`, { settings });
+  }
+
   probe(kind: string, subject = ''): Observable<Record<string, any>> {
     return this.http.get<Record<string, any>>(`${BASE}/issues/${kind}`,
       { params: { subject } });

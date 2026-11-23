@@ -168,8 +168,22 @@ jobs:
                 --metadata-file "${out}/image.json" \
                 --file "$(field "$component" image file)" "$(field "$component" image context)"
               digest="$(jq -r '."containerimage.digest"' "${out}/image.json")"
+              # A component with several images (LAB: lab-web, #491 L5) pins each one in its package.
+              extra_args=()
+              count="$(jq --arg c "$component" '.[$c].extra_images // [] | length' plan.json)"
+              for index in $(seq 0 $((count - 1))); do
+                extra="$(jq -c --arg c "$component" --argjson i "$index" '.[$c].extra_images[$i]' plan.json)"
+                extra_ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/$(jq -r .name <<<"$extra")"
+                docker buildx build --platform linux/amd64,linux/arm64 --push \
+                  --tag "${extra_ref}:component-${version}" \
+                  --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+                  --metadata-file "${out}/image-${index}.json" \
+                  --file "$(jq -r .file <<<"$extra")" "$(jq -r .context <<<"$extra")"
+                extra_digest="$(jq -r '."containerimage.digest"' "${out}/image-${index}.json")"
+                extra_args+=(--extra-image "$(jq -r .service <<<"$extra")=${extra_ref}@${extra_digest}")
+              done
               python scripts/component-release.py package --component "$component" --private-key "$module_key" \
-                --image "${ref}@${digest}" --output "${out}/package.json"
+                --image "${ref}@${digest}" --output "${out}/package.json" "${extra_args[@]}"
               assets+=("${out}/package.json" "${out}/package.json.sha256")
               manifest_args+=(--image "$digest" --artifact "package.json=${out}/package.json")
             fi

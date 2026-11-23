@@ -173,15 +173,26 @@ def test_shared_images_networks_and_volumes_are_retained(install):
     assert runtime.volumes and runtime.networks
 
 
-@pytest.mark.parametrize("kind",["file","unit","new-data"])
+@pytest.mark.parametrize("kind",["file","unit"])
 def test_changed_scope_requires_new_confirmation(install,kind):
     host,runtime,journal=install
     selected=r.plan(host,True)
     if kind=="file":(host.root/"scripts/vertep").write_text("changed")
-    elif kind=="unit":host.unit_path("vertep-core.service").write_text("some other service")
-    else:(host.root/"storage/new.txt").write_text("not confirmed")
+    else:host.unit_path("vertep-core.service").write_text("some other service")
     with pytest.raises(RuntimeError):r.execute(host,selected,journal)
     assert "own" in runtime.containers
+
+
+def test_data_written_after_the_confirmation_is_removed_not_blocking(install):
+    """#524: running services keep writing data (logs) until they stop; the confirmed
+    data root is removed with everything in it instead of failing on changed content."""
+    host,runtime,journal=install
+    selected=r.plan(host,True)
+    (host.root/"storage/new.txt").write_text("written by a running service")
+    state=r.execute(host,selected,journal)
+    assert state["state"] in {"SUCCEEDED","PARTIAL"}
+    assert not (host.root/"storage/new.txt").exists()
+    assert "own" not in runtime.containers
 
 
 def test_interrupted_removal_resumes_without_repeating_completed_steps(install):
@@ -293,7 +304,7 @@ def test_removal_confirmation(install, monkeypatch, answer):
     prompts = []
     def reply(prompt):
         prompts.append(prompt)
-        return answer
+        return "none" if prompt.startswith("Оберіть копію") else answer
     monkeypatch.setattr("builtins.input", reply)
     executed = []
     def execute(host, selected, journal, *, resume):
@@ -303,8 +314,9 @@ def test_removal_confirmation(install, monkeypatch, answer):
     assert r.main(["--root",str(host.root),"--dry-run"])==0
     assert not prompts and not executed
     assert r.main(["--root", str(host.root)]) == (0 if answer == "YES" else 1)
-    assert prompts == (["Підтвердити видалення за цим переліком? [YES/NO]: "] if answer is not None else [])
-    assert executed == ([r.plan(host)["plan_sha256"]] if answer == "YES" else [])
+    assert prompts == (["Оберіть копію [full/db/none]: ", "Підтвердити видалення за цим переліком? [YES/NO]: "]
+                       if answer is not None else [])
+    assert executed == ([r.plan(host, True)["plan_sha256"]] if answer == "YES" else [])
     assert "own" in runtime.containers
     assert not any("rm" in call or "disable" in call for call in runtime.calls)
     assert (host.root/"scripts/vertep").exists()

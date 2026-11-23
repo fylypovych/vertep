@@ -87,10 +87,11 @@ class IssueTransport:
     def identifiers(self):
         return []
 
-    def close_issue(self, issue, comment: str = "", state_reason: str = "completed") -> dict:
-        """Close an issue — reachable only through a delegated, gated decision."""
+    def comment_issue(self, issue, comment: str) -> dict:
+        """Post the laboratory's summary comment; the Issue state is never changed —
+        only the owner closes Issues (owner decision 23.11.2026)."""
         if self.dry_run:
-            return {"number": issue, "state": "closed", "dry_run": True}
+            return {"number": issue, "commented": False, "dry_run": True}
         raise NotImplementedError
 
 
@@ -153,10 +154,10 @@ class GhIssueTransport(IssueTransport):
         output = self._gh("api", "--paginate", f"repos/{self.repository}/issues?state=all&per_page=100", "--jq", '.[] | (.title + " " + (.body // ""))')
         return re.findall(r"(?:i|ir|ri|rt|lab|var)\.\d+\.\d+\.\d+\.\d+", output)
 
-    def close_issue(self, issue, comment: str = "", state_reason: str = "completed") -> dict:
+    def comment_issue(self, issue, comment: str) -> dict:
         if self.dry_run:
-            return {"number": issue, "state": "closed", "dry_run": True}
-        return GitHubApiTransport.close_issue(self, issue, comment, state_reason)
+            return {"number": issue, "commented": False, "dry_run": True}
+        return GitHubApiTransport.comment_issue(self, issue, comment)
 
 
 class GitHubApiTransport(IssueTransport):
@@ -265,29 +266,26 @@ class GitHubApiTransport(IssueTransport):
                 return result
             page += 1
 
-    def close_issue(self, issue, comment: str = "", state_reason: str = "completed") -> dict:
+    def comment_issue(self, issue, comment: str) -> dict:
+        """Post the summary comment once (idempotent marker); never changes the state."""
         if self.dry_run:
-            return {"number": issue, "state": "closed", "dry_run": True}
+            return {"number": issue, "commented": False, "dry_run": True}
         try:
             number = int(issue)
         except (TypeError, ValueError) as error:
             raise GovernanceError(
-                f"closing an issue needs its GitHub number, got {issue!r}") from error
+                f"commenting needs the GitHub issue number, got {issue!r}") from error
         remote = self.get_issue(number)
         if not isinstance(remote, dict) or remote.get("number") != number:
-            raise GovernanceError("Remote close target is unconfirmed")
-        if str(remote.get("state", "")).lower() == "closed":
-            return {"number": number, "state": "closed", "dry_run": False, "already": True}
-        if comment:
-            marker = f"<!-- vertep-lab-close:{hashlib.sha256((str(number) + comment).encode()).hexdigest()} -->"
-            comments = self._request("GET", f"/issues/{number}/comments?per_page=100")
-            if not isinstance(comments, list):
-                raise GovernanceError("Remote close comment history is unconfirmed")
-            if not any(marker in str(item.get("body", "")) for item in comments):
-                self._request("POST", f"/issues/{number}/comments", {"body": comment + "\n\n" + marker})
-        data = self._request("PATCH", f"/issues/{number}", {"state": "closed", "state_reason": state_reason})
-        state = str(data.get("state", "closed")).lower() if isinstance(data, dict) else "closed"
-        return {"number": number, "state": state, "dry_run": False}
+            raise GovernanceError("Remote comment target is unconfirmed")
+        marker = f"<!-- vertep-lab-summary:{hashlib.sha256((str(number) + comment).encode()).hexdigest()} -->"
+        comments = self._request("GET", f"/issues/{number}/comments?per_page=100")
+        if not isinstance(comments, list):
+            raise GovernanceError("Remote comment history is unconfirmed")
+        if any(marker in str(item.get("body", "")) for item in comments):
+            return {"number": number, "commented": True, "already": True, "dry_run": False}
+        self._request("POST", f"/issues/{number}/comments", {"body": comment + "\n\n" + marker})
+        return {"number": number, "commented": True, "dry_run": False}
 
 
 def default_transport() -> IssueTransport:
@@ -567,8 +565,8 @@ class Governance:
                     "problems": verdict.get("problems", [])}
         prior = self.closed().get(str(issue))
         if isinstance(prior, dict):
-            return {"allowed": True, "closed": True, "already": True,
-                    "issue": issue, "record": prior}
+            return {"allowed": True, "closed": bool(prior.get("close")), "already": True,
+                    "ready_for_owner_close": not prior.get("close"), "issue": issue, "record": prior}
         try:
             self.gate.require(Action.DELEGATE_CLOSE_IR, actor=self.actor, subject=issue)
         except PolicyDenied as error:
@@ -591,35 +589,32 @@ class Governance:
                 return {"allowed": False, "closed": False, "rule": "unconfirmed_remote_target"}
             if title.split(" ", 1)[0] != str(issue):
                 return {"allowed": False, "closed": False, "rule": "mismatched_remote_target"}
-        comment = ("Закрито за делегованим рішенням власника: повний доказ "
+        comment = ("Готово до закриття власником: повний доказ "
                    f"({evidence.get('version')} / {evidence.get('commit')}), "
                    "тести пройдено, незалежний review "
                    f"({evidence.get('reviewer')}).")
+        # Only the owner closes Issues (#487 §2, #491 §8.1; owner decision 23.11.2026):
+        # the verified proof is recorded as ready for the owner, the Issue state is untouched.
+        # The laboratory writes its summary comment on the Issue; it never closes it.
         try:
-            close = self.transport.close_issue(target, comment=comment)
-            if close.get("state") != "closed" or close.get("dry_run"):
-                raise GovernanceError("Remote close was not confirmed")
-        except Exception as error:  # fail closed: the issue simply stays open
-            self.gate.trail.append(actor=self.actor, action="delegate_close_ir",
-                                   subject=issue, decision="FAILED",
-                                   rule="transport_error", reason=str(error))
-            return {"allowed": True, "closed": False, "issue": issue,
-                    "reason": f"close failed: {error}; source stays open"}
-        record = {"issue": issue, "closed_at": datetime.now(timezone.utc).isoformat(),
+            commented = self.transport.comment_issue(target, comment)
+        except Exception as error:  # the readiness stands; the comment failure is reported
+            commented = {"commented": False, "error": str(error)}
+        record = {"issue": issue, "ready_at": datetime.now(timezone.utc).isoformat(),
                   "actor": self.actor, "reviewer": evidence.get("reviewer"),
-                  "close": close, "comment": comment}
+                  "target": target, "comment": comment, "commented": commented,
+                  "ready_for_owner_close": True}
         payload = self.closed()
         payload[str(issue)] = record
         write_json(self._closed_path, payload)
         self.gate.trail.append(actor=self.actor, action="delegate_close_ir:effect",
-                               subject=issue, decision="CLOSED", rule="owner_grant",
-                               reason=str(close))
+                               subject=issue, decision="READY_FOR_OWNER", rule="owner_grant",
+                               reason="verified; the owner closes the Issue")
         append_jsonl(self.state_dir / "governance.jsonl",
-                     {"at": record["closed_at"], "action": "delegate_close_ir",
-                      "subject": issue, "close": close})
-        closed_state = str(close.get("state", "closed")).lower() == "closed"
-        return {"allowed": True, "closed": closed_state, "issue": issue,
-                "close": close, "record": record}
+                     {"at": record["ready_at"], "action": "delegate_close_ir",
+                      "subject": issue, "ready_for_owner_close": True})
+        return {"allowed": True, "closed": False, "ready_for_owner_close": True,
+                "issue": issue, "record": record}
 
     @serialized
     def create_issue(self, kind: str, title: str, *, identifier: str = "",
@@ -747,8 +742,9 @@ class Governance:
             raise GovernanceError("at least one successor is required")
 
         prior = self.transfers().get(source_id)
-        if isinstance(prior, dict) and prior.get("closed"):
-            return {"allowed": True, "already": True, "closed": True,
+        if isinstance(prior, dict) and (prior.get("closed") or prior.get("ready_for_owner_close")):
+            return {"allowed": True, "already": True, "closed": bool(prior.get("closed")),
+                    "ready_for_owner_close": not prior.get("closed"),
                     "created": list(prior.get("successors", [])),
                     "issue": source_id, "reason": "already consolidated"}
 
@@ -888,37 +884,33 @@ class Governance:
         comment = (reason or
                    f"Перенесено залишок {sorted(remaining)} до "
                    f"{', '.join(created)}; перевірено зв'язки й повноту перенесення.")
+        # Only the owner closes Issues (#487 §2, #491 §8.1; owner decision 23.11.2026): the
+        # verified transfer is recorded, the laboratory comments on the source and leaves it
+        # open for the owner's close (as not_planned).
+        source_record = self._record_by_identifier(source_id) or {}
+        source_number = source.get("number") or source_record.get("issue", {}).get("number")
         try:
-            source_record = self._record_by_identifier(source_id) or {}
-            source_number = source.get("number") or source_record.get("issue", {}).get("number")
-            if self.transport.dry_run or not source_number:
-                raise GovernanceError("Verified numeric source issue is required before transfer close")
-            # A transferred remainder is not a completed acceptance (AGENTS.md §4.5, §4.7).
-            close = self.transport.close_issue(
-                source_number, comment=comment, state_reason="not_planned")
-            if close.get("state") != "closed" or close.get("dry_run"):
-                raise GovernanceError("Remote source close was not confirmed")
+            commented = (self.transport.comment_issue(source_number, comment) if source_number
+                         else {"commented": False, "error": "source issue number is unknown"})
         except Exception as error:
-            return {"allowed": True, "created": created, "closed": False,
-                    "rule": "transport_error",
-                    "reason": f"close failed: {error}; source stays open"}
+            commented = {"commented": False, "error": str(error)}
         transfer_record = {"source": source_id, "successors": created,
                            "remaining_criteria": list(remaining),
-                           "closed": True,
-                           "closed_at": datetime.now(timezone.utc).isoformat(),
-                           "close": close, "reason": reason}
+                           "closed": False, "ready_for_owner_close": True,
+                           "verified_at": datetime.now(timezone.utc).isoformat(),
+                           "comment": comment, "commented": commented, "reason": reason}
         payload = self.transfers()
         payload[source_id] = transfer_record
         write_json(self._transfers_path, payload)
         self.gate.trail.append(actor=self.actor, action="consolidate_ir:effect",
                                subject=source_id, decision="CONSOLIDATED",
                                rule="owner_grant",
-                               reason=f"closed source, created {', '.join(created)}")
+                               reason=f"created {', '.join(created)}; source left open for the owner")
         append_jsonl(self.state_dir / "governance.jsonl",
-                     {"at": transfer_record["closed_at"], "action": "consolidate_ir",
+                     {"at": transfer_record["verified_at"], "action": "consolidate_ir",
                       "subject": source_id, "successors": created})
-        return {"allowed": True, "created": created, "closed": True,
-                "issue": source_id, "close": close, "record": transfer_record}
+        return {"allowed": True, "created": created, "closed": False,
+                "ready_for_owner_close": True, "issue": source_id, "record": transfer_record}
 
     def push(self) -> dict:
         return self._refuse_or_report(Action.PUSH, "")

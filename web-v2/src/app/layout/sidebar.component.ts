@@ -1,6 +1,8 @@
 import { TPipe } from '../core/i18n/t.pipe';
 import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { RouterModule } from '@angular/router';
+import { HttpClient, HttpContext } from '@angular/common/http';
+import { BACKGROUND_REQUEST } from '../core/interceptors/auth.interceptor';
 import { CommonModule } from '@angular/common';
 import { SidebarService } from '../core/services/sidebar.service';
 import { SystemApiService } from '../core/api/system.api';
@@ -218,11 +220,17 @@ export class SidebarComponent implements OnInit, OnDestroy {
 
   /** READY signed module UI extensions; an unavailable list adds nothing. */
   moduleItems = signal<NavItem[]>([]);
+  /** #491 L3: «Лабораторія» for an administrator, only when CORE has LAB_PANEL_URL. */
+  labConfigured = signal(false);
 
   visibleGroups = computed(() => {
     const isAdmin = this.policy.userRole() === 'admin';
     const modules = this.moduleItems();
-    const groups = modules.length ? [...this.navGroups, { label: 'Розширення модулів', items: modules }] : this.navGroups;
+    const lab: NavItem = { id: 'lab', path: '/lab', label: 'Лабораторія', icon: MODULE_ICON, adminOnly: true };
+    const navGroups = this.labConfigured()
+      ? this.navGroups.map(group => group.label === 'Система' ? { ...group, items: [...group.items, lab] } : group)
+      : this.navGroups;
+    const groups = modules.length ? [...navGroups, { label: 'Розширення модулів', items: modules }] : navGroups;
     return groups
       .map(group => ({
         label: group.label,
@@ -247,7 +255,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
   private statusTimer?: ReturnType<typeof setInterval>;
 
   constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService,
-              private modulesApi: ModulesApiService) {}
+              private modulesApi: ModulesApiService, private http: HttpClient) {}
 
   ngOnInit(): void {
     fetch('/ui-version.json', { cache: 'no-store' })
@@ -259,6 +267,12 @@ export class SidebarComponent implements OnInit, OnDestroy {
     // version and API compatibility are re-checked, so a reconnect clears the
     // state and an incompatible CORE is reported without reloading the page.
     this.statusTimer = setInterval(() => this.checkCore(), 30_000);
+    // A background probe: a refusal (moderator, no session yet) never redirects or reports an error.
+    this.http.get<{ url: string | null }>('/api/lab/panel',
+        { context: new HttpContext().set(BACKGROUND_REQUEST, true) }).subscribe({
+      next: ({ url }) => this.labConfigured.set(!!url),
+      error: () => this.labConfigured.set(false),  // a moderator gets 403: no entry
+    });
     this.modulesApi.uiExtensions().subscribe(list => this.moduleItems.set(list.map(extension => ({
       id: 'module-' + extension.module_id,
       path: '/modules/' + extension.module_id,

@@ -102,5 +102,9 @@ def test_restore_removes_directories_created_after_the_snapshot(monkeypatch, tmp
 
     assert _restore(client, snapshot).status_code == 200
     assert not (config / "brands" / "added").exists()
-    assert (config / "brands" / "kept" / "brand.json").is_file()
+    assert (config / "brands" / "kept" / "brand.json").read_text(encoding="utf-8") == "{}"
     assert (config / "empty-in-snapshot").is_dir()  # an empty directory of the snapshot is restored
+    # The stand symptom: the brand removed by the restore can be created again (no 409).
+    (config / "brands" / "added").mkdir()
+    (config / "brands" / "added" / "brand.json").write_text('{"id": "added"}', encoding="utf-8")
+    assert (config / "brands" / "added" / "brand.json").read_text(encoding="utf-8") == '{"id": "added"}'

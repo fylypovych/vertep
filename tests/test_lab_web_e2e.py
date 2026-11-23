@@ -33,6 +33,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import pytest
+from core import lab_identity
 from tests.lab_evidence_fixture import signed_contract_evidence
 from tests.test_lab_github_transport import _GitHub
 
@@ -199,6 +200,8 @@ class Lab:
             "LAB_GITHUB_REPOSITORY": "owner/repo",
             "LAB_EVIDENCE_ROOT": str(tmp_path / "controlled-evidence"),
             "LAB_REVIEW_TRUST_ROOT": str(tmp_path / "controlled-review-trust"),
+            # #491 L3: the LAB trusts CORE's identity key (the fixture points CORE at a temp key).
+            "LAB_VERTEP_IDENTITY_KEY": lab_identity.public_key_pem(),
             API_PORT_ENV: str(self.api_port),
         }
         runner = tmp_path / "lab_web_e2e_app.py"
@@ -215,8 +218,10 @@ class Lab:
         self.api = subprocess.Popen(
             [sys.executable, str(runner)], cwd=ROOT, env=self.env,
             stdout=self.api_log, stderr=subprocess.STDOUT)
+        # Every LAB API call is an administrator's (#491 L2): the harness uses the service token.
         self.client = httpx.Client(base_url=f"http://127.0.0.1:{self.api_port}",
-                                   trust_env=False, timeout=20)
+                                   trust_env=False, timeout=20,
+                                   headers={"X-Lab-Owner-Token": OWNER_TOKEN})
         _wait_until(lambda: self._api_up(), message="lab API")
         self.web = ThreadingHTTPServer(("127.0.0.1", 0), _StaticProxy)
         self.web.dist = dist
@@ -273,7 +278,8 @@ class Lab:
 
 
 @pytest.fixture
-def lab(tmp_path, angular_build):
+def lab(tmp_path, angular_build, monkeypatch):
+    monkeypatch.setenv("LAB_IDENTITY_KEY_FILE", str(tmp_path / "core-lab-identity.key"))
     environment = Lab(tmp_path, angular_build)
     try:
         yield environment
@@ -338,8 +344,17 @@ def test_real_backend_browser_and_cli_parity(lab):
         page = browser.new_page(base_url=lab.base_url)
         page.set_default_timeout(10_000)
 
+        # #491 L3/L2: without a sign-in every read is refused and the panel offers Vertep login.
+        page.goto("/issues")
+        expect(page.get_by_test_id("vertep-login")).to_have_attribute("href", "/api/lab/login")
+        expect(page.get_by_test_id("issue-ir.0.0.9.1")).to_have_count(0)
+        # CORE redirects back with the assertion in the fragment; the panel keeps it in
+        # memory, removes it from the address bar and sends it as X-Vertep-Identity.
+        page.goto("/dashboard#vertep_identity=" + lab_identity.issue("root", "admin"))
+        expect(page.get_by_test_id("vertep-signed-in")).to_be_visible()
+        assert "vertep_identity" not in page.url
+
         # U2: dashboard reads the same live state the API/CLI expose.
-        page.goto("/dashboard")
         expect(page.get_by_test_id("policy-activated")).to_have_text("true")
         expect(page.get_by_test_id("dashboard-queue")).to_have_text("1")
         expect(page.get_by_test_id("dashboard-roles")).to_contain_text("reviewer")
@@ -381,10 +396,12 @@ def test_real_backend_browser_and_cli_parity(lab):
         assert lab.cli("grant", "delegate_close_ir", "--subject", "ir.0.0.9.1",
                        "--owner-token", OWNER_TOKEN)["granted"] is True
         run.click()
+        # The transfer is verified and left for the owner, who closes the source (23.11.2026).
         expect(page.get_by_test_id("consolidate-outcome")).to_contain_text(
-            '"closed": true')
+            '"ready_for_owner_close": true')
         transfers = lab.client.get("/api/lab/transfers").json()["transfers"]
-        assert transfers["ir.0.0.9.1"]["closed"] is True
+        assert transfers["ir.0.0.9.1"]["closed"] is False
+        assert transfers["ir.0.0.9.1"]["ready_for_owner_close"] is True
         assert transfers["ir.0.0.9.1"]["successors"] == ["ir.0.0.9.2"]
         expect(page.get_by_test_id("consolidate-transfers")).to_contain_text(
             "ir.0.0.9.2")
@@ -431,6 +448,17 @@ def test_real_backend_browser_and_cli_parity(lab):
         assert expected_settings["telegram"]["info"] is True
         assert {key: value for key, value in lab.cli("notify-settings").items()
                 if key != "__rc"} == expected_settings
+
+        # #491 L4: LAB settings through the one API; the CLI reads the same store and a
+        # secret goes in but never comes back.
+        page.get_by_test_id("lab-settings-github_repository").fill("acme/lab-browser")
+        page.get_by_test_id("lab-settings-github_token").fill("ghp-browser-secret")
+        page.get_by_test_id("lab-settings-save").click()
+        expect(page.get_by_test_id("lab-settings-saved")).to_be_visible()
+        api_settings = lab.client.get("/api/lab/settings").json()
+        assert api_settings["github_repository"] == "acme/lab-browser" and api_settings["github_token_set"]
+        assert "ghp-browser-secret" not in json.dumps(api_settings)
+        assert {key: value for key, value in lab.cli("settings", "show").items() if key != "__rc"} == api_settings
 
         # U3: the combined report is configurable and identical to the CLI's.
         page.get_by_test_id("nav-reports").click()

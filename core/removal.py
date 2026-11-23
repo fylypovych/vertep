@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,9 @@ import uuid
 from contextlib import contextmanager
 
 DATA = {"config", "tls", "data", "storage", "models", "logs", "backups", ".env", ".update-backup.key"}
+#: The executor's own fence and marker live under config/ until the end of the removal.
+KEPT_DURING_REMOVAL = {"config/update/update.lock", "config/update/update.lock.guard",
+                       "config/removal-in-progress.json"}
 UNIT_NAMES = (
     "vertep-core.service", "vertep-worker.service", "vertep-comfyui.service",
     "vertep-update.service", "vertep-update.path", "vertep-update-check.service", "vertep-update.timer",
@@ -20,6 +24,10 @@ UNIT_NAMES = (
     "vertep-host-health.service", "vertep-host-health.timer",
 )
 JOURNAL_BASE = Path("/var/lib/vertep-remove")
+# #524: copies made before removal live outside every resource the removal deletes.
+BACKUP_BASE = "var/backups/vertep"
+BACKUP_MODES = {"full": "повна (файли й БД)", "db": "лише БД", "none": "без резервної копії"}
+BACKUP_TIMEOUT = 3600
 
 
 def read(path, default=None):
@@ -107,8 +115,8 @@ class Host:
         self.system = system.resolve()
         self.runner = runner
 
-    def command(self, args):
-        result = self.runner(args, capture_output=True, text=True, timeout=120, check=False)
+    def command(self, args, timeout=120):
+        result = self.runner(args, capture_output=True, text=True, timeout=timeout, check=False)
         if result.returncode:
             # Do not reflect command output, env values or credentials into receipts.
             raise RuntimeError("Команда не виконана: " + args[0] + " " + args[1])
@@ -252,6 +260,20 @@ def image_owned(host, ident, provenance, signed):
     return False, "Походження образу не зафіксоване: " + ident
 
 
+def data_files(host, selected):
+    """Every data file with its SHA256, for --dry-run and the journal only. Not part of
+    the confirmation: running services change these until they are stopped (#524)."""
+    files = []
+    for item in selected.get("data", []):
+        path = host.root / item["path"]
+        entries = sorted(path.rglob("*")) if path.is_dir() and not path.is_symlink() else [path]
+        for entry in entries:
+            name = entry.relative_to(host.root).as_posix()
+            if entry.is_file() and not entry.is_symlink() and name not in KEPT_DURING_REMOVAL:
+                files.append({"path": name, "sha256": digest(entry)})
+    return files
+
+
 def plan(host, purge=False):
     root = host.root
     ledger = read(root / "config/removal-ownership.json")
@@ -364,14 +386,16 @@ def plan(host, purge=False):
         if not path.exists():
             continue
         if purge:
+            # The data root is confirmed, not each file's content: running services keep
+            # writing (logs, queues) until they are stopped, and a per-file hash made every
+            # live removal fail with "the list changed" (#524). Ownership is the location.
             paths = sorted(path.rglob("*")) if path.is_dir() else [path]
             for entry in paths:
-                if entry.relative_to(root).as_posix() in {"config/update/update.lock", "config/update/update.lock.guard", "config/removal-in-progress.json"}:
+                if entry.relative_to(root).as_posix() in KEPT_DURING_REMOVAL:
                     continue
                 if entry.is_symlink() or not entry.resolve().is_relative_to(root):
                     raise RuntimeError("Symlink у даних; автоматичне видалення заблоковано")
-                if entry.is_file():
-                    result["data"].append({"path": str(entry.relative_to(root)), "sha256": digest(entry)})
+            result["data"].append({"path": str(path.relative_to(root)), "kind": "dir" if path.is_dir() else "file"})
         else:
             result["retained"].append(str(path))
     result["volumes"] = sorted(set(result["volumes"]))
@@ -380,6 +404,84 @@ def plan(host, purge=False):
     canonical = json.dumps(result, sort_keys=True).encode()
     result["plan_sha256"] = hashlib.sha256(canonical).hexdigest()
     return result
+
+
+def components(root):
+    """Installed CORE and lifecycle modules with versions, for the operator summary."""
+    version = (root / "VERSION").read_text(encoding="utf-8").strip() if (root / "VERSION").is_file() else "невідома"
+    modules = []
+    for path in sorted((root / "config/module-lifecycle/state").glob("*.json")):
+        try:
+            value = read(path, {})
+        except ValueError:
+            value = None
+        if isinstance(value, dict):
+            modules.append((str(value.get("module_id") or path.stem), str(value.get("version") or "невідома"),
+                            str(value.get("state") or "")))
+        else:
+            modules.append((path.stem, "невідома", "запис пошкоджено"))
+    return version, modules
+
+
+def summary(root, selected):
+    """Short operator view; the full inventory with hashes stays in --dry-run and the journal."""
+    version, modules = components(root)
+    lines = ["Інсталяція Vertep: " + str(root), "  CORE " + version]
+    lines += ["  модуль " + name + " " + module_version + (" (" + state + ")" if state else "")
+              for name, module_version, state in modules] or ["  модулі: немає встановлених"]
+    lines.append("Буде видалено: контейнери %d, образи %d, volumes %d, systemd units %d, файли ПЗ %d, файли даних %d"
+                 % (len(selected["containers"]), len(selected["images"]), len(selected["volumes"]),
+                    len(selected["units"]), len(selected["files"]), len(selected["data"])))
+    lines.append("Зберігаються сторонні та спільні ресурси: %d (перелік — у --dry-run і журналі)" % len(selected["retained"]))
+    lines += ["Заблоковано: " + reason for reason in selected["blocked"]]
+    return "\n".join(lines)
+
+
+def create_backup(host, mode):
+    """Standard Backup Service snapshot, verified inside the service and read back outside the root."""
+    root = host.root
+    base = host.system / BACKUP_BASE
+    if any(p.is_symlink() for p in [base, *base.parents]):
+        raise RuntimeError("Symlink у шляху резервної копії")
+    if base.resolve().is_relative_to(root) or root.is_relative_to(base.resolve()):
+        raise RuntimeError("Каталог резервної копії перетинається з installation root")
+    service = [item for item in host.inventory() if owned_container(item, root)
+               and ((item.get("Config") or {}).get("Labels") or {}).get("com.docker.compose.service") == "backup-service"
+               and (item.get("State") or {}).get("Running")]
+    if not service:
+        raise RuntimeError("Backup Service цієї інсталяції не запущений")
+    output = host.command(["docker", "exec", service[0]["Id"], "python", "-m", "services.backup_service",
+                           "removal-snapshot", "--scope", mode], timeout=BACKUP_TIMEOUT)
+    receipt = json.loads((output.strip().splitlines() or ["{}"])[-1])
+    ident = str(receipt.get("snapshot_id", ""))
+    names = [*receipt.get("parts", []), ident + ".json"]
+    if (not re.fullmatch(r"[A-Za-z0-9_-]+", ident) or receipt.get("verified") is not True
+            or receipt.get("scope") != mode or receipt.get("format") != "VERTEP-BACKUP-v1"
+            or not all(isinstance(n, str) and re.fullmatch(re.escape(ident) + r"\.(vtbackup(\.part\d{4})?|json)", n)
+                       for n in names)):
+        raise RuntimeError("Backup Service не підтвердив перевірку копії")
+    sources = [root / "backups" / name for name in names] + [root / "config/backup.key"]
+    if any(path.is_symlink() or not path.is_file() for path in sources):
+        raise RuntimeError("Файли копії або ключ шифрування відсутні")
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = base / ident
+    target.mkdir(mode=0o700)
+    for source in sources:
+        shutil.copy2(source, target / source.name)
+        os.chmod(target / source.name, 0o600)
+    # Read-back of the copy that survives the removal.
+    value = hashlib.sha256()
+    for name in receipt["parts"]:
+        with (target / name).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                value.update(chunk)
+    if (value.hexdigest() != receipt.get("sha256")
+            or (target / "backup.key").read_bytes() != (root / "config/backup.key").read_bytes()):
+        raise RuntimeError("Копія поза інсталяцією не пройшла перевірку")
+    # The originals leave the installation, so the confirmed inventory is unchanged.
+    for name in names:
+        (root / "backups" / name).unlink()
+    return target
 
 
 def stop_update_units(host, selected):
@@ -487,7 +589,8 @@ def _execute(host, selected, journal_dir):
     path = journal_dir / "state.json"
     if path.is_symlink() or (journal_dir/"remove.py").is_symlink():
         raise RuntimeError("Symlink у журналі видалення")
-    state = read(path, {"state": "RUNNING", "plan": selected, "done": []})
+    state = read(path, {"state": "RUNNING", "plan": selected, "done": [],
+                        "data_files": data_files(host, selected)})
     if state["plan"] != selected:
         raise RuntimeError("Журнал належить іншому переліку видалення")
     state["state"]="RUNNING"
@@ -555,11 +658,28 @@ def _execute(host, selected, journal_dir):
             step("file:" + name, remove_file)
         for item in selected["data"]:
             def remove_data(item=item):
+                # Services are stopped by now; everything in the confirmed data root goes,
+                # including files written after the confirmation. Symlinks are removed, never followed.
                 target = host.root / item["path"]
-                if target.exists():
-                    if target.is_symlink() or not target.resolve().is_relative_to(host.root) or digest(target) != item["sha256"]:
-                        raise RuntimeError("Дані змінилися після підтвердження")
+                if target.is_symlink() or not target.exists():
+                    if target.is_symlink():
+                        target.unlink()
+                    return
+                if not target.resolve().is_relative_to(host.root):
+                    raise RuntimeError("Дані поза каталогом інсталяції")
+                if target.is_file():
                     target.unlink()
+                    return
+                for entry in sorted(target.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                    if entry.relative_to(host.root).as_posix() in KEPT_DURING_REMOVAL:
+                        continue
+                    if entry.is_symlink() or entry.is_file():
+                        entry.unlink()
+                    elif entry.is_dir():
+                        try:
+                            entry.rmdir()
+                        except OSError:
+                            pass  # holds the executor's own fence; removed at the end
             step("data:" + item["path"], remove_data)
         if selected["cli"]:
             def unlink_cli():
@@ -602,7 +722,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Видалення лише підтверджених ресурсів інсталяції Vertep")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--purge-data", action="store_true")
+    # #524: removal is always complete; the flag is accepted for older scripts.
+    parser.add_argument("--purge-data", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--backup", choices=sorted(BACKUP_MODES), help="Резервна копія перед видаленням")
     parser.add_argument("--record", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--confirm", default="", help="SHA256 переліку, показаного dry-run")
     parser.add_argument("--resume", action="store_true")
@@ -630,10 +752,24 @@ def main(argv=None):
             selected=previous["plan"]
             if selected["root"] != str(host.root):raise RuntimeError("Журнал іншої інсталяції")
         else:
-            selected=plan(host,args.purge_data)
+            selected=plan(host,True)
             journal=journal.with_name(journal.name+"-"+selected["plan_sha256"][:16])
-        print(json.dumps(selected,ensure_ascii=False,indent=2))
+        if args.dry_run or args.resume:
+            print(json.dumps({**selected, "data_files": data_files(host, selected)},ensure_ascii=False,indent=2))
+        else:
+            print(summary(host.root,selected))
         if args.dry_run: return 0 if not selected["blocked"] else 2
+        backup="none"
+        if not args.resume:
+            if selected["blocked"]:
+                raise RuntimeError("Є ресурси з непідтвердженою належністю")
+            backup=args.backup
+            if backup is None and not args.confirm and sys.stdin.isatty():
+                print("Резервна копія перед видаленням: full — "+BACKUP_MODES["full"]+"; db — "+BACKUP_MODES["db"]+"; none — "+BACKUP_MODES["none"])
+                backup=input("Оберіть копію [full/db/none]: ").strip().lower()
+            if backup not in BACKUP_MODES:
+                raise RuntimeError("Не вибрано резервну копію: --backup full|db|none")
+            print("Резервна копія: "+BACKUP_MODES[backup])
         if args.confirm:
             confirmed = args.confirm == selected["plan_sha256"]
         elif sys.stdin.isatty():
@@ -642,8 +778,16 @@ def main(argv=None):
             confirmed = False
         if not confirmed:
             raise RuntimeError("Видалення не підтверджене")
+        if backup!="none":
+            try:
+                copy=create_backup(host,backup)
+            except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+                raise RuntimeError("Резервну копію не створено або не перевірено; видалення не починалося: "+str(error)) from error
+            print("Резервну копію збережено поза інсталяцією: "+str(copy))
         result=execute(host,selected,journal,resume=args.resume)
         print("Результат видалення: " + result["state"] + "; журнал: " + str(journal/"state.json"))
+        for item in result.get("retained_unknown",[]):
+            print("Лишилося (невідомий вміст не видаляється): "+item)
         return 0 if result["state"] == "SUCCEEDED" else 2
     except (EOFError, OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         print("Видалення заблоковано або не завершено: " + str(error),file=sys.stderr)

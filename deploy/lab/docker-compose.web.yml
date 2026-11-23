@@ -1,12 +1,13 @@
 name: vertep-lab-web
 
 # Standalone frontend/API packaging; no production CORE or GPU dependency.
+# The runtime file runs images only: bootstrap-lab.sh takes it from the signed LAB
+# package and pins LAB_CONTROL_IMAGE / LAB_WEB_IMAGE by digest (#491 L5). Building
+# from a checkout adds docker-compose.web.build.yml (development only).
+# Only the HTTPS panel is published, on the VM address (LAB_WEB_BIND, #491 L2/L8).
 services:
   lab-control:
-    build:
-      context: ../..
-      dockerfile: deploy/lab/Dockerfile
-    image: ghcr.io/fylypovych/vertep-lab-control:${VERSION:-dev}
+    image: ${LAB_CONTROL_IMAGE:-ghcr.io/fylypovych/vertep-lab-control:dev}
     command: ["uvicorn", "lab.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       LAB_STATE_DIR: /var/lib/vertep-lab
@@ -24,6 +25,7 @@ services:
       LAB_ROLE_EXECUTOR_TOKEN: ${LAB_ROLE_EXECUTOR_TOKEN:-}
       LAB_ROLE_EXECUTOR_TIMEOUT_SECONDS: "600"
       LAB_RESOURCE_CA_FILE: ${LAB_RESOURCE_CA_FILE:-}
+      LAB_VERTEP_URL: ${LAB_VERTEP_URL:-}
     volumes:
       - lab-web-state:/var/lib/vertep-lab
       - ${LAB_CA_DIR:-./ca}:/run/lab-ca:ro
@@ -33,7 +35,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/lab/status', timeout=3).close()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/lab/healthz', timeout=3).close()"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -42,10 +44,7 @@ services:
     networks: [lab-web]
 
   lab-executor:
-    build:
-      context: ../..
-      dockerfile: deploy/lab/Dockerfile
-    image: ghcr.io/fylypovych/vertep-lab-control:${VERSION:-dev}
+    image: ${LAB_CONTROL_IMAGE:-ghcr.io/fylypovych/vertep-lab-control:dev}
     command: ["uvicorn", "lab.role_service:create_app", "--factory", "--host", "0.0.0.0", "--port", "8100"]
     environment:
       LAB_RESOURCE_URL: ${LAB_RESOURCE_URL:-}
@@ -67,12 +66,12 @@ services:
     networks: [lab-web]
 
   lab-web:
-    build:
-      context: ../..
-      dockerfile: deploy/lab/Dockerfile.web
-    image: ghcr.io/fylypovych/vertep-lab-web:${VERSION:-dev}
+    image: ${LAB_WEB_IMAGE:-ghcr.io/fylypovych/vertep-lab-web:dev}
     ports:
-      - "127.0.0.1:${LAB_WEB_PORT:-8444}:8080"
+      - "${LAB_WEB_BIND:-0.0.0.0}:${LAB_WEB_PORT:-8444}:8443"
+    volumes:
+      # lab.crt / lab.key: the operator's own or the self-signed pair bootstrap-lab.sh makes.
+      - ${LAB_TLS_DIR:-./tls}:/run/lab-tls:ro
     read_only: true
     tmpfs:
       - /tmp

@@ -243,7 +243,9 @@ def _sources() -> list[tuple[str, Path]]:
 
 
 # The key cannot protect a copy of itself and must survive a restore untouched.
-_SNAPSHOT_EXCLUDED = {"backup.key"}
+# The removal ownership inventory describes this host's resources, not user state (#524):
+# an older copy must not make images pulled since then look like Vertep's own.
+_SNAPSHOT_EXCLUDED = {"backup.key", "removal-ownership.json"}
 
 
 def _part_size() -> int:
@@ -557,9 +559,10 @@ def _command_exists(command: str) -> bool:
     return shutil.which(command.split()[0]) is not None
 
 
-def _archive(destination: Path) -> None:
+def _archive(destination: Path, include_files: bool = True) -> None:
     with tarfile.open(destination, "w:gz") as archive:
-        for label, root in _sources():
+        # #524: a database-only copy carries no file sources, so its restore leaves the storage as is.
+        for label, root in (_sources() if include_files else []):
             if not root.exists():
                 continue
             # Issue #60: preserve empty directories explicitly so they survive round-trip.
@@ -668,7 +671,9 @@ def snapshot(request: SnapshotRequest) -> dict:
     return _create_snapshot(request.job_id)
 
 
-def _create_snapshot(job_id: str, apply_retention: bool = True) -> dict:
+def _create_snapshot(job_id: str, apply_retention: bool = True, scope: str = "full") -> dict:
+    if scope not in ("full", "db"):
+        raise ValueError("Невідомий склад копії")
     key = _key()
     root = _backup_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -678,7 +683,7 @@ def _create_snapshot(job_id: str, apply_retention: bool = True) -> dict:
     with _lock, tempfile.TemporaryDirectory(dir=root) as temporary:
         archive = Path(temporary) / "snapshot.tar.gz"
         encrypted = Path(temporary) / "snapshot.vtbackup"
-        _archive(archive)
+        _archive(archive, include_files=scope == "full")
         digest = _encrypt(archive, encrypted, key)
         archive.unlink()
         total_size = encrypted.stat().st_size
@@ -686,7 +691,7 @@ def _create_snapshot(job_id: str, apply_retention: bool = True) -> dict:
         for part in _snapshot_files(encrypted)[1:]:
             part.replace(root / part.name.replace(encrypted.name, destination.name, 1))
         encrypted.replace(destination)
-        inventory = [{"label": label, "path": str(path)} for label, path in _sources()]
+        inventory = [{"label": label, "path": str(path)} for label, path in _sources()] if scope == "full" else []
         # Issue #36/#16: run remote copy inside the snapshot flow and record its REAL
         # outcome in the receipt. A configured remote copy that fails raises and the
         # snapshot is not reported as successful.
@@ -694,7 +699,7 @@ def _create_snapshot(job_id: str, apply_retention: bool = True) -> dict:
         remote_copied = any([_remote_copy(path) for path in files])
         receipt = {"snapshot_id": snapshot_id, "job_id": job_id,
                    "created_at": datetime.now(timezone.utc).isoformat(),
-                   "format": "VERTEP-BACKUP-v1", "encryption": "AES-256-GCM",
+                   "format": "VERTEP-BACKUP-v1", "encryption": "AES-256-GCM", "scope": scope,
                    "sha256": digest, "size": total_size,
                    "size_bytes": total_size,
                    "file": destination.name,
@@ -1165,3 +1170,51 @@ def _decrypt(source: Path, destination: Path, key: bytes) -> str:
             output.flush()
             os.fsync(output.fileno())
     return digest
+
+
+def verify_snapshot(snapshot_id: str, scope: str) -> dict:
+    """#524 read-back: checksum, decryption and the expected content of one snapshot."""
+    root = _backup_root()
+    source = root / f"{snapshot_id}.vtbackup"
+    receipt = json.loads(source.with_suffix(".json").read_text(encoding="utf-8"))
+    files = _snapshot_files(source)
+    if receipt.get("scope", "full") != scope or receipt.get("snapshot_id") != snapshot_id:
+        raise RuntimeError("Receipt не відповідає вибраній копії")
+    if not secrets.compare_digest(_sha256_files(files), str(receipt.get("sha256", ""))):
+        raise RuntimeError("Checksum копії не збігається")
+    with tempfile.TemporaryDirectory(dir=root) as temporary:
+        joined, decrypted = Path(temporary) / "snapshot.vtbackup", Path(temporary) / "snapshot.tar.gz"
+        with joined.open("wb") as output:
+            for part in files:
+                with part.open("rb") as handle:
+                    shutil.copyfileobj(handle, output, 1024 * 1024)
+        _decrypt(joined, decrypted, _key())
+        with tarfile.open(decrypted, "r:gz") as archive:
+            names = archive.getnames()
+    if "db/postgres.dump" not in names:
+        raise RuntimeError("У копії немає дампу PostgreSQL")
+    labels = {name.split("/", 1)[0] for name in names}
+    if scope == "full":
+        missing = [label for label, path in _sources() if path.exists() and label not in labels]
+        if missing:
+            raise RuntimeError("У повній копії бракує файлів: " + ", ".join(missing))
+    elif labels - {"db"}:
+        raise RuntimeError("Копія «лише БД» містить файли")
+    return {**receipt, "verified": True}
+
+
+def _removal_snapshot(argv: list[str]) -> int:
+    """Called by `vertep remove` inside this container: create and verify one copy, print its receipt."""
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=["removal-snapshot"])
+    parser.add_argument("--scope", choices=["full", "db"], required=True)
+    args = parser.parse_args(argv)
+    receipt = _create_snapshot("pre-remove", apply_retention=False, scope=args.scope)
+    print(json.dumps(verify_snapshot(receipt["snapshot_id"], args.scope), ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(_removal_snapshot(sys.argv[1:]))

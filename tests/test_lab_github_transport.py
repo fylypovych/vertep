@@ -199,15 +199,18 @@ def test_find_duplicates_reports_only_similar_titles(github):
     assert github.requests[-1]["method"] == "GET"
 
 
-def test_close_issue_comments_and_closes(github):
+def test_the_laboratory_comments_once_and_never_closes(github):
+    """Owner decision 23.11.2026: the laboratory writes its summary; only the owner closes."""
     transport = _transport(github)
     issue = transport.create_issue("Дефект", "Доказ")
-    closed = transport.close_issue(issue["number"], comment="Закрито за доказом")
-    assert closed["state"] == "closed"
-    assert closed["dry_run"] is False
-    assert github.comments[-1]["body"].startswith("Закрито за доказом\n\n<!-- vertep-lab-close:")
-    assert github.issues[0]["state"] == "closed"
-    assert github.requests[-1]["method"] == "PATCH"
+    first = transport.comment_issue(issue["number"], "Готово до закриття власником")
+    again = transport.comment_issue(issue["number"], "Готово до закриття власником")
+    assert first["commented"] is True and first["dry_run"] is False
+    assert again.get("already") is True  # the same summary is posted once
+    assert [c["body"].split("\n\n")[0] for c in github.comments] == ["Готово до закриття власником"]
+    assert github.issues[0]["state"] != "closed"
+    assert all(request["method"] != "PATCH" for request in github.requests)
+    assert not hasattr(transport, "close_issue")
 
 
 def test_refused_request_raises_instead_of_looking_published():
@@ -244,11 +247,11 @@ def test_token_never_leaks_into_the_error():
                for request in service.requests)
 
 
-def test_closing_without_an_issue_number_is_refused(github):
+def test_commenting_without_an_issue_number_is_refused(github):
     transport = _transport(github)
     with pytest.raises(GovernanceError) as error:
-        transport.close_issue("ir.0.0.2.52")
-    assert "GitHub number" in str(error.value)
+        transport.comment_issue("ir.0.0.2.52", "summary")
+    assert "GitHub issue number" in str(error.value)
 
 
 # -- the wiring used by the API and the CLI ---------------------------------

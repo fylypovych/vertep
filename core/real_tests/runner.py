@@ -227,11 +227,12 @@ class RealTestRunner:
         return result
 
     def close_rt_issue(self, run: TestRun) -> dict[str, Any]:
-        """Attempt to close the rt Issue if all PASS conditions are met."""
+        """Mark the rt Issue ready for the owner's close when all PASS conditions are met.
+        The Issue state is never changed here: only the owner closes Issues."""
         result = self._reporter.close_issue(run)
-        if result["closed"]:
-            audit_entry(run.test_run_id, "rt_issue_closed",
-                        f"issue #{run.rt_issue_number} closed", "runner")
+        if result.get("ready_for_owner") and not result.get("error"):
+            audit_entry(run.test_run_id, "rt_issue_ready_for_owner",
+                        f"issue #{run.rt_issue_number} ready for the owner to close", "runner")
         return result
 
     # --- Full lifecycle --------------------------------------------------

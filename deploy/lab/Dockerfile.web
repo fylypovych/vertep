@@ -18,7 +18,7 @@ COPY --from=build /src/dist/vertep-lab-web/browser /srv/lab-web
 RUN chown -R nginx:nginx /srv/lab-web && chmod -R a+rX /srv/lab-web
 
 USER nginx
-EXPOSE 8080
+EXPOSE 8443
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:8080/readyz || exit 1
 

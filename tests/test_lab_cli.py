@@ -18,6 +18,7 @@ from lab.policy import PolicyGate
 from lab.governance import issue_scope
 from lab.workspace import FORBIDDEN_ENVIRONMENT
 from tests.test_lab_resource_transport import production
+from tests.lab_admin import vertep_identity  # noqa: F401
 
 OWNER_TOKEN = "owner-secret"
 
@@ -315,10 +316,10 @@ def test_report_sections_match_the_shared_builder(paths, capsys):
     assert "unknown section" in bad["error"]
 
 
-def test_cli_and_web_read_the_same_settings_and_reports(paths, capsys, monkeypatch):
+def test_cli_and_web_read_the_same_settings_and_reports(paths, capsys, monkeypatch, vertep_identity):
     """One backend state: what the CLI prints is what the panel will GET."""
-    from fastapi.testclient import TestClient
     from lab.api import create_app
+    from tests.lab_admin import AdminClient as TestClient
 
     monkeypatch.setenv("LAB_WORKSPACE", str(paths["workspace"]))
     client = TestClient(create_app(state_dir=paths["state"],

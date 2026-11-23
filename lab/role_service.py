@@ -131,6 +131,8 @@ def _workspace_context(root: str, paths: list) -> str:
 
 
 def _call_model(model: str, prompt: str, lease_id: str, limits: dict) -> dict:
+    from .settings import apply_environment
+    apply_environment(os.getenv("LAB_STATE_DIR", "/var/lib/vertep-lab"))  # LAB settings over lab.env (#491 L4)
     url = os.getenv("LAB_RESOURCE_URL", "").rstrip("/")
     if not url:
         raise RuntimeError("LAB_RESOURCE_URL is not configured")

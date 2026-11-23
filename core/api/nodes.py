@@ -118,6 +118,9 @@ async def module_placement(module_id: str, request: Request):
             check_placement(_module_registry(), module_id, node_ids)
         result = _module_registry().set_placement(module_id, node_ids)
     except ValueError as error:
+        from core.module.gateway import audit
+        # A refused placement is audited too (#523), e.g. LAB on a production node.
+        audit("module.placement", "denied", module=module_id, nodes=payload.get("node_ids"), reason=str(error))
         raise HTTPException(422, str(error)) from error
     from core.module.gateway import audit
     audit("module.placement", "allowed", module=module_id, nodes=result["node_ids"])

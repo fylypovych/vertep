@@ -131,9 +131,12 @@ def test_changed_file_or_version_needs_a_new_approval_and_history_survives_reloa
     shared["video"].write_bytes(b"tampered after approval")
     changed = a.post(f"/api/jobs/{job.job_id}/publish", json=["youtube"])
     assert changed.status_code == 409 and "hash" in changed.json()["detail"]
-    reloaded = Job.model_validate_json(job.model_dump_json())  # persistence round trip
+    # What a restarted CORE reads back from the repository, not an in-memory round trip.
+    reloaded = {item.job_id: item for item in store.repository.load_jobs()}[job.job_id]
+    assert isinstance(reloaded, Job)
     assert reloaded.character_owner_brand == "brand-b"
     assert reloaded.shared_approvals == job.shared_approvals and reloaded.shared_approvals[0]["actor"] == "mod-b"
+    assert reloaded.shared_approvals[0]["decision"] == "approve"
 
 
 def test_material_of_the_own_brand_needs_no_shared_approval(shared):

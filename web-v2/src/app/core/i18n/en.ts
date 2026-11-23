@@ -433,6 +433,7 @@ export const EN: Record<string, string> = {
   "Оберіть, що цей сервер виконуватиме. Можливості будуть визначені автоматично після встановлення.": "Choose what this server will do. Capabilities are detected automatically after installation.",
   "Обладнання": "Hardware",
   "Моніторинг": "Monitoring",
+  "Лабораторія": "Laboratory",
   "Синтез мовлення": "Speech synthesis",
   "Обчислення GPU": "GPU computation",
   "Не застосовується": "Not applicable",

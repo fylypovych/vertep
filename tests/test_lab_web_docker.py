@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -42,7 +43,7 @@ def docker():
 
 def wait_for(url, predicate):
     deadline = time.monotonic() + 30
-    with httpx.Client(trust_env=False, timeout=2) as client:
+    with httpx.Client(trust_env=False, timeout=2, verify=False) as client:
         while time.monotonic() < deadline:
             try:
                 response = client.get(url)
@@ -81,8 +82,9 @@ def wait_for_published_port(name, container_port, timeout=60):
 
 def test_web_compose_is_self_contained_and_isolated(docker):
     compose = ROOT / "deploy/lab/docker-compose.web.yml"
+    build = ROOT / "deploy/lab/docker-compose.web.build.yml"  # development overlay (#491 L5)
     config = json.loads(run(
-        "compose", "-f", str(compose), "config", "--format", "json",
+        "compose", "-f", str(compose), "-f", str(build), "config", "--format", "json",
     ).stdout)
     services = config["services"]
     assert set(services) == {"lab-web", "lab-control", "lab-executor"}
@@ -93,11 +95,12 @@ def test_web_compose_is_self_contained_and_isolated(docker):
     web = services["lab-web"]
     assert Path(web["build"]["context"]).resolve() == ROOT
     assert web["build"]["dockerfile"] == "deploy/lab/Dockerfile.web"
-    assert web["ports"][0]["host_ip"] == "127.0.0.1"
+    # #491 L2/L8: only the HTTPS panel, on the VM address.
+    assert [(p["host_ip"], p["target"]) for p in web["ports"]] == [("0.0.0.0", 8443)]
     assert web["read_only"] is True
-    # The panel build is baked into the image; there is no host bind mount that
-    # could silently substitute production assets (Issue #251, U1).
-    assert not web.get("volumes")
+    # The panel build is baked into the image; the only host mount is the TLS pair,
+    # read-only, so nothing can substitute production assets (Issue #251, U1).
+    assert [(v["target"], v.get("read_only")) for v in web["volumes"]] == [("/run/lab-tls", True)]
     assert not services["lab-control"].get("ports")
     assert services["lab-control"]["command"][0] == "uvicorn"
     assert all("docker.sock" not in str(s.get("volumes", [])) for s in services.values())
@@ -124,6 +127,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
 """
+    tls = Path(tempfile.mkdtemp(prefix="lab-tls-"))
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                    "-days", "1", "-subj", "/CN=localhost", "-keyout", str(tls / "lab.key"),
+                    "-out", str(tls / "lab.crt")], check=True, capture_output=True)
+    os.chmod(tls, 0o755)
+    os.chmod(tls / "lab.key", 0o644)  # disposable test key; nginx (uid 101) must read it
     try:
         run("build", "-f", str(ROOT / "deploy/lab/Dockerfile.web"),
             "-t", image, str(ROOT))
@@ -134,13 +143,13 @@ HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
         run("run", "-d", "--name", web, "--network", network,
             "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true",
-            "-p", "127.0.0.1::8080", image)
-        inspection, port = wait_for_published_port(web, "8080/tcp")
+            "-v", f"{tls}:/run/lab-tls:ro", "-p", "127.0.0.1::8443", image)
+        inspection, port = wait_for_published_port(web, "8443/tcp")
         assert inspection["Config"]["User"] == "nginx"
         assert inspection["State"]["Running"] is True
-        origin = f"http://127.0.0.1:{port}"
+        origin = f"https://127.0.0.1:{port}"
         wait_for(origin + "/healthz", lambda r: r.status_code == 200)
-        with httpx.Client(base_url=origin, trust_env=False, timeout=10) as client:
+        with httpx.Client(base_url=origin, trust_env=False, timeout=10, verify=False) as client:
             assert client.get("/readyz").status_code == 200
             index = client.get("/")
             assert index.status_code == 200
@@ -172,3 +181,4 @@ HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
         run("rm", "-f", web, api, check=False)
         run("network", "rm", network, check=False)
         run("image", "rm", image, check=False)
+        shutil.rmtree(tls, ignore_errors=True)

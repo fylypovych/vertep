@@ -171,3 +171,12 @@ def lab_login(request: Request, return_to: str = ""):
         raise HTTPException(422, "Unknown LAB panel address")
     audit("lab.identity", "allowed", actor=identity[0])
     return RedirectResponse(f"{return_to}#vertep_identity={issue(identity[0], identity[1])}", status_code=302)
+
+
+@router.get("/api/lab/panel")
+def lab_panel(request: Request):
+    """#491 L3: the configured LAB panel address for the administrator's «Лабораторія» entry."""
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        raise HTTPException(403, "Administrator role required")
+    return {"url": os.getenv("LAB_PANEL_URL", "").strip().rstrip("/") or None}

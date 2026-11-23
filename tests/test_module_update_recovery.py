@@ -221,3 +221,26 @@ def test_an_inactive_module_restore_is_checked_before_writes_open(tmp_path, key,
     else:
         assert record["state"] == "FAILED" and lifecycle.database.writes_locked("notes")
         assert record["attention"]["error"].startswith("restored version is not verified")
+
+
+def test_a_repeated_rollback_uninstall_or_restore_has_no_second_effect(tmp_path, key, module_postgres):
+    """#522 AC2: a second delivery of rollback, uninstall or restore_archive is refused
+    and leaves the module data as the first one left it."""
+    lifecycle, url = installed(tmp_path, key, module_postgres)
+    insert(url, "kept")
+    lifecycle.update(package(key, version="1.1.0", migrations={"m1": M1, "m2": M2}), confirmed=True)
+    lifecycle.rollback("notes")
+    snapshot = (lifecycle.record("notes")["version"], tables(module_postgres, "mod_notes"))
+    with pytest.raises(LifecycleError, match="No previous version"):
+        lifecycle.rollback("notes")
+    assert (lifecycle.record("notes")["version"], tables(module_postgres, "mod_notes")) == snapshot
+
+    archive = lifecycle.uninstall("notes", confirmed=True)["archive"]
+    with pytest.raises(LifecycleError, match="not installed"):
+        lifecycle.uninstall("notes", confirmed=True)
+    path = lifecycle.root / "archives" / archive
+    lifecycle.restore_archive(path)
+    with pytest.raises(LifecycleError, match="uninstall before restoring"):
+        lifecycle.restore_archive(path)
+    restored_url = module_url(module_postgres, lifecycle.credentials["notes"])
+    assert rows(restored_url, "SELECT body FROM items") == [("kept",)]  # one copy, not two

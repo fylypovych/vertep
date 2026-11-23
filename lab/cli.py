@@ -21,6 +21,7 @@ from .notifications import NotificationSettings
 from .orchestrator import Orchestrator
 from .policy import Action, PolicyDenied, PolicyGate
 from .reports import ReportBuilder, ReportError
+from .settings import LabSettings, SettingsError, apply_environment
 from .workspace import Workspace
 
 
@@ -40,6 +41,8 @@ def build_context(args) -> dict:
     workspace = Workspace(getattr(args, "workspace", None) or
                           Path(os.getenv("LAB_WORKSPACE", "/srv/vertep-lab/repo")))
     workspace.prepare()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    apply_environment(state_dir)  # the same stored settings the API reads (#491 L4)
     gate = PolicyGate(state_dir)
     budget = BudgetLedger(state_dir / "budget")
     provider = None
@@ -66,7 +69,8 @@ def build_context(args) -> dict:
     return {"state_dir": state_dir, "workspace": workspace, "gate": gate,
             "budget": budget, "orchestrator": orchestrator, "governance": governance,
             "leases": orchestrator.leases, "executor": executor,
-            "notifications": notifications, "reports": reports}
+            "notifications": notifications, "reports": reports,
+            "settings": LabSettings(gate, state_dir)}
 
 
 def _print(payload) -> None:
@@ -270,6 +274,39 @@ def command_notify_settings(context) -> int:
     return 0
 
 
+def command_settings(context) -> int:
+    """``settings show`` / ``settings set key=value …`` — the same store and rules as the API.
+
+    ``key=@path`` reads the value from a file (secrets and the CA PEM stay out of
+    the shell history); ``idle_sharing_enabled`` takes true/false.  ``set`` is an
+    owner act exactly as ``PUT /api/lab/settings``.
+    """
+    args = context["args"]
+    settings = context["settings"]
+    if args.settings_action == "show":
+        _print(settings.show())
+        return 0
+    owner_identity = _owner_identity(context)
+    if owner_identity is None:
+        _print({"updated": False, "reason": "owner authentication required"})
+        return 1
+    values: dict = {}
+    for item in args.values:
+        key, sep, value = item.partition("=")
+        if not sep:
+            _print({"updated": False, "reason": f"expected key=value: {item}"})
+            return 1
+        if value.startswith("@"):
+            value = Path(value[1:]).read_text(encoding="utf-8")
+        values[key] = value.strip().lower() in {"true", "1", "yes"} if key == "idle_sharing_enabled" else value
+    try:
+        _print(settings.update(values, actor=owner_identity))
+    except SettingsError as error:
+        _print({"updated": False, "reason": str(error)})
+        return 1
+    return 0
+
+
 def command_report(context) -> int:
     """Combined configurable report — the same builder the panel uses."""
     sections = [item.strip() for item in (context["args"].sections or "").split(",")
@@ -362,6 +399,12 @@ def build_parser() -> argparse.ArgumentParser:
     notify = sub.add_parser("notify-settings",
                             help="налаштування важливості повідомлень Web/Telegram")
     notify.set_defaults(handler=command_notify_settings)
+
+    lab_settings = sub.add_parser("settings", help="налаштування LAB (те саме сховище, що й API)")
+    lab_settings.add_argument("settings_action", choices=["show", "set"])
+    lab_settings.add_argument("values", nargs="*", help="key=value або key=@файл")
+    lab_settings.add_argument("--owner-token", default="", help="службовий токен власника LAB для set")
+    lab_settings.set_defaults(handler=command_settings)
 
     report = sub.add_parser("report",
                             help="комбінований налаштовуваний звіт (секції через кому)")

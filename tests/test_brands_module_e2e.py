@@ -56,7 +56,8 @@ def brands(api, tmp_path, monkeypatch, module_postgres):
     core.set_placement("brands", ["text-node"])
     legacy = tmp_path / "legacy-brands"
     monkeypatch.setenv("BRANDS_ROOT", str(legacy))
-    yield {"api": api, "server": server, "connection": connection, "legacy": legacy, "lifecycle": lifecycle}
+    yield {"api": api, "server": server, "connection": connection, "legacy": legacy, "lifecycle": lifecycle,
+           "credentials": credentials, "dsn": module_postgres}
     server.shutdown()
     connection.close()
 
@@ -174,3 +175,40 @@ def test_a_shared_channel_has_one_secret_for_every_linked_brand(brands):
     stored = ensure_secret_store()
     assert task_secrets(b, {"telegram_publisher_bot_token"}, stored) == {"telegram_publisher_bot_token": "SHARED"}
     assert sum(1 for key in stored if key.startswith(f"channel:{channel_id}:")) == 1  # one copy only
+
+
+def test_brands_channels_and_links_are_read_back_after_archive_and_restore(brands):
+    """#522 AC2: uninstall archives the Brands schema; restore brings back the same brand IDs,
+    the one shared channel and its links to both brands (M:N), and the audit history."""
+    from core.module.gateway import call_module
+    api = brands["api"]
+    for brand in ("brand-a", "brand-b"):
+        assert api.post("/api/brands", json={"id": brand, "name": brand}).status_code == 200
+    channel_id = api.post("/api/brands/brand-a/channels", json={
+        "brand_id": "brand-a", "channel_type": "telegram", "target": "@shared_news"}).json()["channel_id"]
+    assert call_module("brands", "PUT", f"/brands/brand-b/channels/{channel_id}", None, {"policy": "automatic"})[0] == 200
+    before = {
+        "brands": _rows(brands, "SELECT id, publication_policy FROM brands ORDER BY id"),
+        "channels": _rows(brands, "SELECT id, channel_type, target FROM channels ORDER BY id"),
+        "audit": [row[0] for row in _rows(brands, "SELECT action FROM brand_audit ORDER BY id")],
+    }
+
+    lifecycle = brands["lifecycle"]
+    archive = lifecycle.uninstall("brands", confirmed=True)["archive"]
+    assert lifecycle.restore_archive(lifecycle.root / "archives" / archive)["state"] == "INSTALLED"
+
+    parsed = urlparse(brands["dsn"])
+    restored = pg8000.dbapi.connect(user=brands["credentials"]["brands"]["role"],
+                                    password=brands["credentials"]["brands"]["password"],
+                                    host=parsed.hostname, port=parsed.port,
+                                    database=unquote(parsed.path.lstrip("/")))
+    brands["connection"] = restored
+    after = {
+        "brands": _rows(brands, "SELECT id, publication_policy FROM brands ORDER BY id"),
+        "channels": _rows(brands, "SELECT id, channel_type, target FROM channels ORDER BY id"),
+        "audit": [row[0] for row in _rows(brands, "SELECT action FROM brand_audit ORDER BY id")],
+    }
+    assert after == before
+    links = _rows(brands, f"SELECT brand_id, policy FROM brand_channels WHERE channel_id = '{channel_id}' ORDER BY brand_id")
+    restored.close()
+    assert links == [["brand-a", "inherit"], ["brand-b", "automatic"]]

@@ -167,7 +167,7 @@ class TestGitHubReporter:
         assert result["reported"] is False
         assert result["error"] is not None
 
-    def test_close_issue_calls_api(self, tmp_path, monkeypatch):
+    def test_a_pass_is_ready_for_the_owner_and_never_closes_the_issue(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
         run = TestRun(
             rt_id="rt::S01", rt_issue_number=40, version="test-ver",
@@ -180,9 +180,10 @@ class TestGitHubReporter:
                              "version": "test-ver", "commit_sha": "deadbeef"}
         monkeypatch.setenv("GITHUB_REPOSITORY", "test-repo")
         monkeypatch.setattr(GitHubReporter, "can_close_issue", lambda self, r: True)
-        monkeypatch.setattr(gh_mod, "_close_issue", lambda num: None)
+        monkeypatch.setattr(gh_mod, "_api_request", lambda *a, **k: pytest.fail("the runner must not change the Issue"))
         result = reporter.close_issue(run)
-        assert result["closed"] is True
+        # Only the owner closes Issues (23.11.2026): a PASS is recorded as ready for the owner.
+        assert result["closed"] is False and result["ready_for_owner"] is True
 
     def test_retry_pending_retries_on_transient_error(self, tmp_path, monkeypatch):
         reporter = GitHubReporter()
@@ -2097,13 +2098,7 @@ class TestIssue139:
         monkeypatch.setattr(gh_mod, "_expected_mandatory_names",
                             lambda rt_id: {"docker"})
         monkeypatch.setattr(gh_mod, "_issue_fully_covered", lambda number: True)
-        closes = {"count": 0}
-
-        def fake_close(issue_number):
-            closes["count"] += 1
-            time.sleep(0.05)
-
-        monkeypatch.setattr(gh_mod, "_close_issue", fake_close)
+        monkeypatch.setattr(gh_mod, "_api_request", lambda *a, **k: pytest.fail("the runner must not change the Issue"))
         reporter = GitHubReporter()
         run = self._run()
         results = []
@@ -2117,21 +2112,18 @@ class TestIssue139:
         for t in threads:
             t.join()
 
-        assert closes["count"] == 1, "acceptance must be single-use under concurrency"
-        assert sum(1 for r in results if r["closed"]) == 1
+        # Readiness is announced once under concurrency; nothing is closed.
+        assert sum(1 for r in results if r["ready_for_owner"] and r["error"] is None) == 1
+        assert not any(r["closed"] for r in results)
 
     def test_controlled_boundary_does_not_close_unknown_issue(self, monkeypatch):
         monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: "a" * 40)
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
         calls = {"n": 0}
-
-        def fake_close(issue_number):
-            calls["n"] += 1
-
-        monkeypatch.setattr(gh_mod, "_close_issue", fake_close)
+        monkeypatch.setattr(gh_mod, "_api_request", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1))
         run = self._run(rt_id="rt::S99")
         result = GitHubReporter().close_issue(run)
-        assert result["closed"] is False
+        assert result["closed"] is False and result["ready_for_owner"] is False
         assert calls["n"] == 0, "unknown scenario must not touch the GitHub boundary"
 
 
@@ -2274,7 +2266,7 @@ class TestIssue451:
         monkeypatch.setattr(gh_mod, "_deployment_sha", lambda: sha)
         monkeypatch.setattr(gh_mod, "_deployment_version", lambda: "test-ver")
         closes = []
-        monkeypatch.setattr(gh_mod, "_close_issue", lambda number: closes.append(number))
+        monkeypatch.setattr(gh_mod, "_api_request", lambda *a, **k: closes.append(a))
         for scenario in load_scenarios():
             rt_id = scenario["rt"].split()[0]
             run = TestRun(rt_id=rt_id, rt_issue_number=scenario["rt_issue"], version="test-ver",

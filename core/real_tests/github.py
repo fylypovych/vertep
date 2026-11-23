@@ -215,13 +215,6 @@ def _issue_fully_covered(issue_number: int | None) -> bool:
     return issue_fully_covered(issue_number)
 
 
-def _close_issue(issue_number: int) -> None:
-    """Close a GitHub issue with 'completed' reason."""
-    repo = _repo()
-    url = f"{_api_base()}/repos/{repo}/issues/{issue_number}"
-    _api_request("PATCH", url, body={"state": "closed", "state_reason": "completed"})
-
-
 class GitHubReporter:
     """Publishes test-run results to the corresponding GitHub ``rt`` Issue."""
 
@@ -430,41 +423,24 @@ class GitHubReporter:
         return True
 
     def close_issue(self, run: TestRun) -> dict[str, Any]:
-        """Close the rt Issue after a verified PASS. Returns status dict.
+        """Record that the rt Issue is ready for the owner to close after a verified PASS.
 
-        Acceptance is single-use: the lock serializes concurrent retries and
-        the persisted ``already_accepted`` flag survives a process restart, so
-        an Issue is never closed twice (i.0.0.1.39).
+        Only the owner closes Issues (#487 §2, #491 §8.1; owner decision 23.11.2026): the
+        runner never changes the Issue state. Readiness is single-use and survives a restart
+        (i.0.0.1.39), so it is announced once.
         """
         with self._accept_lock:
             if not self.can_close_issue(run):
-                return {"closed": False, "error": "PASS conditions not met for closing"}
+                return {"closed": False, "ready_for_owner": False, "error": "PASS conditions not met for closing"}
             persisted = get_test_run(run.test_run_id)
             if persisted and (persisted.github_report or {}).get("already_accepted"):
-                return {"closed": False, "error": "already accepted"}
-            last_error = None
-            for attempt in range(self.MAX_RETRIES):
-                try:
-                    _close_issue(run.rt_issue_number)
-                    audit_entry(run.test_run_id, "github_closed",
-                                f"closed issue #{run.rt_issue_number} after PASS", "github_reporter")
-                    record_github_report(run.test_run_id, run.final_result, None, None)
-                    if run.github_report:
-                        run.github_report["already_accepted"] = True
-                        update_test_run(run)
-                    return {"closed": True, "error": None}
-                except _TransientError as exc:
-                    last_error = str(exc)
-                    delay = self.BASE_DELAY * (2 ** attempt)
-                    audit_entry(run.test_run_id, "github_close_retry",
-                                f"attempt {attempt + 1} failed: {exc}; retrying in {delay}s",
-                                "github_reporter")
-                    time.sleep(delay)
-                except Exception as exc:
-                    last_error = str(exc)
-                    break
-            audit_entry(run.test_run_id, "github_close_failed", last_error, "github_reporter")
-            return {"closed": False, "error": last_error or "failed to close GitHub issue after retries"}
+                return {"closed": False, "ready_for_owner": True, "error": "already accepted"}
+            audit_entry(run.test_run_id, "github_ready_for_owner_close",
+                        f"issue #{run.rt_issue_number} meets PASS; the owner closes it", "github_reporter")
+            if run.github_report is not None:
+                run.github_report["already_accepted"] = True
+                update_test_run(run)
+            return {"closed": False, "ready_for_owner": True, "error": None}
 
     def retry_pending(self, run: TestRun) -> dict[str, Any]:
         """Retry GitHub reporting for a run stuck in REPORT_PENDING."""

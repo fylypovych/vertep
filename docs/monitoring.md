@@ -2,9 +2,13 @@
 
 > Статус: чинний | Аудиторія: оператор | Канон: [AGENTS.md](../AGENTS.md) §15.
 
-## Стек
+## Модуль Monitoring (#503)
 
-Monitoring Node: Prometheus + Grafana + Loki (+ Promtail/collector), persistent volumes. Конфігурація (scrape, dashboards, rules) — у digest-pinned образах, не в мутабельних runtime-файлах.
+Необов'язковий Application Module (`modules/monitoring`): адміністратор встановлює його в **Модулі** й розміщує на CORE або іншому вузлі (`placement.target: any`). Історія метрик і подій — у власній schema модуля в PostgreSQL; типовий строк зберігання — 3 дні з автоматичною ротацією, адміністратор може лише збільшити його (`modules/monitoring/monitoring_logic.py::retention_days`). Перед видаленням модуля історія архівується, архів відновлюється тим самим lifecycle.
+
+## Стек ролі сумісності
+
+Legacy-роль Monitoring Node: Prometheus + Grafana + Loki (+ Promtail/collector), persistent volumes. Конфігурація (scrape, dashboards, rules) — у digest-pinned образах, не в мутабельних runtime-файлах. Роль лишається для сумісності й мігрує під керування модуля.
 
 ## Що спостерігається
 

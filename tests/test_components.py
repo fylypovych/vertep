@@ -112,7 +112,9 @@ def test_shared_history_maps_misnamed_commits_and_finds_the_last_change():
 
 def test_every_module_declares_its_transition_version_and_legacy_values_rank_below_it():
     module_dirs = {path.parent.name for path in (ROOT / "modules").glob("*/manifest.yaml")}
-    assert module_dirs == set(MODULES)  # every official module is a registered component
+    # Every official module is a registered component; the LAB keeps its manifest beside its deployment.
+    assert module_dirs | {"lab"} == set(MODULES)
+    assert REGISTRY["components"]["lab"]["version_source"] == "deploy/lab/manifest.yaml"
     for module in MODULES:
         spec = REGISTRY["components"][module]
         declared = c.declared_version(module)
@@ -223,7 +225,8 @@ def test_the_component_workflow_publishes_only_after_tests_and_never_as_latest()
 
 def test_the_transition_record_matches_the_registry_and_the_manifests():
     transition = json.loads((ROOT / "config" / "component-transition.json").read_text())
-    assert set(transition["modules"]) == set(MODULES)
+    # The LAB joined the component releases after the #509 transition (#523, base from history).
+    assert set(transition["modules"]) == set(MODULES) - {"lab"}
     for module, entry in transition["modules"].items():
         spec = REGISTRY["components"][module]
         assert entry["base"] == spec["transition_base"], module
@@ -256,7 +259,7 @@ def test_the_full_history_reconciles_with_the_changelog_count_of_issue_509():
     # The bases are a snapshot at the transition; later releases (this very renumbering) do not move them.
     snapshot = [(v, files) for v, files in releases
                 if c.parse_version(v) <= c.parse_version(transition["last_shared_version"])]
-    for module in MODULES:
+    for module in set(MODULES) - {"lab"}:
         assert c.last_shared_change(module, snapshot) == REGISTRY["components"][module]["transition_base"], module
 
 
@@ -283,7 +286,9 @@ def test_every_module_with_a_container_gets_a_signed_package_core_accepts(tmp_pa
         if not spec.get("image"):
             continue
         image = f"ghcr.io/fylypovych/{spec['image']['name']}@sha256:" + "a" * 64
-        package = c.sign_package(c.build_package(module, image=image), private, "test-key")
+        extra = {item["service"]: f"ghcr.io/fylypovych/{item['name']}@sha256:" + "b" * 64
+                 for item in spec.get("extra_images", [])}
+        package = c.sign_package(c.build_package(module, image=image, extra_images=extra), private, "test-key")
         manifest = verify_package(package, trust)
         assert manifest.version == c.declared_version(module)
         assert manifest.to_dict()["container"]["image"] == image
@@ -344,3 +349,118 @@ def test_plan_names_the_tag_of_a_release_that_only_gets_its_package(tmp_path, mo
     entry = plan["brands"]
     assert entry["backfill"] and not entry["publish"] and "error" not in entry
     assert entry["tag"] == "brands.0.0.4.15" and entry["commit"] == "a" * 40
+
+
+# -- the LAB as a signed component (#491 L5, #523) -------------------------------------------------
+
+LAB_CONTROL = "ghcr.io/fylypovych/vertep-lab-control@sha256:" + "c" * 64
+LAB_WEB = "ghcr.io/fylypovych/vertep-lab-web@sha256:" + "d" * 64
+
+
+def _lab_package(private):
+    return c.sign_package(c.build_package("lab", image=LAB_CONTROL, extra_images={"lab-web": LAB_WEB}),
+                          private, "test-key")
+
+
+def test_the_component_plan_includes_the_lab_with_both_images(monkeypatch):
+    import types
+    spec = importlib.util.spec_from_file_location("component_release_lab", ROOT / "scripts" / "component-release.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli, "_tags", lambda: {})
+    assert "lab" in c.impact(["lab/api.py"]).components
+    assert "lab" in c.impact(["bootstrap-lab.sh", "deploy/lab/web/nginx.conf"]).components
+    entry = cli.cmd_plan(types.SimpleNamespace(components="lab", sha="f" * 40, releases=None))["lab"]
+    assert entry["publish"] and entry["tag"] == f"lab.{c.declared_version('lab')}"
+    assert entry["image"]["name"] == "vertep-lab-control"
+    assert [item["name"] for item in entry["extra_images"]] == ["vertep-lab-web"]
+
+
+def test_a_signed_lab_package_verifies_and_installs_only_as_isolated_lab(tmp_path):
+    import base64
+    from core.module.lifecycle import ModuleLifecycle
+    from core.module.packages import verify_package
+    private, trust = _ed25519_trust(tmp_path)
+    package = _lab_package(private)
+    manifest = verify_package(package, trust)
+    assert manifest.name == "lab" and manifest.placement["target"] == "isolated_lab"
+    assert manifest.to_dict()["container"]["image"] == LAB_CONTROL
+    assert json.loads(base64.b64decode(package["files"]["images.json"])) == {"lab-control": LAB_CONTROL,
+                                                                            "lab-web": LAB_WEB}
+    compose = base64.b64decode(package["files"]["docker-compose.yml"])
+    assert compose == (ROOT / "deploy/lab/docker-compose.web.yml").read_bytes()
+    lifecycle = ModuleLifecycle(tmp_path / "lc", lambda p: verify_package(p, trust),
+                                system_versions={"core_runtime": (ROOT / "VERSION").read_text().strip()})
+    lifecycle.install(package)
+    record = lifecycle.record("lab")
+    assert record["state"] == "INSTALLED" and record["version"] == c.declared_version("lab")
+    # Every image must be pinned by digest.
+    with pytest.raises(c.ComponentError):
+        c.build_package("lab", image=LAB_CONTROL, extra_images={"lab-web": "ghcr.io/x/lab-web:latest"})
+
+
+@pytest.mark.parametrize("tamper", ["compose", "images", "signer"])
+def test_a_forged_lab_package_is_refused(tmp_path, tamper):
+    import base64
+    from core.module.packages import verify_package
+    from core.module.trust import TrustError
+    private, trust = _ed25519_trust(tmp_path)
+    package = _lab_package(private)
+    if tamper == "compose":
+        package["files"]["docker-compose.yml"] = base64.b64encode(b"services: {evil: {image: x}}").decode()
+    elif tamper == "images":
+        package["files"]["images.json"] = base64.b64encode(json.dumps(
+            {"lab-control": LAB_CONTROL, "lab-web": "ghcr.io/evil/web@sha256:" + "e" * 64}).encode()).decode()
+    else:
+        package["signer"] = "unknown-key"
+    with pytest.raises((TrustError, KeyError, ValueError)):
+        verify_package(package, trust)
+
+
+def _bootstrap_function(name: str) -> str:
+    text = (ROOT / "bootstrap-lab.sh").read_text(encoding="utf-8")
+    start = text.index(f"{name}(){{")
+    return text[start:text.index("\n}\n", start)]
+
+
+def test_bootstrap_lab_installs_the_verified_release_without_building():
+    text = (ROOT / "bootstrap-lab.sh").read_text(encoding="utf-8")
+    release = _bootstrap_function("install_from_release")
+    assert "--build" not in release.replace("--no-build", "") and "git clone" not in release
+    assert "docker-compose.web.build.yml" not in release
+    # sha256 and the publisher signature are checked before compose pulls or starts anything.
+    checks = [release.index("sha256sum -c"), release.index("key.verify("), release.index("publishers.json")]
+    assert max(checks) < release.index("docker compose")
+    assert 'manifest["placement"]["target"] == "isolated_lab"' in release
+    # Building from source is only the explicit development path.
+    assert "git clone" in _bootstrap_function("build_from_source")
+    assert "if [[ $BUILD_FROM_SOURCE == 1 ]]; then build_from_source; else install_from_release; fi" in text
+    assert "BUILD_FROM_SOURCE=${VERTEP_LAB_BUILD_FROM_SOURCE:-0}" in text
+
+
+def test_bootstrap_lab_verifier_accepts_a_signed_package_and_rejects_a_forged_one(tmp_path):
+    """Runs the exact Python verifier from bootstrap-lab.sh against real signed packages."""
+    import re
+    import subprocess
+    import sys
+    release = _bootstrap_function("install_from_release")
+    verifier = re.search(r"<<'PY' \\\n.*?\n(.*?)\nPY\n", release, re.S).group(1)
+    script = tmp_path / "verify.py"
+    script.write_text(verifier)
+    private, _trust = _ed25519_trust(tmp_path)
+    package = _lab_package(private)
+    good, bad = tmp_path / "good.json", tmp_path / "bad.json"
+    good.write_text(json.dumps(package))
+    forged = json.loads(json.dumps(package))
+    forged["manifest"]["placement"] = {**forged["manifest"]["placement"], "target": "any"}
+    bad.write_text(json.dumps(forged))
+    for name, expected_ok in (("good", True), ("bad", False)):
+        root = tmp_path / f"root-{name}"
+        root.mkdir()
+        result = subprocess.run([sys.executable, "-I", str(script), str(tmp_path / f"{name}.json"),
+                                 str(tmp_path / "publishers.json"), str(root)], capture_output=True, text=True)
+        assert (result.returncode == 0) is expected_ok, result.stderr
+        assert (root / "docker-compose.yml").exists() is expected_ok
+        if expected_ok:
+            assert f"LAB_CONTROL_IMAGE={LAB_CONTROL}" in result.stdout and f"LAB_WEB_IMAGE={LAB_WEB}" in result.stdout
+            assert (root / "docker-compose.yml").read_bytes() == (ROOT / "deploy/lab/docker-compose.web.yml").read_bytes()

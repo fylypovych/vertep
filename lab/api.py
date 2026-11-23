@@ -11,7 +11,7 @@ orchestrator and the policy gate keep working.
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from .budget import BudgetLedger
@@ -21,6 +21,7 @@ from .notifications import NotificationSettings, SettingsError
 from .orchestrator import Orchestrator
 from .policy import Action, PolicyDenied, PolicyGate
 from .reports import ReportBuilder, ReportError
+from .settings import LabSettings, SettingsError as LabSettingsError, apply_environment
 from .workspace import Workspace
 
 
@@ -70,6 +71,10 @@ class NotificationSettingsRequest(BaseModel):
     reason: str = ""
 
 
+class LabSettingsRequest(BaseModel):
+    settings: dict
+
+
 class IrEvidenceRequest(BaseModel):
     identifier: str
     evidence: dict = {}
@@ -107,6 +112,16 @@ def _require_owner(raw_request: Request) -> str:
     return os.getenv("LAB_OWNER_IDENTITY", "owner")
 
 
+# #491 L2/L8: only the probes and the login entry are anonymous; every other LAB API call is an
+# administrator's (a Vertep assertion or the LAB owner token).
+PUBLIC_PATHS = frozenset({"/api/lab/healthz", "/api/lab/readyz", "/api/lab/login"})
+
+
+def _owner_guard(raw_request: Request) -> None:
+    if raw_request.url.path not in PUBLIC_PATHS:
+        _require_owner(raw_request)
+
+
 def create_app(state_dir=None, workspace_root=None, *, provider=None,
                 executor=None) -> FastAPI:
     """Build the laboratory API around one shared gate instance."""
@@ -115,6 +130,8 @@ def create_app(state_dir=None, workspace_root=None, *, provider=None,
     workspace = Workspace(Path(workspace_root or os.getenv("LAB_WORKSPACE",
                                                            "/srv/vertep-lab/repo")))
     workspace.prepare()
+    state.mkdir(parents=True, exist_ok=True)
+    apply_environment(state)  # stored LAB settings over lab.env (#491 L4)
     gate = PolicyGate(state)
     budget = BudgetLedger(state / "budget")
     if executor is None:
@@ -131,11 +148,49 @@ def create_app(state_dir=None, workspace_root=None, *, provider=None,
     notifications = NotificationSettings(gate, state_dir=state)
     reports = ReportBuilder(orchestrator, gate, governance, notifications)
 
-    app = FastAPI(title="Vertep Laboratory API", version="1")
-    app.state.context = {"gate": gate, "budget": budget, "orchestrator": orchestrator,
+    settings = LabSettings(gate, state)
+    app = FastAPI(title="Vertep Laboratory API", version="1", dependencies=[Depends(_owner_guard)])
+    app.state.context = {"settings": settings, "gate": gate, "budget": budget, "orchestrator": orchestrator,
                          "governance": governance, "workspace": workspace,
                          "leases": orchestrator.leases,
                          "notifications": notifications, "reports": reports}
+
+    @app.get("/api/lab/healthz")
+    @app.get("/api/lab/readyz")
+    def healthz() -> dict:
+        return {"status": "ok", "policy_activated": gate.activated}
+
+    @app.get("/api/lab/login")
+    def login():
+        """«Увійти через Vertep»: to the Vertep panel, which signs the administrator in (#491 L3).
+
+        The Vertep session cookie is SameSite=Strict, so a cross-site link straight to
+        CORE's ``/api/lab/login`` would arrive without it; the Vertep page ``/lab``
+        starts that same-site request itself.
+        """
+        from fastapi.responses import RedirectResponse
+        vertep = os.getenv("LAB_VERTEP_URL", "").strip().rstrip("/")
+        if not vertep:
+            raise HTTPException(409, "Vertep URL is not configured")
+        return RedirectResponse(f"{vertep}/lab", status_code=302)
+
+    @app.get("/api/lab/settings")
+    def settings_get() -> dict:
+        return settings.show()
+
+    @app.put("/api/lab/settings")
+    def settings_update(request: LabSettingsRequest, raw_request: Request) -> dict:
+        """One settings store for panel and CLI; an owner act audited in the gate (#491 L4)."""
+        try:
+            result = settings.update(request.settings, actor=_require_owner(raw_request))
+        except LabSettingsError as error:
+            raise HTTPException(422, str(error)) from error
+        if {"github_repository", "github_token"} & set(request.settings):
+            governance.transport = default_transport()
+        # The GPU resource client is built at start: a new address/token applies after a restart.
+        result["restart_required"] = bool({"resource_url", "resource_token", "resource_ca_pem",
+                                           "idle_sharing_enabled"} & set(request.settings))
+        return result
 
     @app.get("/api/lab/status")
     def status() -> dict:

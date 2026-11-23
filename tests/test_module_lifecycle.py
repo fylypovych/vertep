@@ -326,6 +326,25 @@ def test_permission_approval_gates_activation(tmp_path, key, module_postgres):
     assert lifecycle.record("notes")["version"] == "1.0.0"
 
 
+def test_approved_permissions_survive_restart_update_and_rollback(tmp_path, key, module_postgres):
+    """#522 AC2: approvals live in the placement store, outside the module snapshot; after a
+    CORE restart, an approved update and a rollback the module activates without a new approval."""
+    lifecycle = make(tmp_path, key, module_postgres)
+    lifecycle.install(package(key, permissions=["notes.read"]))
+    lifecycle.registry.approve_permissions("notes", ["notes.read"])
+    lifecycle.activate("notes")
+    lifecycle.update(package(key, version="1.1.0", migrations={"m1": M1, "m2": M2},
+                             permissions=["notes.read"]), confirmed=True)
+
+    restarted = make(tmp_path, key, module_postgres)  # a new CORE process over the same state
+    assert restarted.registry.placement.approvals["notes"] == ["notes.read"]
+    restarted.rollback("notes")
+    assert restarted.record("notes")["version"] == "1.0.0"
+    restarted.deactivate("notes")
+    assert restarted.activate("notes")["state"] == "ACTIVE"  # no second approval needed
+    assert restarted.registry.placement.approvals["notes"] == ["notes.read"]
+
+
 def test_admin_api_requires_admin_and_confirmation(tmp_path, key, module_postgres, monkeypatch):
     import hashlib
     import hmac
