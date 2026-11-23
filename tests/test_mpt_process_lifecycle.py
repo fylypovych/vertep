@@ -319,7 +319,7 @@ def lifecycle(tmp_path, runtime_endpoint, request):
     cores: list[subprocess.Popen] = []
 
     def start_core() -> subprocess.Popen:
-        process = start(f"core-{len(cores)}", [sys.executable, "-m", "uvicorn", "core.app:app",
+        process = start(f"core-{len(cores)}", [sys.executable, "-m", "uvicorn", "tests.core_app_modules_active:app",
                                                 "--host", "127.0.0.1", "--port", str(port)], core_env)
         cores.append(process)
         _wait(lambda: process.poll() is None and api.get("/api/health").status_code < 500, 120,

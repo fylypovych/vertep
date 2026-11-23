@@ -112,7 +112,9 @@ jobs:
         run: |
           # Лог у файл, а не в pipe кроку: інакше процес гине разом із кроком
           # на першому ж записі після його завершення.
-          nohup python -m uvicorn core.app:app --host 127.0.0.1 --port 8080 \
+          # Module containers do not run here: official modules count as READY, so the
+          # smoke tests reach the Characters/Brands pages and their CORE API (owner, 23.11.2026).
+          nohup python -m uvicorn tests.core_app_modules_active:app --host 127.0.0.1 --port 8080 \
             > "$RUNNER_TEMP/vertep-core.log" 2>&1 &
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1; then
