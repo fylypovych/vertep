@@ -251,6 +251,9 @@ export interface WebUIMigrationResult {
   skipped: number;
 }
 
+/** The Characters module acts for the owner brand given as `brand_id` (#499); it refuses changes without it. */
+const ownerBrand = (brandId?: string | null): string => brandId ? `?brand_id=${encodeURIComponent(brandId)}` : '';
+
 @Injectable({ providedIn: 'root' })
 export class ResourcesApiService {
   private h = () => this.base.headers();
@@ -269,18 +272,18 @@ export class ResourcesApiService {
   // Characters Module API (Application Module)
   moduleCharacters = (): Observable<ModuleCharacter[]> => this.http.get<ModuleCharacter[]>(`${this.base.url}/modules/characters/v1/characters`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleCharacter = (id: string): Observable<ModuleCharacter> => this.http.get<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleCreateCharacter = (p: Character): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleUpdateCharacter = (id: string, p: Character): Observable<ModuleCharacter> => this.http.put<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleDeleteCharacter = (id: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleActivateCharacter = (id: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/activate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleDeactivateCharacter = (id: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/deactivate`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleCreateCharacter = (p: Character, brandId?: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters${ownerBrand(brandId)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUpdateCharacter = (id: string, p: Character, brandId?: string): Observable<ModuleCharacter> => this.http.put<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}${ownerBrand(brandId)}`, p, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeleteCharacter = (id: string, brandId?: string): Observable<{ deleted: string }> => this.http.delete<{ deleted: string }>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}${ownerBrand(brandId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleActivateCharacter = (id: string, brandId?: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/activate${ownerBrand(brandId)}`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleDeactivateCharacter = (id: string, brandId?: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/deactivate${ownerBrand(brandId)}`, {}, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleCharacterReferences = (id: string): Observable<CharacterReference[]> => this.http.get<CharacterReference[]>(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references`, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleUploadCharacterReference = (id: string, file: File): Observable<CharacterReference> => this.http.post<CharacterReference>(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references`, file).pipe(catchError(this.base.handleError));
-  moduleDeleteCharacterReference = (id: string, name: string): Observable<unknown> => this.http.delete(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleUploadCharacterReference = (id: string, file: File, brandId?: string): Observable<CharacterReference> => this.http.post<CharacterReference>(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references${ownerBrand(brandId)}`, file).pipe(catchError(this.base.handleError));
+  moduleDeleteCharacterReference = (id: string, name: string, brandId?: string): Observable<unknown> => this.http.delete(`${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}${ownerBrand(brandId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleCharacterReferenceUrl = (id: string, name: string): string => `${this.base.url}/modules/characters/v1/characters/${encodeURIComponent(id)}/references/${encodeURIComponent(name)}`;
   moduleCharacterCollaborations = (id: string): Observable<string[]> => this.http.get<string[]>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/collaborations`, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleAddCollaboration = (id: string, brandId: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/collaborations`, { brand_id: brandId }, { headers: this.h() }).pipe(catchError(this.base.handleError));
-  moduleRemoveCollaboration = (id: string, brandId: string): Observable<{ removed: string }> => this.http.delete<{ removed: string }>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/collaborations/${this.base.enc(brandId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleAddCollaboration = (id: string, brandId: string, ownerBrandId?: string): Observable<ModuleCharacter> => this.http.post<ModuleCharacter>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/collaborations${ownerBrand(ownerBrandId)}`, { brand_id: brandId }, { headers: this.h() }).pipe(catchError(this.base.handleError));
+  moduleRemoveCollaboration = (id: string, brandId: string, ownerBrandId?: string): Observable<{ removed: string }> => this.http.delete<{ removed: string }>(`${this.base.url}/modules/characters/v1/characters/${this.base.enc(id)}/collaborations/${this.base.enc(brandId)}${ownerBrand(ownerBrandId)}`, { headers: this.h() }).pipe(catchError(this.base.handleError));
   moduleMigrateCharacters = (defaultOwnerBrand = 'vertep'): Observable<MigrationResult> => this.http.post<MigrationResult>(`${this.base.url}/modules/characters/v1/migrate`, { default_owner_brand: defaultOwnerBrand }, { headers: this.h() }).pipe(catchError(this.base.handleError));
 
   // Brands Module API (Application Module)

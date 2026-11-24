@@ -203,6 +203,8 @@ def _revoked_sessions() -> dict[str, int]:
 def revoke_session(token: str) -> None:
     """#442 D8: logout ends the session on the server, not only in the browser. The signed
     token is stateless, so its hash is kept until the token would have expired anyway."""
+    if _valid_session(token) is None:
+        return  # only a genuine live session is recorded: a forged cookie must not grow the file
     try:
         expiry = int(token.rsplit(".", 1)[0].split(":", 1)[0])
     except (ValueError, IndexError):

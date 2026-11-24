@@ -318,15 +318,20 @@ export class CharactersComponent implements OnInit {
   /** The page opens only with the Characters module READY (modulePageGuard): its API is the one library. */
   loaded = false;
 
+  /** The module changes a character only for its owner brand (`brand_id`, #499). */
+  private ownerOf(id: string): string | undefined {
+    return this.characters.find((c) => c.id === id)?.owner_brand_id || this.form.owner_brand_id?.trim() || undefined;
+  }
+
   get characterApi() {
     const api = this.resources;
     return {
-      createCharacter: api.moduleCreateCharacter,
-      updateCharacter: api.moduleUpdateCharacter,
-      deleteCharacter: api.moduleDeleteCharacter,
+      createCharacter: (p: Character) => api.moduleCreateCharacter(p, p.owner_brand_id),
+      updateCharacter: (id: string, p: Character) => api.moduleUpdateCharacter(id, p, this.ownerOf(id)),
+      deleteCharacter: (id: string) => api.moduleDeleteCharacter(id, this.ownerOf(id)),
       characterReferences: api.moduleCharacterReferences,
-      uploadCharacterReference: api.moduleUploadCharacterReference,
-      deleteCharacterReference: api.moduleDeleteCharacterReference,
+      uploadCharacterReference: (id: string, file: File) => api.moduleUploadCharacterReference(id, file, this.ownerOf(id)),
+      deleteCharacterReference: (id: string, name: string) => api.moduleDeleteCharacterReference(id, name, this.ownerOf(id)),
       characterReferenceUrl: api.moduleCharacterReferenceUrl,
     };
   }
@@ -537,7 +542,7 @@ export class CharactersComponent implements OnInit {
       visual: this.form.visual || { style: '', aspect_ratio: '16:9', output_preset: 'youtube' },
       generation: this.form.generation || { workflow: 'workflows/image/demo.json', min_vram_mb: 4096, max_retries: 3 },
       publishing: this.form.publishing || { enabled: false, channels: '' },
-      owner_brand_id: 'vertep', // Default owner brand
+      owner_brand_id: this.form.owner_brand_id?.trim() || 'vertep',
       active: false,
     };
 
@@ -582,14 +587,14 @@ export class CharactersComponent implements OnInit {
   }
 
   activateCharacter(id: string): void {
-    this.resources.moduleActivateCharacter(id).subscribe({
+    this.resources.moduleActivateCharacter(id, this.ownerOf(id)).subscribe({
       next: () => { this.loadCharacters(); this.toast.show('Персонаж активовано', 'success'); },
       error: (err) => this.toast.show(err.message || 'Помилка активації', 'error'),
     });
   }
 
   deactivateCharacter(id: string): void {
-    this.resources.moduleDeactivateCharacter(id).subscribe({
+    this.resources.moduleDeactivateCharacter(id, this.ownerOf(id)).subscribe({
       next: () => { this.loadCharacters(); this.toast.show('Персонаж деактивовано', 'success'); },
       error: (err) => this.toast.show(err.message || 'Помилка деактивації', 'error'),
     });
@@ -605,7 +610,7 @@ export class CharactersComponent implements OnInit {
 
   addCollaboration(): void {
     if (!this.collabCharacterId || !this.newCollabBrandId.trim()) return;
-    this.resources.moduleAddCollaboration(this.collabCharacterId, this.newCollabBrandId.trim()).subscribe({
+    this.resources.moduleAddCollaboration(this.collabCharacterId, this.newCollabBrandId.trim(), this.ownerOf(this.collabCharacterId)).subscribe({
       next: () => {
         this.newCollabBrandId = '';
         this.manageCollaborations({ id: this.collabCharacterId });
@@ -617,7 +622,7 @@ export class CharactersComponent implements OnInit {
 
   removeCollaboration(brandId: string): void {
     if (!this.collabCharacterId) return;
-    this.resources.moduleRemoveCollaboration(this.collabCharacterId, brandId).subscribe({
+    this.resources.moduleRemoveCollaboration(this.collabCharacterId, brandId, this.ownerOf(this.collabCharacterId)).subscribe({
       next: () => { this.manageCollaborations({ id: this.collabCharacterId }); this.toast.show('Співпрацю видалено', 'success'); },
       error: (err) => this.toast.show(err.message || 'Помилка видалення співпраці', 'error'),
     });

@@ -3457,90 +3457,9 @@ def test_real_tests_run_flow_through_browser_api():
 
 
 # ── i.0.0.2.3 (#196.1–#196.4): Character/Workflow через реальний CORE API ──
-# Ці тести не мокують /api/characters* і /api/workflows*: вони доводять справжній
-# save/reload, uniqueness, validation і force-контракт на запущеному CORE. Штатні
-# UI-кнопки («Новий персонаж», «Редагувати», «Зберегти») надсилають реальні
-# мутації через API; ручний JSON не є обов'язковим для створення персонажа.
-
-
-def _real_character_ids(page):
-    response = page.request.get(f"{BASE_URL}/api/characters")
-    assert response.ok, response.text()
-    return {item["id"] for item in response.json()}
-
-
-def test_real_backend_character_create_reload_uniqueness_and_validation():
-    """#196.1/#196.2: create typed controls → real API, reload persistence, uniqueness, validation."""
-    suffix = uuid.uuid4().hex[:8]
-    character_id = f"e2e-char-{suffix}"
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page_errors, console_errors = _attach_error_collector(page)
-        try:
-            _ui_login(page, ADMIN_USER, ADMIN_PASSWORD)
-            page.goto(f"{BASE_URL}/characters")
-            expect(page.locator("[data-testid='characters-page']")).to_be_visible(timeout=20000)
-
-            page.locator("[data-testid='create-character-button']").click()
-            modal = page.locator("[data-testid='character-modal']")
-            expect(modal).to_be_visible()
-            page.locator("[data-testid='character-id-input']").fill(character_id)
-            page.locator("[data-testid='character-name-input']").fill("E2E Персонаж")
-            page.get_by_placeholder("4096").fill("2560")
-            page.get_by_role("button", name="Зберегти").click()
-            expect(modal).to_be_hidden()
-
-            # Reload persistence: the created character is served by the real API.
-            assert character_id in _real_character_ids(page)
-            created = page.request.get(f"{BASE_URL}/api/characters/{character_id}").json()
-            assert created["name"] == "E2E Персонаж"
-            assert created["generation"]["min_vram_mb"] == 2560
-
-            page.reload()
-            expect(page.locator("[data-testid='characters-page']")).to_be_visible(timeout=20000)
-            page.locator("[data-testid='characters-search']").fill(character_id)
-            expect(page.locator("[data-testid='characters-page']").get_by_text(
-                character_id, exact=True)).to_be_visible()
-
-            # Editing keeps the immutable backend ID (PUT rejects id change).
-            page.get_by_role("button", name="Редагувати").first.click()
-            modal = page.locator("[data-testid='character-modal']")
-            expect(modal).to_be_visible()
-            assert page.locator("[data-testid='character-id-input']").is_disabled()
-            page.locator("[data-testid='character-name-input']").fill("E2E Персонаж оновлений")
-            page.get_by_role("button", name="Зберегти").click()
-            expect(modal).not_to_be_visible()
-            assert page.request.get(f"{BASE_URL}/api/characters/{character_id}").json()["name"] == "E2E Персонаж оновлений"
-
-            # Uniqueness: the same ID is refused by the real API (409) and the editor stays open.
-            page.locator("[data-testid='create-character-button']").click()
-            modal = page.locator("[data-testid='character-modal']")
-            expect(modal).to_be_visible()
-            page.locator("[data-testid='character-id-input']").fill(character_id)
-            page.locator("[data-testid='character-name-input']").fill("Дубль")
-            page.get_by_role("button", name="Зберегти").click()
-            expect(modal).to_be_visible()
-
-            # Validation: an invalid ID is refused by the real API (400) and keeps the editor open.
-            page.locator("[data-testid='character-id-input']").fill("bad id!")
-            page.get_by_role("button", name="Зберегти").click()
-            expect(modal).to_be_visible()
-            assert character_id in _real_character_ids(page)
-
-            page.get_by_role("button", name="Скасувати").click()
-            expect(modal).not_to_be_visible()
-
-            # Cleanup through the real delete contract.
-            deleted = page.request.delete(
-                f"{BASE_URL}/api/characters/{character_id}", headers=_csrf_headers(page.context))
-            assert deleted.ok, deleted.text()
-            assert character_id not in _real_character_ids(page)
-
-            assert page_errors == [], f"pageerror: {page_errors}"
-            _assert_no_js_errors(page_errors, console_errors)
-        finally:
-            browser.close()
+# Цей тест не мокує /api/workflows*: він доводить справжній save/reload і force-контракт на
+# запущеному CORE. Сторінку «Персонажі» з реальним модулем перевіряє
+# tests/test_characters_browser_rbac.py (вона працює лише через API модуля Characters).
 
 
 def test_real_backend_workflow_edit_save_reload_and_force_contract():

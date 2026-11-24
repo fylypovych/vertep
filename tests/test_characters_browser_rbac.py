@@ -137,6 +137,35 @@ def test_owner_non_owner_and_admin_through_the_gateway_in_the_browser(module_run
                     page.goto(url + "/modules/characters")
                     expect(page.get_by_test_id("module-extension-frame")).to_be_visible(timeout=20000)
                     page.close()
+
+                # The panel page "Персонажі" works only through the module (0.0.4.42): create with
+                # the owner brand, reload, edit, and a duplicate ID keeps the editor open.
+                page = admin.new_page()
+                page.goto(url + "/characters")
+                create = page.get_by_test_id("create-character-button")
+                expect(create).to_be_enabled(timeout=20000)
+                create.click()
+                modal = page.get_by_test_id("character-modal")
+                page.get_by_test_id("character-id-input").fill("panel-made")
+                page.get_by_test_id("character-name-input").fill("З панелі")
+                page.get_by_placeholder("vertep").fill("brand-a")
+                page.get_by_role("button", name="Зберегти").click()
+                expect(modal).to_be_hidden()
+                made = admin.request.get(url + "/api/modules/characters/v1/characters/panel-made?brand_id=brand-a").json()
+                assert made["name"] == "З панелі" and made["owner_brand_id"] == "brand-a"
+                page.reload()
+                page.get_by_test_id("characters-search").fill("panel-made")
+                page.get_by_role("button", name="Редагувати").first.click()
+                page.get_by_test_id("character-name-input").fill("З панелі 2")
+                page.get_by_role("button", name="Зберегти").click()
+                expect(modal).to_be_hidden()
+                assert admin.request.get(url + "/api/modules/characters/v1/characters/panel-made?brand_id=brand-a").json()["name"] == "З панелі 2"
+                page.get_by_test_id("create-character-button").click()
+                page.get_by_test_id("character-id-input").fill("panel-made")
+                page.get_by_test_id("character-name-input").fill("Дубль")
+                page.get_by_role("button", name="Зберегти").click()
+                expect(modal).to_be_visible()
+                page.close()
             finally:
                 browser.close()
     finally:

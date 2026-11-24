@@ -29,3 +29,10 @@ def test_logout_revokes_the_session_on_the_server(monkeypatch, tmp_path):
     assert replay.get("/api/jobs", cookies=cookies).status_code == 401
     assert TestClient(app).get("/api/jobs", cookies={"vertep_session": other}).status_code == 200  # other session lives
     assert stat.S_IMODE((tmp_path / "revoked-sessions.json").stat().st_mode) == 0o600
+
+
+def test_a_forged_cookie_is_not_recorded(monkeypatch, tmp_path):
+    from core.security import revoke_session
+    monkeypatch.setenv("CONFIG_ROOT", str(tmp_path))
+    revoke_session("99999999999:admin:admin:x.forged-signature")
+    assert not (tmp_path / "revoked-sessions.json").exists()
