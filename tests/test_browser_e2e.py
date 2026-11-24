@@ -214,14 +214,15 @@ def test_character_create_and_edit_use_localized_form():
             "visual": {"style": "тепла ілюстрація", "aspect_ratio": "16:9"},
             "generation": {"workflow": "workflows/image/demo.json", "min_vram_mb": 4096,
                            "max_retries": 3},
-            "publishing": {"enabled": False, "channels": []},
+            "publishing": {"enabled": False, "channels": []}, "owner_brand_id": "brand-a",
         }
         saved = []
         def handle_character(route):
             if route.request.method == "PUT":
-                saved.append(route.request.post_data_json)
+                saved.append((route.request.url, route.request.post_data_json))
             route.fulfill(json=character)
-        page.route("**/api/modules/characters/v1/characters/did_samogon", handle_character)
+        # The module changes a character only for its owner brand (?brand_id=, #499).
+        page.route(re.compile(r".*/api/modules/characters/v1/characters/did_samogon(\?.*)?$"), handle_character)
         page.route("**/api/modules/characters/v1/characters", lambda route: route.fulfill(json=[character]))
         page.route("**/api/modules/characters/v1/characters/did_samogon/references", lambda route: route.fulfill(json=[]))
         page.goto(f"{BASE_URL}/characters")
@@ -242,7 +243,8 @@ def test_character_create_and_edit_use_localized_form():
         page.locator("[data-testid='character-name-input']").fill("Дід Самогонщик оновлений")
         page.get_by_role("button", name="Зберегти").click()
         expect(page.locator("[data-testid='character-modal']")).not_to_be_visible()
-        assert saved[0]["name"] == "Дід Самогонщик оновлений"
+        assert saved[0][1]["name"] == "Дід Самогонщик оновлений"
+        assert saved[0][0].endswith("/did_samogon?brand_id=brand-a")
         _assert_no_js_errors(page_errors, console_errors)
         browser.close()
 
