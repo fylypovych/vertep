@@ -380,6 +380,10 @@ def _handle_telegram_message(chat_id: str, source_id: str, text: str, message: d
             return TelegramAdapter().send_message(chat_id, "✍️ Правки до відео прийнято. Перезбираю…")
         except Exception as error:
             return TelegramAdapter().send_message(chat_id, f"❌ Помилка: {error}")
+    from core.module.navigation import inactive_job_modules
+    if inactive_job_modules():  # no brand or character choice from a module that is off
+        from .job_callbacks import _modules_off_text
+        return TelegramAdapter().send_message(chat_id, _modules_off_text())
     attachments = {key: message.get(key) for key in ("photo", "video", "document", "audio") if message.get(key)}
     _telegram_pending_brands[chat_id] = {"text": text, "source_id": source_id, "message": message, "attachments": attachments}
     from ..brand_store import list_brands

@@ -19,6 +19,7 @@ from starlette.responses import Response
 
 from adapters.providers import providers
 
+from ..module.navigation import require_module
 from ..artifacts import register_artifact, verify_artifacts, write_manifest
 from ..configuration import (DefaultCharacterError, default_character_id, load_character,
                              missing_character_files)
@@ -95,6 +96,9 @@ def _check_character_module(character_id: str, brand_id: str) -> str | None:
 
 @router.post("/api/jobs")
 def create_job(request: JobCreate, http_request: Request = None):
+    from ..module.navigation import MODULE_INACTIVE, inactive_job_modules
+    if inactive_job_modules():
+        raise HTTPException(503, MODULE_INACTIVE)
     brands = getattr(getattr(http_request, "state", None), "vertep_brands", None)
     if brands is not None and request.brand_id not in brands:
         # A moderator creates jobs only for the brands of its account.
@@ -603,7 +607,7 @@ def shared_publication(job_id: str, body: dict, http_request: Request = None):
     return derived
 
 
-@router.post("/api/jobs/{job_id}/publish")
+@router.post("/api/jobs/{job_id}/publish", dependencies=[require_module("publishing")])
 def publish_job(job_id: str, channels: list[str] | None = None):
     job = store.jobs.get(job_id)
     if not job:

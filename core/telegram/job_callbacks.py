@@ -55,6 +55,11 @@ def _sanitize_creation_error(error: Exception) -> str:
     return text[:200]
 
 
+def _modules_off_text() -> str:
+    from core.module.navigation import inactive_job_modules
+    return "Створення завдань недоступне: вимкнено модуль " + ", ".join(f"«{m}»" for m in inactive_job_modules()) + "."
+
+
 def _handle_brand_selection(callback: dict, chat_id: str, brand_id: str) -> dict:
     callback_id = str(callback.get("id", ""))
     pending = _telegram_pending_brands.get(chat_id)
@@ -271,6 +276,9 @@ def _create_job_from_telegram(pending: dict, brand_id: str, character_id: str | 
     for existing in store.jobs.values():
         if existing.source == source:
             return existing
+    from core.module.navigation import inactive_job_modules
+    if inactive_job_modules():
+        raise HTTPException(503, _modules_off_text())
     from core.system_state import jobs_may_be_created
     if not jobs_may_be_created():
         raise HTTPException(503, "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.")

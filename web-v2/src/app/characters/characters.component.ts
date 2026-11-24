@@ -3,7 +3,7 @@ import { Component, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
-import { catchError, concatMap, from, Observable, of, tap, throwError, toArray } from 'rxjs';
+import { catchError, concatMap, from, Observable, of, tap, toArray } from 'rxjs';
 import { CharacterReference, ResourcesApiService, ModuleCharacter, MigrationResult } from '../core/api/resources.api';
 import { ToastService } from '../core/services/toast.service';
 import { ConfirmService } from '../core/services/confirm.service';
@@ -21,7 +21,7 @@ import { ErrorStateComponent } from '../shared/error-state.component';
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">{{ 'Персонажі' | t }}</h3>
         <div class="flex items-center gap-2">
-          @if (useCharactersModule && policy.can('admin_module_migrate').allowed) {
+          @if (policy.can('admin_module_migrate').allowed) {
             <button (click)="runMigration()" data-testid="migrate-characters-button" class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium">{{ 'Міграція' | t }}</button>
           }
           <button (click)="openCreateModal()" data-testid="create-character-button" [disabled]="!canCreateCharacter" [title]="(createCharacterReason || 'Новий персонаж') | t" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50">
@@ -60,14 +60,13 @@ import { ErrorStateComponent } from '../shared/error-state.component';
               <div class="flex flex-wrap gap-2 mb-2">
                 <button (click)="editCharacter(character)" class="text-sm text-blue-600 hover:text-blue-700 font-medium" data-testid="edit-character-button">{{ 'Редагувати' | t }}</button>
                 <button (click)="deleteCharacter(character.id!)" [disabled]="!canDeleteCharacter" [title]="(deleteCharacterReason || 'Видалити') | t" class="text-sm text-red-600 hover:text-red-700 font-medium disabled:opacity-40" data-testid="delete-character-button">{{ 'Видалити' | t }}</button>
-                @if (useCharactersModule) {
-                  @if (character.active !== false) {
+                @if (character.active !== false) {
                     <button (click)="deactivateCharacter(character.id!)" class="text-sm text-amber-600 hover:text-amber-700 font-medium" data-testid="deactivate-character-button">{{ 'Деактивувати' | t }}</button>
                   } @else {
                     <button (click)="activateCharacter(character.id!)" class="text-sm text-emerald-600 hover:text-emerald-700 font-medium" data-testid="activate-character-button">{{ 'Активувати' | t }}</button>
                   }
                   <button (click)="manageCollaborations(character)" class="text-sm text-violet-600 hover:text-violet-700 font-medium" data-testid="collaborations-button">{{ 'Співпраця' | t }}</button>
-                }
+
               </div>
             </div>
           } @empty {
@@ -110,26 +109,24 @@ import { ErrorStateComponent } from '../shared/error-state.component';
                   <option value="de">{{ 'Німецька' | t }}</option>
                 </select>
               </div>
-              @if (useCharactersModule) {
-                <div>
+              <div>
                   <label class="block text-sm font-medium text-slate-700 mb-1">{{ 'Власник (бренд)' | t }}</label>
                   <input [(ngModel)]="form.owner_brand_id" placeholder="vertep" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
                 </div>
-              }
+
               <div class="flex items-end">
                 <div class="flex items-center gap-2">
                   <input type="checkbox" [(ngModel)]="form.enabled" id="enabled">
                   <label for="enabled" class="text-sm text-slate-700">{{ 'Персонаж увімкнений (legacy)' | t }}</label>
                 </div>
               </div>
-              @if (useCharactersModule) {
-                <div class="flex items-end">
+              <div class="flex items-end">
                   <div class="flex items-center gap-2">
                     <input type="checkbox" [(ngModel)]="form.active" id="active">
                     <label for="active" class="text-sm text-slate-700">{{ 'Модуль активний' | t }}</label>
                   </div>
                 </div>
-              }
+
               <div class="md:col-span-2">
                 <label class="block text-sm font-medium text-slate-700 mb-1">Workflow</label>
                 <input [(ngModel)]="form.workflow" placeholder="workflows/image/demo.json" class="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
@@ -318,11 +315,12 @@ import { ErrorStateComponent } from '../shared/error-state.component';
 })
 export class CharactersComponent implements OnInit {
   characters: Character[] = [];
-  useCharactersModule: boolean | null = null;
+  /** The page opens only with the Characters module READY (modulePageGuard): its API is the one library. */
+  loaded = false;
 
   get characterApi() {
     const api = this.resources;
-    return this.useCharactersModule ? {
+    return {
       createCharacter: api.moduleCreateCharacter,
       updateCharacter: api.moduleUpdateCharacter,
       deleteCharacter: api.moduleDeleteCharacter,
@@ -330,7 +328,7 @@ export class CharactersComponent implements OnInit {
       uploadCharacterReference: api.moduleUploadCharacterReference,
       deleteCharacterReference: api.moduleDeleteCharacterReference,
       characterReferenceUrl: api.moduleCharacterReferenceUrl,
-    } : api;
+    };
   }
   loading = signal(false);
   error = signal<string | null>(null);
@@ -362,10 +360,10 @@ export class CharactersComponent implements OnInit {
   showCollabModal = signal(false);
   collabCharacterId: string | null = null;
 
-  get canCreateCharacter(): boolean { return this.useCharactersModule !== null && this.policy.can('create_character').allowed; }
+  get canCreateCharacter(): boolean { return this.loaded && this.policy.can('create_character').allowed; }
   get createCharacterReason(): string | null { return this.policy.disabledReason('create_character'); }
   get canSaveCharacter(): boolean {
-    return this.useCharactersModule !== null && this.policy.can(this.editingId ? 'update_character' : 'create_character').allowed;
+    return this.loaded && this.policy.can(this.editingId ? 'update_character' : 'create_character').allowed;
   }
   get saveCharacterReason(): string | null {
     return this.policy.disabledReason(this.editingId ? 'update_character' : 'create_character');
@@ -398,18 +396,7 @@ export class CharactersComponent implements OnInit {
   loadCharacters(): void {
     this.loading.set(true);
     this.error.set(null);
-    const request = this.useCharactersModule === false ? this.resources.characters() :
-      this.resources.moduleCharacters().pipe(
-        tap(() => { this.useCharactersModule = true; }),
-        catchError(err => {
-          const moduleUnavailable = (err.status === 404 && err.code === 'module_api_is_not_available')
-            || (err.status === 409 && err.code === 'workflow_templates_are_not_configured');
-          if (this.useCharactersModule !== null || !moduleUnavailable) {
-            return throwError(() => err);
-          }
-          return this.resources.characters().pipe(tap(() => { this.useCharactersModule = false; }));
-        }),
-      );
+    const request = this.resources.moduleCharacters().pipe(tap(() => { this.loaded = true; }));
     request.subscribe({
       next: (characters) => {
         this.characters = characters.map(c => ({

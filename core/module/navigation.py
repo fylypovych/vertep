@@ -34,6 +34,16 @@ def require_module(module_id: str):
     return Depends(check)
 
 
+# A new job takes its character and brand from these modules (owner, 23.11.2026); jobs
+# already running are not stopped by a deactivation (#499).
+JOB_MODULES = {"characters": "Персонажі", "brands": "Бренди"}
+
+
+def inactive_job_modules() -> list[str]:
+    """Labels of the modules a new job needs that are not READY."""
+    return [label for module_id, label in JOB_MODULES.items() if not module_ready(module_id)]
+
+
 def navigation() -> dict:
     """Menu entries of READY modules; a page of the panel listed nowhere here stays closed."""
     from .gateway import _modules_or_none

@@ -116,7 +116,7 @@ def contour(tmp_path_factory):
                 "SYSTEM_STATE_BACKEND": "file", "STATE_BACKEND": "file", "LOCAL_WORKER_FALLBACK": "false",
                 "DEMO_MODE": "true", "RATE_LIMIT_PER_MINUTE": "10000", "OLLAMA_URL": "http://127.0.0.1:1"}
     core_log = (work / "core.log").open("w", encoding="utf-8")
-    core = subprocess.Popen([sys.executable, "-m", "uvicorn", "core.app:app", "--host", "0.0.0.0",
+    core = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.core_app_modules_active:app", "--host", "0.0.0.0",
                              "--port", str(core_port)], cwd=ROOT, env=core_env, stdout=core_log,
                             stderr=subprocess.STDOUT)
     import httpx
