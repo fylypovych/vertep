@@ -281,7 +281,7 @@ def plan(host, purge=False):
         raise RuntimeError("Немає перевіреного ownership inventory. Стару/часткову інсталяцію слід окремо інвентаризувати; видалення заблоковано")
     result = {"schema": 1, "root": str(root), "installation_id": ledger["installation_id"],
               "purge_data": purge, "files": {}, "units": {}, "containers": [], "networks": [],
-              "images": [], "volumes": [], "data": [], "retained": [], "blocked": []}
+              "images": [], "volumes": [], "data": [], "other": [], "retained": [], "blocked": []}
     software = dict(ledger["files"])
     for name in ledger["files"]:
         source = root / name
@@ -398,6 +398,16 @@ def plan(host, purge=False):
             result["data"].append({"path": str(path.relative_to(root)), "kind": "dir" if path.is_dir() else "file"})
         else:
             result["retained"].append(str(path))
+    if purge:
+        # Owner decision 24.11.2026: the installation root goes completely, including content
+        # Vertep did not record (copied notes, old checkouts). Only the top-level names present
+        # now are confirmed; anything that appears later stays and is reported (PARTIAL).
+        for entry in sorted(root.iterdir()):
+            if entry.name not in DATA:
+                if not entry.is_symlink() and entry.is_dir() and any(
+                        child.is_dir() and os.path.ismount(child) for child in [entry, *entry.rglob("*")]):
+                    result["blocked"].append("Точка монтування в каталозі інсталяції: " + entry.name)
+                result["other"].append(entry.name)
     result["volumes"] = sorted(set(result["volumes"]))
     result["retained"] = sorted(set(result["retained"]))
     result["retained"].append("Спільні пакети, apt repositories, Docker/SSH/UFW settings: походження/використання не доведено")
@@ -432,6 +442,8 @@ def summary(root, selected):
     lines.append("Буде видалено: контейнери %d, образи %d, volumes %d, systemd units %d, файли ПЗ %d, файли даних %d"
                  % (len(selected["containers"]), len(selected["images"]), len(selected["volumes"]),
                     len(selected["units"]), len(selected["files"]), len(selected["data"])))
+    if selected.get("other"):
+        lines.append("Каталог інсталяції видаляється повністю, включно з невідомим вмістом: " + str(root))
     lines.append("Зберігаються сторонні та спільні ресурси: %d (перелік — у --dry-run і журналі)" % len(selected["retained"]))
     lines += ["Заблоковано: " + reason for reason in selected["blocked"]]
     return "\n".join(lines)
@@ -529,7 +541,7 @@ def execute(host, selected, journal_dir, resume=False):
 
 
 def _finish_purge(host, journal_dir, state):
-    """Remove the emptied installation layout; unknown content is kept and reported."""
+    """Remove the installation root with all content confirmed in the plan; anything newer is kept and reported."""
     root = host.root
     for name in ["config/update/update.lock", "config/update/update.lock.guard"]:
         target = root / name
@@ -551,10 +563,17 @@ def _finish_purge(host, journal_dir, state):
                 directory.rmdir()
             except OSError:
                 pass
+    confirmed = set(state["plan"].get("other", []))
+    for entry in sorted(root.iterdir()) if root.is_dir() else []:
+        if entry.name in confirmed:
+            if entry.is_symlink() or not entry.is_dir():
+                entry.unlink()  # a symlink is removed, never followed
+            else:
+                shutil.rmtree(entry)  # does not follow symlinks inside the tree
     leftovers = sorted(str(item) for item in root.iterdir()) if root.is_dir() else []
-    if leftovers:
-        state["retained_unknown"] = sorted(set(state.get("retained_unknown", [])) | set(leftovers))
-    elif root.is_dir():
+    # Earlier "not empty" notes are stale once the confirmed tree is gone.
+    state["retained_unknown"] = leftovers
+    if not leftovers and root.is_dir():
         root.rmdir()
     state["state"] = "PARTIAL" if state.get("retained_unknown") else "SUCCEEDED"
     atomic(journal_dir.resolve() / "state.json", state)

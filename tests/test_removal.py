@@ -389,15 +389,44 @@ def test_purge_removes_emptied_layout_including_root(install):
     assert json.loads((journal/"state.json").read_text())["state"] == "SUCCEEDED"
 
 
-def test_purge_keeps_unknown_content_and_reports_partial(install):
+def test_purge_keeps_unknown_content_and_reports_partial(install, monkeypatch):
     host, runtime, journal = install
     selected = r.plan(host, True)
-    (host.root/"operator-notes.txt").write_text("not Vertep")
+    (host.root/"late.txt").write_text("x")
+    with pytest.raises(RuntimeError, match="Перелік змінився"):  # new top-level content needs a new confirmation
+        r.execute(host, selected, journal)
+    (host.root/"late.txt").unlink()
+    original = r._execute
+
+    def late_write(*args):  # written after the confirmation, while the removal runs
+        state = original(*args)
+        (host.root/"operator-notes.txt").write_text("not Vertep")
+        return state
+    monkeypatch.setattr(r, "_execute", late_write)
     result = r.execute(host, selected, journal)
     assert result["state"] == "PARTIAL"
     assert (host.root/"operator-notes.txt").read_text() == "not Vertep"
     assert str(host.root/"operator-notes.txt") in result["retained_unknown"]
     assert not (host.root/"config").exists() and not (host.root/"storage").exists()
+
+
+def test_purge_removes_unrecorded_content_present_at_confirmation(install):
+    """Owner decision 24.11.2026: copied notes and leftover trees in the root go too."""
+    host, runtime, journal = install
+    (host.root/"AGENTS.md").write_text("copied by hand")
+    (host.root/"core/__pycache__").mkdir(parents=True, exist_ok=True)
+    (host.root/"core/__pycache__/x.pyc").write_bytes(b"x")
+    (host.root/"agent/slots/a").mkdir(parents=True)
+    (host.root/"agent/active").symlink_to(host.root/"agent/slots/a")
+    outside = host.root.parent/"outside.txt"
+    outside.write_text("keep")
+    (host.root/"link-out").symlink_to(outside)
+    selected = r.plan(host, True)
+    assert {"AGENTS.md", "core", "agent", "link-out"} <= set(selected["other"])
+    assert "Каталог інсталяції видаляється повністю" in r.summary(host.root, selected)
+    result = r.execute(host, selected, journal)
+    assert result["state"] == "SUCCEEDED" and not host.root.exists()
+    assert outside.read_text() == "keep"
 
 
 def test_cli_resume_finds_the_unfinished_journal(install, monkeypatch, tmp_path):

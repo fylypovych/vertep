@@ -52,6 +52,9 @@ export class SetupComponent implements OnInit, OnDestroy {
   additionalRoles = signal<string[]>([]);
   additionalRoleOptions = computed(() => this.roles().filter(entry => entry.id !== 'core'));
   hardware = signal<Record<string, unknown> | null>(null);
+  /** No GPU detected: the GPU module cannot start, and its failed start rolls back the other services. */
+  noGpu = computed(() => (this.hardware()?.['gpu'] as Record<string, unknown> | null)?.['vendor'] === 'none');
+  deploymentText = signal('');
   hardwareRows = computed(() => {
     const hardware = this.hardware();
     if (!hardware) return [];
@@ -173,6 +176,7 @@ export class SetupComponent implements OnInit, OnDestroy {
         this.role.set(entries[0].id);
       }
       this.hardware.set(status.hardware || {});
+      if (this.noGpu()) this.additionalRoles.update(roles => roles.filter(role => role !== 'gpu'));
     }).catch(error => {
       if (this.token) this.error.set(`Не вдалося відкрити майстер: ${error.message}`);
       else this.askCode.set(true);
@@ -242,12 +246,15 @@ export class SetupComponent implements OnInit, OnDestroy {
           backend_url: form.backend_url || null, backend_model: form.backend_model,
           core_url: form.core_url || null }),
       });
-      if (!response.ok) throw new Error('Не вдалося підготувати вибрані служби');
+      if (!response.ok) {
+        const detail = await response.json().then(body => body?.detail, () => null);
+        throw new Error(typeof detail === 'string' ? detail : 'Не вдалося підготувати вибрані служби');
+      }
       this.selectionPrepared = true;
       await this.loadHealth();
-    } catch {
+    } catch (error) {
       this.healthRows.set([]);
-      this.healthText.set('Не вдалося підготувати вибрані служби');
+      this.healthText.set((error as Error).message || 'Не вдалося підготувати вибрані служби');
     } finally {
       this.preparingHealth = false;
     }
@@ -271,6 +278,10 @@ export class SetupComponent implements OnInit, OnDestroy {
       })));
       this.healthText.set(Object.entries(health.checks).map(([name, value]) => `${name} … ${value}`).join('\n'));
       this.healthReady.set(!!health.ready);
+      const deployment = health.deployment as { state?: string; phase?: string; error?: string } | null;
+      this.deploymentText.set(!deployment || health.ready || deployment.state === 'SUCCEEDED' ? ''
+        : deployment.state === 'FAILED' ? `Розгортання вибраних служб не вдалося: ${deployment.error || 'невідома помилка'}`
+        : `Розгортання вибраних служб триває (${deployment.phase || deployment.state}). Перевірка оновлюється автоматично.`);
     } catch (error) {
       this.healthReady.set(false);
       this.healthRows.set([]);

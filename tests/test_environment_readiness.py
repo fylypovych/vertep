@@ -174,6 +174,31 @@ def test_applied_plan_supersedes_stale_environment_and_pending_selection(client,
     assert report['ready'] and 'cuda' not in report['required'] and 'ollama' not in report['required']
 
 
+def test_selection_refuses_the_gpu_module_on_a_host_without_gpu(client):
+    """A failed ComfyUI start rolls back every other selected service, so the wizard
+    must not stage the GPU module where bootstrap detected no GPU."""
+    api, root, _ = client
+    (root / 'hardware.json').write_text(json.dumps({'gpu': {'vendor': 'none'}}))
+    response = api.post('/api/setup/selection', json={'node_role': 'core', 'ai_backend': 'skip',
+                                                       'additional_roles': ['gpu', 'voice']})
+    assert response.status_code == 422 and 'GPU' in response.json()['detail']
+    assert not (root / 'deployment-request.json').exists()
+    assert api.post('/api/setup/selection', json={'node_role': 'core', 'ai_backend': 'skip',
+                                                  'additional_roles': ['voice']}).status_code == 200
+
+
+def test_health_reports_the_deployment_state_of_the_selected_services(client):
+    api, root, _ = client
+    (root / 'deployment-status.json').write_text(json.dumps(
+        {'state': 'FAILED', 'phase': 'VERIFYING', 'error': 'Вибрані сервіси не в робочому стані: comfyui'}))
+    report = api.get('/api/setup/health', params={'backend': 'skip', 'additional_roles': ''}).json()
+    assert report['deployment'] == {'state': 'FAILED', 'phase': 'VERIFYING',
+                                    'error': 'Вибрані сервіси не в робочому стані: comfyui'}
+    (root / 'deployment-request.json').write_text('{}')
+    assert api.get('/api/setup/health', params={'backend': 'skip', 'additional_roles': ''}).json()[
+        'deployment']['state'] == 'PENDING'
+
+
 def test_wizard_selection_does_not_persist_backend_key(client):
     api, root, _ = client
     response = api.post('/api/setup/selection', json={'ai_backend': 'external', 'backend_api_key': 'secret-key'})

@@ -180,10 +180,16 @@ def test_confirmed_removal_without_backup_removes_everything_and_keeps_foreign(i
     assert not any(call[:2] == ["docker", "exec"] for call in runtime.calls)
 
 
-def test_partial_removal_reports_what_remained_and_the_journal(install, capsys):
+def test_partial_removal_reports_what_remained_and_the_journal(install, capsys, monkeypatch):
     host, runtime = install
-    (host.root / "operator-notes.txt").write_text("not Vertep")
     sha = r.plan(host, True)["plan_sha256"]
+    original = r._execute
+
+    def late_write(*args):  # content written after the confirmation is not removed
+        state = original(*args)
+        (host.root / "operator-notes.txt").write_text("not Vertep")
+        return state
+    monkeypatch.setattr(r, "_execute", late_write)
     code, output = _main(["--root", str(host.root), "--backup", "none", "--confirm", sha], capsys)
     assert code == 2 and "PARTIAL" in output and "state.json" in output
     assert "Лишилося" in output and str(host.root / "operator-notes.txt") in output

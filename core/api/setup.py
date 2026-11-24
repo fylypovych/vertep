@@ -117,7 +117,13 @@ def first_run_health(role: str | None = None, backend: str | None = None,
         else:
             checks[name] = str(value)
     ready = bool(required) and all(checks.get(name) == "OK" for name in required)
-    return {"ready": ready, "checks": checks, "required": sorted(required),
+    from ..first_run import _read
+    status = _read("deployment-status.json")
+    # The wizard shows why the selected services are not up yet (still starting or rolled back).
+    deployment = {key: status.get(key) for key in ("state", "phase", "error")} if status.get("state") else None
+    if (config_root() / "deployment-request.json").is_file() and (deployment or {}).get("state") != "APPLYING":
+        deployment = {"state": "PENDING", "phase": "PENDING", "error": None}  # a new request awaits the host
+    return {"ready": ready, "checks": checks, "required": sorted(required), "deployment": deployment,
             "details": {name: {"required": name in required,
                                "code": value[1] if isinstance(value, tuple) else "health_probe_failed"}
                         for name, value in raw.items() if isinstance(value, tuple)},
@@ -252,6 +258,11 @@ async def first_run_selection(request: Request):
                 or (role != "core" and chosen)):
             raise HTTPException(422, "Непідтримувана конфігурація перевірки")
         extras = set(chosen)
+    # Only a bootstrap detection that found no GPU refuses; a host without hardware.json is unknown.
+    if "gpu" in extras | {role} and (_read("hardware.json").get("gpu") or {}).get("vendor") == "none":
+        # Bootstrap drops the GPU role on such a host too: ComfyUI cannot start, and its failed
+        # start rolls back every other selected service (Ollama, Voice, Publisher, Monitoring).
+        raise HTTPException(422, "Модуль «Зображення та відео» потребує GPU, а на цьому сервері його не виявлено")
     # An implicit managed Text role belongs only to the selected local backend.
     elif _read("setup-selection.json").get("managed_text"):
         extras.discard("text")

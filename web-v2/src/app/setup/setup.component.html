@@ -35,8 +35,10 @@
               <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" [id]="'setup-role-' + entry.id"
                   [ngModel]="additionalRoles().includes(entry.id)"
+                  [disabled]="entry.id === 'gpu' && noGpu()"
                   (ngModelChange)="toggleAdditionalRole(entry.id, $event)">
                 {{ moduleLabel(entry.id) | t }}
+                @if (entry.id === 'gpu' && noGpu()) { <span class="text-xs text-slate-500">— {{ 'GPU не виявлено' | t }}</span> }
               </label>
             }
           </fieldset>
@@ -123,6 +125,7 @@
             </div>
           } @empty { <p class="text-sm text-slate-500">{{ healthText() | t }}</p> }
         </div>
+        @if (deploymentText()) { <p class="text-sm text-amber-700 mt-3" id="setup-deployment-status">{{ deploymentText() }}</p> }
         <button type="button" class="text-sm text-emerald-700 mt-3" (click)="prepareHealth()">{{ 'Повторити перевірку' | t }}</button>
       </section>
 

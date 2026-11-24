@@ -173,3 +173,31 @@ test('можна вручну вимкнути недоступну GPU роль
   await expect(next).toBeEnabled();
   expect(selected).toEqual([]);
 });
+
+test('без виявленого GPU модуль зображень вимкнено, а причину розгортання видно на перевірці', async ({ page }) => {
+  let selected: string[] = [];
+  await page.route('**/api/setup', route => route.fulfill({ json: {
+    ...status, hardware: { architecture: 'x86_64', gpu: { vendor: 'none' } },
+    selected_role: 'core', selected_additional_roles: ['gpu'],
+  } }));
+  await page.route('**/api/setup/selection', route => {
+    selected = route.request().postDataJSON()['additional_roles'];
+    return route.fulfill({ json: { accepted: true } });
+  });
+  await page.route('**/api/setup/health*', route => route.fulfill({ json: {
+    ready: false, required: ['core_api'], checks: { core_api: 'OFFLINE' }, details: {},
+    deployment: { state: 'FAILED', phase: 'VERIFYING', error: 'Вибрані сервіси не в робочому стані: tts' },
+  } }));
+  await page.goto('/setup?token=abc');
+  await expect(page.locator('#setup-role-gpu')).toBeDisabled();
+  await expect(page.locator('#setup-role-gpu')).not.toBeChecked();
+  const next = page.locator('#next');
+  await next.click();
+  await next.click();
+  await page.fill('#username', 'admin');
+  await page.fill('#password', 'long-enough-password');
+  await page.fill('#confirmation', 'long-enough-password');
+  for (let i = 0; i < 5; i++) await next.click();
+  await expect(page.locator('#setup-deployment-status')).toContainText('не в робочому стані: tts');
+  expect(selected).toEqual([]);
+});

@@ -471,6 +471,8 @@ export const EN: Record<string, string> = {
   "Відеопам’ять": "Graphics memory",
   "Драйвер GPU": "GPU driver",
   "Не виявлено": "Not detected",
+  "GPU не виявлено": "No GPU detected",
+  "невідома помилка": "unknown error",
   "ГБ": "GB",
   "Обліковий запис": "Account",
   "Обов'язкове поле": "Required field",
