@@ -40,6 +40,13 @@ def check_role() -> str:
     try:
         return Path(os.getenv("NODE_ROLE_FILE", "/etc/vertep/node.conf")).read_text(encoding="utf-8").split("ROLE=", 1)[1].splitlines()[0].strip()
     except (OSError, IndexError, ValueError):
+        pass
+    # #442 D3: installations no longer write node.conf; the role is in the applied deployment plan.
+    # As "unknown" the CORE host polled http://localhost:8080 (only 8443 listens) and restarted its Worker.
+    root = Path(os.getenv("VERTEP_ROOT", Path(__file__).resolve().parent.parent))
+    try:
+        return str(json.loads((root / "config" / "deployment-plan.json").read_text(encoding="utf-8"))["role"]) or "unknown"
+    except (OSError, KeyError, TypeError, ValueError):
         return "unknown"
 
 

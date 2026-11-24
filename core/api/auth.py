@@ -171,7 +171,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             elif path.startswith("/api/jobs"):
                 operation = "mutate_job"
             elif (path.startswith("/api/nodes") and path != "/api/nodes/register"
-                  and not re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", path)):
+                  and not re.fullmatch(r"/api/nodes/[a-z0-9-]+/(renew|token)", path)):
                 operation = "node_control"
             elif path.startswith("/api/settings"):
                 operation = "configuration"
@@ -237,7 +237,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                           or (request.method == "POST" and request.url.path in {"/api/modules/token", "/api/modules/node-assignments"})
                           or (request.method == "GET" and request.url.path.startswith("/api/modules/ui/")))
         if (module_machine or worker_input or worker_exact or request.url.path.startswith(machine)
-                or re.fullmatch(r"/api/nodes/[a-z0-9-]+/renew", request.url.path)):
+                or re.fullmatch(r"/api/nodes/[a-z0-9-]+/(renew|token)", request.url.path)):
             # Machine routes validate and bind the token to node_name themselves.
             # Keeping that check in one place also supports hashed per-worker tokens.
             response = await call_next(request)
@@ -389,7 +389,9 @@ def _json_error(detail: str, status: int, **extra) -> Response:
 
 
 @router.delete("/api/session")
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    from ..security import revoke_session
+    revoke_session(request.cookies.get("vertep_session", ""))
     response.delete_cookie("vertep_session")
     response.delete_cookie("vertep_csrf")
     return {"authenticated": False}

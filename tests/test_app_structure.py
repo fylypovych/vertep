@@ -64,6 +64,7 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/system/models/catalog"],  # #454 Ollama tags available for download.
         ["GET", "/api/nodes/module-registry"],  # #492 node/module/instance registry.
         ["GET", "/api/modules/navigation"],  # owner 23.11.2026: menu entries of READY modules.
+        ["POST", "/api/nodes/{node_id}/token"],  # #442 D12: a node renews its 24 h JWT with its secret.
         ["GET", "/api/nodes/module-catalog"],  # #496 modules x nodes catalog.
         ["PUT", "/api/nodes/module-registry/placement/{module_id}"],
         ["PUT", "/api/nodes/module-registry/profile/{node_id}"],

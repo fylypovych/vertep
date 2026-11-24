@@ -87,7 +87,9 @@ async def register_node(request: Request):
 @router.get("/api/nodes")
 def nodes():
     live = {item.get("node_name"): item for item in workers()}
+    # #442 D9: the version a node runs is the one it reports, not the one it enrolled with.
     return [_node_context({**node, "runtime": live.get(node["node_id"]),
+             "version": (live.get(node["node_id"]) or {}).get("version") or node.get("version"),
              "status": (live.get(node["node_id"]) or {}).get("status", "OFFLINE")})
             for node in registered_nodes()]
 
@@ -631,6 +633,22 @@ async def renew_node_credentials(node_id: str, request: Request):
         raise HTTPException(404, "Node is missing or revoked") from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@router.post("/api/nodes/{node_id}/token")
+async def refresh_node_token(node_id: str, request: Request):
+    """A new short-lived node JWT (``NODE_TOKEN_TTL_SECONDS``, 24 h) for the node's long-lived
+    secret, under mTLS with its certificate. Before this a Worker kept the JWT of its enrollment
+    and was refused (401) by every call a day later (#442 D12). An expiring JWT cannot mint
+    a new one: only the secret can."""
+    from ..node_registry import issue_node_token
+    if "." in request.headers.get("x-vertep-token", "") or not _valid_worker_request(node_id, request):
+        raise HTTPException(401, "Node credentials are not valid")
+    node = next((item for item in registered_nodes() if item.get("node_id") == node_id
+                 and not item.get("revoked_at") and item.get("status") != "REVOKED"), None)
+    if node is None:
+        raise HTTPException(404, "Node is missing or revoked")
+    return {"jwt": issue_node_token(node_id, node["role"], int(node.get("credential_generation") or 1))}
 
 
 @router.post("/api/nodes/{node_id}/self-test")

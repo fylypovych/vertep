@@ -23,7 +23,7 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Proto https;
   }
-  location ~ ^/api/(workers/heartbeat|tasks/(claim|renew|cancellations|result)|logs/ingest|node/status|nodes/[a-z0-9-]+/renew) {
+  location ~ ^/api/(workers/heartbeat|tasks/(claim|renew|cancellations|result)|logs/ingest|node/status|nodes/[a-z0-9-]+/(renew|token)) {
     if ($ssl_client_verify != SUCCESS) { return 401; }
     proxy_pass http://core:8080;
     proxy_set_header Host $host;
@@ -32,9 +32,9 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Proto https;
   }
-  # CORE: the API and its other HTTP surfaces (job files, LAB lease, metrics,
+  # CORE: the API and its other HTTP surfaces (job files, LAB lease,
   # status, API docs, the /admin alias).
-  location ~ ^/(api/|jobs/[^/]+/files/|lab-lease/|metrics$|status$|docs|redoc$|openapi\.json$|admin$) {
+  location ~ ^/(api/|jobs/[^/]+/files/|lab-lease/|status$|docs|redoc$|openapi\.json$|admin$) {
     proxy_pass http://core:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Vertep-Client-DN $vertep_client_dn;

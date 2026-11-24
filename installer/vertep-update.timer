@@ -4,7 +4,8 @@ Description=Check the Vertep update server every six hours
 [Timer]
 Unit=vertep-update-check.service
 OnBootSec=10min
-OnUnitActiveSec=6h
+# #442 D5: a calendar schedule; OnUnitActiveSec was never re-armed after a failed check.
+OnCalendar=*-*-* 00/6:00:00
 RandomizedDelaySec=10min
 Persistent=true
 

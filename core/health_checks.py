@@ -233,6 +233,21 @@ def check_monitoring(prometheus_url: str | None = None) -> tuple[bool | None, st
     return _http_get(target, timeout=10)
 
 
+def check_local_worker() -> tuple[bool, str]:
+    """#442 D13: the Worker on the CORE host runs the selected roles; without its heartbeat no
+    task of those roles runs, so health is not HEALTHY (the stand reported it for 9 h)."""
+    try:
+        from .state import store
+        from .role_runtime import _heartbeat_fresh
+        name = os.getenv("NODE_NAME", "local-worker")
+        worker = next((item for item in store.load_workers() if item.get("node_name") == name), None)
+        ready = bool(worker and worker.get("status") in {"READY", "ONLINE", "FREE", "BUSY"}
+                     and _heartbeat_fresh(worker, datetime.now(timezone.utc), int(os.getenv("HEARTBEAT_TIMEOUT", "45"))))
+        return ready, "health_worker_ready" if ready else "health_worker_not_ready"
+    except Exception:
+        return False, "health_worker_not_ready"
+
+
 def effective_health_role() -> str:
     from .first_run import _read
     installation = _read("installation.json")
@@ -277,6 +292,12 @@ def run_checks(role: str | None = None, *, backend: str | None = None,
             if provider == "ollama":
                 backend_url = selected_backend.get("url") or pending.get("backend_url")
         checks["ollama"] = check_ollama(backend_url)
+    if role == "core" and roles - {"core", "gpu"} and "gpu_worker" not in checks:
+        from .first_run import is_configured
+        if is_configured():  # roles of the CORE host run on its own Worker
+            required.add("local_worker")
+            checks["required"] = sorted(required)
+            checks["local_worker"] = check_local_worker()
     if "voice" in roles:
         checks["tts"] = check_tts()
     if "publisher" in roles:

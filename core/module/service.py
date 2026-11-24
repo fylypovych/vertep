@@ -64,13 +64,18 @@ def attach(runtime) -> ModuleLifecycle:
     registry = runtime.modules
 
     def self_test(manifest):
-        deadline = time.monotonic() + manifest.health["timeout_seconds"]
+        deadline, seen = time.monotonic() + manifest.health["timeout_seconds"], []
         while time.monotonic() < deadline:
+            seen = []
             for instance in registry.instances(manifest.module_id):
                 others = [r for r in instance.reasons if not r.startswith("lifecycle_")]
                 if instance.manifest.version == manifest.version and instance.reported_ready and not others:
                     return True
+                seen.append(f"{instance.node_id}: {instance.manifest.version}, "
+                            f"{'ready' if instance.reported_ready else 'not ready'}{', ' + ', '.join(others) if others else ''}")
             time.sleep(0.5)
+        # #442: the administrator sees why, e.g. that no online node reported the module at all.
+        self_test.reason = "; ".join(seen) or "no online node reported this module (check the Worker and placement)"
         return False
 
     def running(module_id):

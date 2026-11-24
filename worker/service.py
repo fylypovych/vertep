@@ -45,6 +45,7 @@ from worker.enrollment import (  # noqa: F401
     _retry_enrollment,
     enroll,
     node_id_slug,
+    refresh_node_token,
     renew_if_needed,
 )
 
@@ -500,7 +501,7 @@ def publisher_readiness() -> dict:
 
 def gpu_info() -> dict:
     info = {"gpu_name": os.getenv("GPU_NAME", "unknown"),
-            "gpu_count": int(os.getenv("GPU_COUNT", "1")),
+            "gpu_count": int(os.getenv("GPU_COUNT", "0")),
             "vram_mb": int(os.getenv("VRAM_MB", "0")),
             "cuda_version": os.getenv("CUDA_VERSION", "unknown"),
             "gpu_available": False}
@@ -739,6 +740,9 @@ def main() -> None:
                                              else float(os.getenv("SELF_TEST_INTERVAL_SECONDS", "300")))
         while True:
             try:
+                fresh = refresh_node_token(client, core, payload["node_name"], credential, config_path)
+                if fresh != credential:
+                    credential = client.headers["X-Vertep-Token"] = fresh
                 metrics = gpu_info()
                 payload.update(metrics)
                 payload.update(host_metrics())

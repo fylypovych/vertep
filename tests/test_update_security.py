@@ -1034,3 +1034,22 @@ def test_safe_extract_accepts_legitimate_archive(tmp_path):
     module.safe_extract(archive, dest, maximum_bytes=10 * 1024 * 1024)
     assert (dest / "subdir" / "config.json").read_bytes() == b'{"v":1}'
     assert (dest / "run.sh").exists()
+
+
+def test_a_request_waits_for_a_busy_lease_instead_of_failing(tmp_path, monkeypatch):
+    """#442 D6/D11: an update request next to the running deployment apply was deleted and
+    FAILED stayed in the Update Center; now it waits and then takes the lease."""
+    import threading
+    agent = _load_agent()
+    monkeypatch.setenv("UPDATE_LEASE_POLL_SECONDS", "0.05")
+    state = {"state": "RUNNING", "message": "Checking signed release manifest", "log": []}
+    holder = UpdateLease(tmp_path, "deployment").__enter__()
+    threading.Timer(0.3, lambda: holder.__exit__(None, None, None)).start()
+    with agent._wait_for_lease(tmp_path, "a" * 32, state) as lease:
+        assert json.loads((tmp_path / "update.lock").read_text())["operation_id"] == "a" * 32
+        lease.assert_current()
+    assert json.loads((tmp_path / "status.json").read_text())["message"] == "Waiting for another update operation to finish"
+    monkeypatch.setenv("UPDATE_LEASE_WAIT_SECONDS", "0")
+    with UpdateLease(tmp_path, "deployment"):
+        with pytest.raises(RuntimeError, match="holds the update lease"):  # bounded wait
+            agent._wait_for_lease(tmp_path, "b" * 32, dict(state))

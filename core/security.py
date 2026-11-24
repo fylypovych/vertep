@@ -105,7 +105,8 @@ def _session_token(user: str = "admin", role: str = "admin") -> str:
     expiry = str(int(time.time()) + int(os.getenv("SESSION_TTL", "28800")))
     # The token travels in a cookie, so the payload must stay ASCII-safe and must
     # not contain the ':' delimiter: a configured username may be non-ASCII.
-    payload = f"{expiry}:{quote(user, safe='')}:{quote(role, safe='')}"
+    # The nonce makes every login its own token, so a logout revokes only that session (#442 D8).
+    payload = f"{expiry}:{quote(user, safe='')}:{quote(role, safe='')}:{secrets.token_hex(8)}"
     signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{signature}"
 
@@ -183,13 +184,51 @@ def _account_role(user: str, stored_role: str) -> str:
 
 
 
+_revoked_lock = __import__("threading").Lock()
+
+
+def _revoked_sessions_path():
+    from .first_run import config_root
+    return config_root() / "revoked-sessions.json"
+
+
+def _revoked_sessions() -> dict[str, int]:
+    import json
+    try:
+        return {str(k): int(v) for k, v in json.loads(_revoked_sessions_path().read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def revoke_session(token: str) -> None:
+    """#442 D8: logout ends the session on the server, not only in the browser. The signed
+    token is stateless, so its hash is kept until the token would have expired anyway."""
+    try:
+        expiry = int(token.rsplit(".", 1)[0].split(":", 1)[0])
+    except (ValueError, IndexError):
+        return
+    from .atomic_write import atomic_write_json
+    now = int(time.time())
+    with _revoked_lock:
+        revoked = {key: until for key, until in _revoked_sessions().items() if until > now}
+        revoked[hashlib.sha256(token.encode()).hexdigest()] = expiry
+        try:
+            atomic_write_json(_revoked_sessions_path(), revoked, mode=0o600)
+        except OSError:
+            # The cookie is still removed; the operator sees why the server kept the session.
+            import logging
+            logging.getLogger("core").error("Session revocation was not saved")
+
+
 def _valid_session(token: str) -> tuple[str, str] | None:
+    if token and hashlib.sha256(token.encode()).hexdigest() in _revoked_sessions():
+        return None
     try:
         secret = session_secret()
         if not secret:
             return None
         payload, signature = token.rsplit(".", 1)
-        expiry, encoded_user, encoded_role = payload.split(":", 2)
+        expiry, encoded_user, encoded_role = payload.split(":")[:3]  # a 4th part is the nonce
         expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if int(expiry) > time.time() and _constant_time_equals(signature, expected):
             user = unquote(encoded_user)

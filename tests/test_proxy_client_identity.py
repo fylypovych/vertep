@@ -331,3 +331,12 @@ def test_web_and_setup_routes_do_not_regress(stack):
         assert browser.get("/api/setup/status").status_code != 401
         # The mTLS regex route still refuses a certificate-less caller at the proxy.
         assert browser.post("/api/workers/heartbeat", json={"node_name": NODE}).status_code == 401
+
+
+def test_node_token_refresh_needs_mtls_and_metrics_stay_internal():
+    """#442: D12 token refresh goes through the mTLS location; D15 /metrics is not public
+    (Prometheus scrapes core:8080 inside the Docker network)."""
+    for name in ("deploy/proxy.conf", "deploy/proxy.conf.template"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "nodes/[a-z0-9-]+/(renew|token)) {" in text
+        assert "metrics$" not in text

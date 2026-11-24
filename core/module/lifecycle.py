@@ -190,6 +190,10 @@ class ModuleLifecycle:
         if self.registry is not None:
             self.registry.set_lifecycle_state(record["module_id"], record["state"], self._manifest(record))
 
+    def _self_test_failure(self, message: str) -> str:
+        reason = getattr(self.self_test, "reason", "")
+        return f"{message}: {reason}" if reason else message
+
     def _manifest(self, record: dict) -> ModuleManifest:
         return ModuleManifest.from_dict(record["package"]["manifest"])
 
@@ -358,7 +362,7 @@ class ModuleLifecycle:
                 self._prepare_data(record)
                 self._journal(module_id, op="activate", phase="applied", snapshot=str(snapshot), at=time.time())
                 if not self.self_test(manifest):
-                    raise LifecycleError("Module self-test failed")
+                    raise LifecycleError(self._self_test_failure("Module self-test failed"))
                 record["state"] = ACTIVE
                 self._save(record)
             except BaseException:
@@ -476,7 +480,7 @@ class ModuleLifecycle:
                 self._journal(module_id, **{**journal, "phase": "applied"})
                 self.fault("after_apply")
                 if not self.self_test(manifest):
-                    raise LifecycleError("Updated module self-test failed")
+                    raise LifecycleError(self._self_test_failure("Updated module self-test failed"))
                 updated["state"] = ACTIVE if was_active else INACTIVE
                 self._save(updated)
             except BaseException:

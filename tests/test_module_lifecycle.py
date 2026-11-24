@@ -447,3 +447,14 @@ def test_uninstall_withholds_a_stale_instance_until_reinstalled(tmp_path, key, m
     restarted.install(package(key))
     restarted.activate("notes")
     assert len(restarted.registry.ready_instances("notes")) == 1
+
+
+def test_a_refused_activation_says_why_the_self_test_failed(tmp_path, key, module_postgres):
+    """#442 D17: the stand only saw «Module self-test failed» while no Worker was online."""
+    def self_test(manifest):
+        return False
+    self_test.reason = "no online node reported this module (check the Worker and placement)"
+    lifecycle = make(tmp_path, key, module_postgres, self_test=self_test)
+    lifecycle.install(package(key))
+    with pytest.raises(LifecycleError, match="Module self-test failed: no online node reported this module"):
+        lifecycle.activate("notes")

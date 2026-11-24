@@ -519,6 +519,42 @@ def _attempt_rollback(root: Path, state_dir: Path, state: dict) -> None:
     set_system_state(SystemState.NORMAL, "Previous release restored", state.get("request_id"), state_dir)
 
 
+class _Held:
+    """An already acquired lease used in ``with``: released on exit, never acquired twice."""
+
+    def __init__(self, lease):
+        self.lease = lease
+
+    def __enter__(self):
+        return self.lease
+
+    def __exit__(self, *details):
+        return self.lease.__exit__(*details)
+
+
+def _wait_for_lease(state_dir: Path, request_id: str, state: dict):
+    """The request waits while another operation (e.g. applying the deployment plan, ~15 min)
+    holds the lease (#442 D6/D11). Refused at once, the request was deleted and FAILED stayed
+    in the Update Center although nothing had failed."""
+    from core.update_lease import UpdateLease
+    deadline = time.monotonic() + float(os.getenv("UPDATE_LEASE_WAIT_SECONDS", "1800"))
+    waiting = False
+    while True:
+        lease = UpdateLease(state_dir, request_id)
+        try:
+            lease.__enter__()
+            return _Held(lease)
+        except RuntimeError as error:
+            if "holds the update lease" not in str(error) or time.monotonic() >= deadline:
+                raise
+        if not waiting:
+            waiting = True
+            state.update({"message": "Waiting for another update operation to finish", "updated_at": now()})
+            state.setdefault("log", []).append(f"{now()} {state['message']}")
+            atomic_json(state_dir / "status.json", state)
+        time.sleep(float(os.getenv("UPDATE_LEASE_POLL_SECONDS", "5")))
+
+
 def process_request(root: Path, state_dir: Path, request_path: Path,
                     skip_drain: bool = False) -> bool:
     from core.system_state import SystemState, set_system_state
@@ -543,7 +579,7 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
              "request_id": request_id, "message": initial_message, "progress": 5,
              "updated_at": now(), "log": []}
     atomic_json(state_dir / "status.json", state)
-    with UpdateLease(state_dir, request_id) as lease:
+    with _wait_for_lease(state_dir, request_id, state) as lease:
         state["fence_epoch"] = lease.fence_epoch
         atomic_json(state_dir / "status.json", state)
         try:

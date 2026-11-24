@@ -1,5 +1,6 @@
 """Node enrollment: CSR, mTLS credential request with retries and renewal."""
 
+import base64
 import json
 import os
 import re
@@ -160,6 +161,38 @@ def enroll(client: httpx.Client, core: str, node_name: str, metrics: dict,
     except (OSError, ValueError):
         pass
     return _retry_enrollment(client, core, node_name, metrics, capabilities, config_path)
+
+def _jwt_expiry(token: str) -> int | None:
+    """Expiry of a node JWT, read without verification (CORE verifies); None for other tokens."""
+    try:
+        payload = token.split(".")[1]
+        return int(json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["exp"])
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        return None
+
+
+def refresh_node_token(client: httpx.Client, core: str, node_name: str, credential: str,
+                       config_path: Path) -> str:
+    """Replace the node JWT before it expires (24 h, #442 D12): the long-lived worker secret asks
+    CORE for a new one over the same mTLS connection. Without a JWT or a secret nothing changes."""
+    expiry = _jwt_expiry(credential)
+    if expiry is None or expiry - time.time() > int(os.getenv("NODE_TOKEN_REFRESH_BEFORE_SECONDS", "3600")):
+        return credential
+    try:
+        stored = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return credential
+    if not stored.get("worker_secret"):
+        return credential
+    response = client.post(f"{core}/api/nodes/{node_name}/token", headers={"X-Vertep-Token": stored["worker_secret"]})
+    response.raise_for_status()
+    stored["jwt"] = str(response.json()["jwt"])
+    temporary = config_path.with_name(f".{config_path.name}.tmp")
+    temporary.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(config_path)
+    return stored["jwt"]
+
 
 def renew_if_needed(core: str, node_name: str, credential: str, verify: str | bool,
                     pki: Path, config_path: Path) -> str:
