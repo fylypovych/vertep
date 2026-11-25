@@ -82,25 +82,30 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as error:
             return self._answer(500, {"error": f"input storage is unavailable: {error.strerror}"})
         video = INPUTS / f"{uuid.uuid4().hex}.mp4"
+        # The copy is removed before the answer: once the Worker has the reply, no copy remains.
         try:
-            remaining = length
-            with video.open("wb") as stream:
-                while remaining:
-                    chunk = self.rfile.read(min(remaining, 1024 * 1024))
-                    if not chunk:
-                        return self._answer(400, {"error": "video body is incomplete"})
-                    stream.write(chunk)
-                    remaining -= len(chunk)
-            try:
-                result, updates = publish(channel, str(video), request.get("metadata") or {},
-                                          request.get("credentials") or {})
-            except Exception as error:  # noqa: BLE001 - the Worker decides transient vs permanent
-                from core.logging_config import secret_redact
-                logger.warning("Publication failed", extra={"channel": channel})
-                return self._answer(502, {"error": secret_redact(str(error))})
-            return self._answer(200, {"result": result, "credential_updates": updates})
+            status, answer = self._publish(video, length, channel, request)
         finally:
             video.unlink(missing_ok=True)
+        return self._answer(status, answer)
+
+    def _publish(self, video: Path, length: int, channel: str, request: dict) -> tuple[int, dict]:
+        remaining = length
+        with video.open("wb") as stream:
+            while remaining:
+                chunk = self.rfile.read(min(remaining, 1024 * 1024))
+                if not chunk:
+                    return 400, {"error": "video body is incomplete"}
+                stream.write(chunk)
+                remaining -= len(chunk)
+        try:
+            result, updates = publish(channel, str(video), request.get("metadata") or {},
+                                      request.get("credentials") or {})
+        except Exception as error:  # noqa: BLE001 - the Worker decides transient vs permanent
+            from core.logging_config import secret_redact
+            logger.warning("Publication failed", extra={"channel": channel})
+            return 502, {"error": secret_redact(str(error))}
+        return 200, {"result": result, "credential_updates": updates}
 
     def log_message(self, format, *args):  # noqa: A002 - no request lines with secrets in logs
         return

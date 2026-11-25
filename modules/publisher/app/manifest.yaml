@@ -4,7 +4,7 @@
 schema_version: "2.0"
 name: publisher
 module_id: publisher
-version: "0.0.3.93"
+version: "0.0.3.94"
 kind: application
 label: Публікація
 core_compatibility: {min: "0.0.4.30", max: "0.0.9.99"}

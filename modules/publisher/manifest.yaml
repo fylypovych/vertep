@@ -1,5 +1,5 @@
 name: publisher
-version: "0.0.3.93"
+version: "0.0.3.94"
 label: PublisherModule
 role: publisher
 capabilities:
