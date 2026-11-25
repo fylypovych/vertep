@@ -7,6 +7,7 @@ PostgreSQL binaries, then a throwaway ``postgres:16-alpine`` container.
 
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import time
@@ -68,8 +69,14 @@ def module_postgres(tmp_path):
             _wait(url)
             yield url
         finally:
-            process.terminate()
-            process.wait(timeout=30)
+            # SIGTERM is PostgreSQL's smart shutdown: it waits for every client, and a module
+            # service in the test process keeps its connection. SIGINT disconnects them (fast).
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=30)
         return
     if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode != 0:
         _unavailable("Disposable PostgreSQL is unavailable (no URL, binaries or Docker)")
