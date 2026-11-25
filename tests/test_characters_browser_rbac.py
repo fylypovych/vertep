@@ -165,6 +165,13 @@ def test_owner_non_owner_and_admin_through_the_gateway_in_the_browser(module_run
                 page.get_by_test_id("character-name-input").fill("Дубль")
                 page.get_by_role("button", name="Зберегти").click()
                 expect(modal).to_be_visible()
+                # Validation: the module refuses an unsafe ID (422) and the editor stays open.
+                page.get_by_test_id("character-id-input").fill("bad id!")
+                page.get_by_role("button", name="Зберегти").click()
+                expect(modal).to_be_visible()
+                listed = admin.request.get(url + "/api/modules/characters/v1/characters").json()
+                assert [item["id"] for item in listed].count("panel-made") == 1
+                assert "bad id!" not in {item["id"] for item in listed}
                 page.close()
             finally:
                 browser.close()

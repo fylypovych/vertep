@@ -157,6 +157,18 @@ def test_characters_ac2_ownership(api, characters_db):
     assert characters_db.get_character("character-a", "brand-b") is None
 
 
+def test_characters_module_refuses_an_unsafe_character_id(api, characters_db):
+    """The ID names the character's directory: the module applies CORE's rule, so no
+    directory outside the character library is created."""
+    from modules.characters.characters_logic import InvalidCharacterId
+    for bad in ("bad id!", "../outside", "A", "Upper-Case", ""):
+        with pytest.raises(InvalidCharacterId):
+            characters_db.create_character("brand-a", {**complete_profile("x"), "id": bad} if bad else
+                                           {**complete_profile("x"), "id": 7})
+    assert not (characters_db.characters_root.parent / "outside").exists()
+    assert characters_db.create_character("brand-a", complete_profile("ok-id_1"))["id"] == "ok-id_1"
+
+
 def test_characters_ac3_active_availability(api, characters_db):
     """AC3: New characters are not open for collaboration by default; active characters available to all."""
     characters_db.create_character("brand-a", complete_profile("character-a"))

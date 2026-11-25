@@ -186,7 +186,7 @@ jobs:
           tests/test_web_state_browser_e2e.py
           tests/test_core_access_browser_e2e.py tests/test_core_access_acceptance.py
           tests/test_provider_process_acceptance.py tests/test_node_process_acceptance.py
-          tests/test_install_join_modules_e2e.py
+          tests/test_install_join_modules_e2e.py tests/test_characters_browser_rbac.py
           tests/test_system_state_mutation_matrix.py tests/test_api_client_contracts.py
           tests/test_media_review_acceptance.py
           tests/test_publisher_oauth_browser_e2e.py

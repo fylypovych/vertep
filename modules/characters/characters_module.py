@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .characters_logic import CharactersModule, health_check
+from .characters_logic import CharactersModule, InvalidCharacterId, health_check
 
 CORE = os.environ["VERTEP_CORE_URL"].rstrip("/")
 TOKEN = os.environ["VERTEP_MODULE_TOKEN"]
@@ -220,6 +220,8 @@ class Handler(BaseHTTPRequestHandler):
                 module = CharactersModule()
                 char = module.create_character(brand_id, body)
                 return self._send(201, char)
+            except InvalidCharacterId as error:
+                return self._send(422, {"error": str(error)})
             except ValueError as error:
                 return self._send(409, {"error": str(error)})
             except Exception as error:

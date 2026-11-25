@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -25,7 +26,14 @@ import pg8000.dbapi
 CORE = os.environ["VERTEP_CORE_URL"].rstrip("/")
 TOKEN = os.environ["VERTEP_MODULE_TOKEN"]
 UI_DIR = Path(__file__).with_name("ui")
+#: The ID names the character's directory: the same rule as CORE (core/configuration.SAFE_ID).
+CHARACTER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 _DB_LOCK = threading.Lock()
+
+
+class InvalidCharacterId(ValueError):
+    """A request error (422), not a conflict with an existing character (409)."""
+
 _DB: dict[str, Any] = {"connection": None}
 
 REQUIRED_PROFILE_FILES = (
@@ -298,6 +306,8 @@ class CharactersModule:
     def create_character(self, brand_id: str, data: dict) -> dict:
         """Create a new character owned by brand_id."""
         character_id = data.get("id") or f"character_{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}"
+        if not isinstance(character_id, str) or not CHARACTER_ID.fullmatch(character_id):
+            raise InvalidCharacterId("Invalid character ID")
         # Check if exists
         if query("SELECT 1 FROM characters WHERE id = %s", (character_id,)):
             raise ValueError("Character already exists")
