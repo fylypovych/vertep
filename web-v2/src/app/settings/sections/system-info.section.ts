@@ -47,6 +47,14 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <button type="button" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" [disabled]="!canSaveTurnTimeout()" (click)="saveTurnTimeout()" data-testid="turn-timeout-save">{{ 'Зберегти' | t }}</button>
     </div>
   </div>
+  <div class="border border-slate-200 rounded-xl p-4 mt-4 max-w-xl" data-testid="lab-panel">
+    <label class="block text-sm font-semibold mb-1" for="lab-panel-url">{{ 'Адреса панелі LAB' | t }}</label>
+    <p class="text-xs text-slate-500 mb-2">{{ 'Необов’язково. Окрема лабораторія на своїй VM, наприклад https://10.10.10.20:8444. Після збереження адміністратор бачить пункт «Лабораторія» й входить у LAB через Vertep. Порожнє поле вимикає підключення.' | t }}</p>
+    <div class="flex gap-2">
+      <input id="lab-panel-url" type="url" class="grow px-2 py-1 border border-slate-200 rounded text-sm" placeholder="https://" [(ngModel)]="labPanelUrl" [disabled]="!canSaveTurnTimeout()" data-testid="lab-panel-url">
+      <button type="button" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" [disabled]="!canSaveTurnTimeout()" (click)="saveLabPanel()" data-testid="lab-panel-save">{{ 'Зберегти' | t }}</button>
+    </div>
+  </div>
   <div *ngIf="switchError()" class="text-red-600 text-sm mt-2" data-testid="backend-switch-error">{{ (switchError()) | t }}</div>
 </div>`,
 })
@@ -58,6 +66,7 @@ export class SystemInfoSectionComponent implements OnInit {
   switchError = signal<string | null>(null);
   selected: Record<string, string> = {};
   turnTimeout = 45;
+  labPanelUrl = '';
   private policy = inject(PolicyService);
 
   canSaveTurnTimeout(): boolean { return this.policy.can('update_settings').allowed; }
@@ -65,6 +74,13 @@ export class SystemInfoSectionComponent implements OnInit {
   saveTurnTimeout(): void {
     this.settingsApi.saveDispatchSettings(Number(this.turnTimeout)).subscribe({
       next: (saved) => { this.turnTimeout = saved.worker_turn_timeout_seconds; this.toast.show('Збережено', 'success'); },
+      error: (err) => this.toast.show(err.message, 'error'),
+    });
+  }
+
+  saveLabPanel(): void {
+    this.settingsApi.saveLabPanel(this.labPanelUrl.trim()).subscribe({
+      next: (saved) => { this.labPanelUrl = saved.url || ''; this.toast.show('Збережено', 'success'); },
       error: (err) => this.toast.show(err.message, 'error'),
     });
   }
@@ -136,6 +152,7 @@ export class SystemInfoSectionComponent implements OnInit {
 
   ngOnInit(): void {
     this.settingsApi.dispatchSettings().subscribe({ next: (value) => { this.turnTimeout = value.worker_turn_timeout_seconds; }, error: () => {} });
+    this.settingsApi.labPanel().subscribe({ next: (value) => { this.labPanelUrl = value.url || ''; }, error: () => {} });
     this.error.set(null);
     this.loading.set(true);
     this.systemApi.status().subscribe({

@@ -47,3 +47,20 @@ test.describe('Settings — Models', () => {
     await expect(page.getByText('llama3')).toBeVisible();
   });
 });
+
+test.describe('Settings — LAB panel', () => {
+  test('адреса панелі LAB зберігається й показується після перезавантаження', async ({ page }) => {
+    let saved: string | null = null;
+    await mockApi(page);
+    await page.route('**/api/settings/lab-panel', async (route: any) => {
+      if (route.request().method() === 'PUT') saved = route.request().postDataJSON().url || null;
+      return route.fulfill({ json: { url: saved } });
+    });
+    await page.goto('/settings?tab=system');
+    await page.getByTestId('lab-panel-url').fill('https://10.10.10.20:8444');
+    await page.getByTestId('lab-panel-save').click();
+    expect(saved).toBe('https://10.10.10.20:8444');
+    await page.reload();
+    await expect(page.getByTestId('lab-panel-url')).toHaveValue('https://10.10.10.20:8444');
+  });
+});

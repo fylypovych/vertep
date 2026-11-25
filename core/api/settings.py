@@ -106,6 +106,26 @@ def post_workflow_mode(payload: dict):
         raise HTTPException(409, str(error)) from error
 
 
+@router.get("/api/settings/lab-panel")
+def get_lab_panel():
+    """#491 L2: the optional connection to the separate LAB panel («Лабораторія» entry)."""
+    from ..lab_identity import panel_url
+    return {"url": panel_url() or None}
+
+
+@router.put("/api/settings/lab-panel")
+def put_lab_panel(payload: dict, request: Request):
+    from ..lab_identity import set_panel_url
+    from ..module.gateway import audit
+    try:
+        url = set_panel_url(str(payload.get("url") or ""))
+    except ValueError as error:
+        raise HTTPException(422, "Invalid LAB panel address") from error
+    identity = getattr(request.state, "vertep_identity", None)
+    audit("lab.panel", "updated" if url else "cleared", actor=identity[0] if identity else None)
+    return {"url": url or None}
+
+
 @router.post("/api/settings/providers/{slot}")
 def switch_provider_backend(slot: str, payload: dict):
     """Switch one provider slot with persist → apply → verify → rollback.

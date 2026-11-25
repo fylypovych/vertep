@@ -179,4 +179,5 @@ def lab_panel(request: Request):
     identity = getattr(request.state, "vertep_identity", None)
     if not identity or identity[1] != "admin":
         raise HTTPException(403, "Administrator role required")
-    return {"url": os.getenv("LAB_PANEL_URL", "").strip().rstrip("/") or None}
+    from core.lab_identity import panel_url
+    return {"url": panel_url() or None}

@@ -7,6 +7,7 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "invalid_backend_url": { uk: "Некоректна адреса AI backend", en: "Invalid backend URL" },
   "unsupported_health_configuration": { uk: "Непідтримувана конфігурація перевірки", en: "Unsupported health check configuration" },
   "gpu_module_requires_gpu": { uk: "Модуль «Зображення та відео» потребує GPU, а на цьому сервері його не виявлено", en: "The Images and video module needs a GPU, and none was detected on this server" },
+  "invalid_lab_panel_address": { uk: "Некоректна адреса панелі LAB: потрібна адреса https:// без логіна, параметрів і фрагмента", en: "Invalid LAB panel address: an https:// address without credentials, query or fragment is required" },
   "active_jobs_must_be_drained_before_restore": { uk: "Перед відновленням завершіть активні завдання", en: "Active jobs must be drained before restore" },
   "validation_error": { uk: "Перевірте введені дані", en: "Check the entered data" },
   "alert_not_found": { uk: "Сповіщення не знайдено", en: "Alert not found" },

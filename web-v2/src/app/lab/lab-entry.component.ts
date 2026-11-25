@@ -15,7 +15,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
   template: `
     <div class="p-6 text-sm text-slate-700 dark:text-slate-300" data-testid="lab-entry">
       @if (missing()) {
-        <p data-testid="lab-entry-missing">Лабораторію не налаштовано: задайте LAB_PANEL_URL у конфігурації CORE.</p>
+        <p data-testid="lab-entry-missing">Лабораторію не налаштовано: вкажіть адресу панелі LAB у «Налаштування → Загальне».</p>
       } @else {
         <p>Перехід до лабораторії…</p>
       }

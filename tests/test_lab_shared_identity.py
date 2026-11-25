@@ -106,3 +106,33 @@ def test_lab_api_accepts_the_assertion_and_refuses_a_forged_or_expired_one(tmp_p
     for bad in (forged, expired):
         assert client.get("/api/lab/status", headers={"X-Vertep-Identity": bad}).status_code == 401
     identity.reset_cache()
+
+
+def test_administrator_sets_the_lab_panel_address_in_settings(tmp_path, monkeypatch):
+    """#491 L2: the optional LAB connection is set in Settings and survives a reload;
+    only an HTTPS address is accepted, a moderator cannot change it, and empty clears it."""
+    from core import first_run
+    monkeypatch.setattr(first_run, "config_root", lambda: tmp_path / "config")
+    cookies = _core_session(monkeypatch, tmp_path, "admin", "admin")
+    monkeypatch.delenv("LAB_PANEL_URL")
+    client = _core_client()
+    headers = {"X-CSRF-Token": cookies["vertep_csrf"]}
+    assert client.get("/api/settings/lab-panel", cookies=cookies).json() == {"url": None}
+    saved = client.put("/api/settings/lab-panel", json={"url": "https://10.0.0.5:8444/"}, cookies=cookies, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert client.get("/api/settings/lab-panel", cookies=cookies).json() == {"url": "https://10.0.0.5:8444"}
+    assert client.get("/api/lab/panel", cookies=cookies).json() == {"url": "https://10.0.0.5:8444"}
+    login = client.get("/api/lab/login", params={"return_to": "https://10.0.0.5:8444/"}, cookies=cookies)
+    assert login.status_code == 302
+    for bad in ("http://10.0.0.5:8444", "https://user:pw@lab", "https://lab/?x=1", "lab:8444", "https://lab:99999"):
+        assert client.put("/api/settings/lab-panel", json={"url": bad}, cookies=cookies, headers=headers).status_code == 422
+    assert client.get("/api/settings/lab-panel", cookies=cookies).json() == {"url": "https://10.0.0.5:8444"}
+    moderator = _core_session(monkeypatch, tmp_path, "reader", "moderator")
+    refused = client.put("/api/settings/lab-panel", json={"url": "https://evil.example"}, cookies=moderator,
+                         headers={"X-CSRF-Token": moderator["vertep_csrf"]})
+    assert refused.status_code == 403
+    cookies = _core_session(monkeypatch, tmp_path, "admin", "admin")
+    monkeypatch.delenv("LAB_PANEL_URL")
+    headers = {"X-CSRF-Token": cookies["vertep_csrf"]}
+    assert client.put("/api/settings/lab-panel", json={"url": ""}, cookies=cookies, headers=headers).json() == {"url": None}
+    assert client.get("/api/lab/panel", cookies=cookies).json() == {"url": None}

@@ -472,6 +472,8 @@ export const EN: Record<string, string> = {
   "Драйвер GPU": "GPU driver",
   "Не виявлено": "Not detected",
   "GPU не виявлено": "No GPU detected",
+  "Адреса панелі LAB": "LAB panel address",
+  "Необов’язково. Окрема лабораторія на своїй VM, наприклад https://10.10.10.20:8444. Після збереження адміністратор бачить пункт «Лабораторія» й входить у LAB через Vertep. Порожнє поле вимикає підключення.": "Optional. A separate laboratory on its own VM, for example https://10.10.10.20:8444. Once saved, an administrator sees the «Laboratory» entry and signs in to the LAB through Vertep. An empty field turns the connection off.",
   "невідома помилка": "unknown error",
   "ГБ": "GB",
   "Обліковий запис": "Account",

@@ -92,6 +92,8 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["POST", "/api/brands/migrate-to-module"],
         ["GET", "/api/lab/login"],  # #491 L3 shared administrator identity for the LAB panel.
         ["GET", "/api/lab/panel"],
+        ["GET", "/api/settings/lab-panel"],  # #491 L2: the LAB panel address set in Settings.
+        ["PUT", "/api/settings/lab-panel"],
         ["GET", "/lab-lease/v1/identity-key"],
         ["GET", "/api/jobs/{job_id}/videos/{version}"],
         ["GET", "/api/modules/self/storyboards"],  # #501 the Storyboard module reads job storyboards.

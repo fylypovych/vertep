@@ -291,6 +291,18 @@ export class SettingsApiService {
       .pipe(catchError(this.handleError));
   }
 
+  labPanel(): Observable<{ url: string | null }> {
+    return this.http
+      .get<{ url: string | null }>(`${this.baseUrl}/settings/lab-panel`, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
+  saveLabPanel(url: string): Observable<{ url: string | null }> {
+    return this.http
+      .put<{ url: string | null }>(`${this.baseUrl}/settings/lab-panel`, { url }, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
   saveDispatchSettings(seconds: number): Observable<{ worker_turn_timeout_seconds: number }> {
     return this.http
       .put<{ worker_turn_timeout_seconds: number }>(`${this.baseUrl}/settings/dispatch`, { worker_turn_timeout_seconds: seconds }, { headers: this.getHeaders() })

@@ -66,9 +66,48 @@ def issue(user: str, role: str, now: float | None = None) -> str:
     return f"{body}.{_b64(_private_key().sign(body.encode()))}"
 
 
+_PANEL_FILE = "lab-panel.json"
+
+
+def panel_url() -> str:
+    """The LAB panel address set by the administrator in Settings; ``LAB_PANEL_URL`` from
+    the CORE environment remains the fallback for installations configured through .env."""
+    from .first_run import config_root
+    try:
+        saved = json.loads((config_root() / _PANEL_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = None
+    if isinstance(saved, dict) and isinstance(saved.get("url"), str):
+        return saved["url"]
+    return os.getenv("LAB_PANEL_URL", "").strip().rstrip("/")
+
+
+def set_panel_url(value: str) -> str:
+    """Store the LAB panel address (empty clears it). Only an absolute HTTPS address without
+    credentials, query or fragment is accepted: it is the only place assertions are sent to."""
+    from urllib.parse import urlsplit
+    from .first_run import config_root
+    url = (value or "").strip().rstrip("/")
+    if url:
+        try:
+            parts = urlsplit(url)
+            parts.port  # noqa: B018 - raises ValueError for an invalid port
+        except ValueError as error:
+            raise ValueError("Invalid LAB panel address") from error
+        if (len(url) > 2048 or parts.scheme != "https" or not parts.hostname or parts.username
+                or parts.password or parts.query or parts.fragment):
+            raise ValueError("Invalid LAB panel address")
+    root = config_root()
+    root.mkdir(parents=True, exist_ok=True)
+    temporary = root / f".{_PANEL_FILE}.{os.getpid()}.tmp"
+    temporary.write_text(json.dumps({"url": url}), encoding="utf-8")
+    temporary.replace(root / _PANEL_FILE)
+    return url
+
+
 def allowed_return(return_to: str) -> bool:
     """Only the configured LAB panel may receive an assertion (no open redirect)."""
-    configured = os.getenv("LAB_PANEL_URL", "").strip().rstrip("/")
+    configured = panel_url()
     if not configured or not return_to:
         return False
     return return_to.rstrip("/") == configured or return_to.startswith(configured + "/")
