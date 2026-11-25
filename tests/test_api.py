@@ -2228,3 +2228,31 @@ def test_enrollment_production_handler_lost_response_retry_and_revoke(monkeypatc
     assert revoked.status_code == 200, revoked.text
     assert not verify_node_token(reissued["worker_secret"], "gpu-http-01")
     assert not verify_node_certificate("gpu-http-01", reissued["certificate_serial"])
+
+
+def test_backup_availability_follows_the_backup_service(monkeypatch):
+    """The panel shows «Бекапи» only while the backup service answers; the probe is always 200."""
+    import httpx
+
+    class _Answer:
+        def __init__(self, status):
+            self.status_code = status
+
+    monkeypatch.delenv("BACKUP_URL", raising=False)
+    assert _tc.get("/api/system/backups/available").json() == {"available": False}
+    monkeypatch.setenv("BACKUP_URL", "http://backup:8092")
+    calls = []
+
+    async def healthy(self, url, **kwargs):
+        calls.append(url)
+        return _Answer(200)
+    monkeypatch.setattr(httpx.AsyncClient, "get", healthy)
+    response = _tc.get("/api/system/backups/available")
+    assert response.status_code == 200 and response.json() == {"available": True}
+    assert calls == ["http://backup:8092/health"]
+
+    async def down(self, url, **kwargs):
+        raise httpx.ConnectError("refused")
+    monkeypatch.setattr(httpx.AsyncClient, "get", down)
+    response = _tc.get("/api/system/backups/available")
+    assert response.status_code == 200 and response.json() == {"available": False}

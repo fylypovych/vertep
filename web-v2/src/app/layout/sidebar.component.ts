@@ -28,7 +28,7 @@ interface NavItem {
   exact?: boolean;
   queryParams?: Record<string, string>;
   adminOnly?: boolean;
-  /** A built-in page of a module without its own menu entry: shown only while that module is ACTIVE. */
+  /** A built-in page of a service without its own menu entry: shown only while that service answers. */
   module?: string;
 }
 
@@ -215,7 +215,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
   moduleItems = signal<(NavItem & { group: string })[]>([]);
   /** #491 L3: «Лабораторія» for an administrator, only when CORE has LAB_PANEL_URL. */
   labConfigured = signal(false);
-  /** Modules that are ACTIVE: their built-in pages without a module menu entry (Бекапи) are shown. */
+  /** Built-in pages whose service answers (Бекапи): shown only then. */
   activeModules = signal<Set<string>>(new Set());
 
   visibleGroups = computed(() => {
@@ -287,13 +287,15 @@ export class SidebarComponent implements OnInit, OnDestroy {
   }
 
   private loadModuleMenu(): void {
-    // The catalog is the administrator's; a refusal (moderator) only means no such entries.
-    this.http.get<{ modules: { module_id: string; state: string }[] }>('/api/nodes/module-catalog',
-        { context: new HttpContext().set(BACKGROUND_REQUEST, true) }).subscribe({
-      next: (catalog) => this.activeModules.set(new Set((Array.isArray(catalog?.modules) ? catalog.modules : [])
-        .filter(item => item.state === 'ACTIVE').map(item => item.module_id))),
-      error: () => this.activeModules.set(new Set()),
-    });
+    // «Бекапи» is shown while the backup service answers — deployed as a module or as a role.
+    // Only the administrator has the entry; a refusal or an unreachable service hides it.
+    if (this.policy.userRole() === 'admin') {
+      this.http.get<{ available: boolean }>('/api/system/backups/available',
+          { context: new HttpContext().set(BACKGROUND_REQUEST, true) }).subscribe({
+        next: ({ available }) => this.activeModules.set(new Set(available ? ['backup'] : [])),
+        error: () => this.activeModules.set(new Set()),
+      });
+    }
     this.modulesApi.navigation().subscribe(items => this.moduleItems.set(items.map(item => ({
       id: 'module-' + item.module_id + '-' + item.id,
       path: item.path,

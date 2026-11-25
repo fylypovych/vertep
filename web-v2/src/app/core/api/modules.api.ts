@@ -70,10 +70,8 @@ export interface CatalogNode { node_id: string; role?: string; gpu_available?: b
 export class ModuleManagementApiService {
   constructor(private http: HttpClient, private base: BaseApiService) {}
   private h = () => this.base.headers();
-  /** ``background``: a side read (another page asks whether a module is active) never redirects to login. */
-  catalog = (background = false): Observable<{ modules: CatalogModule[]; nodes: CatalogNode[] }> =>
-    this.http.get<{ modules: CatalogModule[]; nodes: CatalogNode[] }>(`${this.base.url}/nodes/module-catalog`,
-      { headers: this.h(), context: new HttpContext().set(BACKGROUND_REQUEST, background) })
+  catalog = (): Observable<{ modules: CatalogModule[]; nodes: CatalogNode[] }> =>
+    this.http.get<{ modules: CatalogModule[]; nodes: CatalogNode[] }>(`${this.base.url}/nodes/module-catalog`, { headers: this.h() })
       .pipe(catchError(this.base.handleError));
   lifecycle = (action: string, body: Record<string, unknown>): Observable<unknown> =>
     this.http.post(`${this.base.url}/nodes/module-registry/lifecycle/${action}`, body, { headers: this.h() })

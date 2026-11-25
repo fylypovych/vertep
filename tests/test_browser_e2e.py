@@ -2741,8 +2741,10 @@ def test_real_backend_moderator_has_no_admin_access():
             expect(page.get_by_test_id("profile-role")).to_have_text("Модератор")
             page.get_by_test_id("display-name-input").fill("Browser E2E Moderator")
             page.get_by_test_id("email-input").fill("browser-e2e-moderator@example.com")
-            page.get_by_test_id("account-save").click()
-            page.wait_for_timeout(500)
+            # Wait for the save itself, not a fixed 500 ms (a slow CI runner reloaded before it).
+            with page.expect_response(lambda r: r.url.endswith("/api/session/profile") and r.request.method == "PUT") as saved:
+                page.get_by_test_id("account-save").click()
+            assert saved.value.ok, saved.value.text()
             page.reload()
             expect(page.get_by_test_id("display-name-input")).to_have_value("Browser E2E Moderator")
 

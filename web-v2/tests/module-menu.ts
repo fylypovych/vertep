@@ -8,7 +8,11 @@ export const ACTIVE_MODULE_MENU = [
 /** Registered after a catch-all `**\/api/**` route, so it takes precedence for the menu. */
 export const activeModules = async (page: any, items = ACTIVE_MODULE_MENU, catalog = ['backup']) => {
   await page.route('**/api/modules/navigation', (route: any) => route.fulfill({ json: { items } }));
-  // Built-in pages without a module menu entry (Бекапи) follow the module's state in the catalog.
-  await page.route('**/api/nodes/module-catalog', (route: any) => route.fulfill({ json: {
-    modules: catalog.map(module_id => ({ module_id, state: 'ACTIVE' })), nodes: [] } }));
+  // «Бекапи» follows the backup service: it answers when 'backup' is listed, otherwise 502.
+  await page.route('**/api/system/backups/available', (route: any) =>
+    route.fulfill({ json: { available: catalog.includes('backup') } }));
+  if (!catalog.includes('backup')) {
+    await page.route('**/api/system/backups', (route: any) =>
+      route.fulfill({ status: 502, json: { detail: 'Сервіс BACKUP_URL недоступний. Перевірте, чи запущений відповідний сервіс.' } }));
+  }
 };

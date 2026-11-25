@@ -21,6 +21,20 @@ from ..state import store, task_queue
 router = APIRouter()
 
 
+@router.get("/api/system/backups/available")
+async def system_backups_available():
+    """Whether the backup service answers (as a module or as a role): the panel shows
+    «Бекапи» only then. Always 200, so a probe never surfaces as a failed request."""
+    base = os.getenv("BACKUP_URL", "").rstrip("/")
+    if not base:
+        return {"available": False}
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            return {"available": (await client.get(f"{base}/health")).status_code == 200}
+    except httpx.HTTPError:
+        return {"available": False}
+
+
 @router.get("/api/system/backups")
 async def system_backups():
     return await _internal_api("GET", "BACKUP_URL", "/snapshots")

@@ -499,7 +499,7 @@ export const EN: Record<string, string> = {
   "Спершу погодьте права": "Approve the permissions first",
   "Спершу розмістіть модуль на вузлі": "Place the module on a node first",
   "Чекаємо на запуск модуля на вузлі": "Waiting for the module to start on the node",
-  "Модуль «Резервні копії» не встановлено або вимкнено. Встановіть його в розділі": "The Backups module is not installed or is off. Install it in",
+  "Служба резервних копій не запущена: модуль «Резервні копії» не встановлено або не активовано. Встановіть його в розділі": "The backup service is not running: the Backups module is not installed or not activated. Install it in",
   "Адреса панелі LAB": "LAB panel address",
   "Необов’язково. Окрема лабораторія на своїй VM, наприклад https://10.10.10.20:8444. Після збереження адміністратор бачить пункт «Лабораторія» й входить у LAB через Vertep. Порожнє поле вимикає підключення.": "Optional. A separate laboratory on its own VM, for example https://10.10.10.20:8444. Once saved, an administrator sees the «Laboratory» entry and signs in to the LAB through Vertep. An empty field turns the connection off.",
   "невідома помилка": "unknown error",

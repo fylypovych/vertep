@@ -102,12 +102,11 @@ test('сторінки модулів є в меню й відкриваютьс
   await expect(page).toHaveURL(/\/$/);
 });
 
-test('без активного модуля «Резервні копії» пункту «Бекапи» немає, а сторінка пояснює причину', async ({ page }) => {
+test('без запущеної служби резервних копій пункту «Бекапи» немає, а сторінка пояснює причину', async ({ page }) => {
   await page.route('**/api/**', async (route: any) => {
     const url = new URL(route.request().url()).pathname;
     if (url.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', username: 'admin', role: 'admin' } });
     if (url.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
-    if (url.endsWith('/backups')) return route.fulfill({ status: 503, json: { detail: 'Сервіс BACKUP_URL недоступний' } });
     return route.fulfill({ json: route.request().method() === 'GET' ? [] : {} });
   });
   await activeModules(page, undefined, []);

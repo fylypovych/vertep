@@ -66,14 +66,15 @@ test.describe('Settings — LAB panel', () => {
 });
 
 test.describe('Settings — side reads', () => {
-  test('відмова в адресі LAB чи каталозі модулів не викидає з налаштувань на вхід', async ({ page }) => {
+  test('відмова в адресі LAB чи у фоновій перевірці бекапів не викидає з налаштувань на вхід', async ({ page }) => {
     await mockApi(page, { status: { system: { state: 'NORMAL' }, version: '0.0.1.19', core: 'OK' } });
     await page.route('**/api/settings/lab-panel', (route: any) => route.fulfill({ status: 401, json: { detail: 'Not authenticated' } }));
-    await page.route('**/api/nodes/module-catalog', (route: any) => route.fulfill({ status: 401, json: { detail: 'Not authenticated' } }));
+    await page.route('**/api/system/backups', (route: any) => route.fulfill({ status: 502, json: { detail: 'Сервіс BACKUP_URL недоступний' } }));
     await page.goto('/settings?tab=system');
     await expect(page.getByTestId('system-info')).toContainText('0.0.1.19', { timeout: 20000 });
+    await expect(page).toHaveURL(/\/settings\?tab=system/);
     await page.goto('/settings?tab=backup');
-    await expect(page.getByTestId('settings-backup')).toBeVisible();
+    await expect(page.getByTestId('backup-module-missing')).toBeVisible();
     await expect(page).toHaveURL(/\/settings\?tab=backup/);
   });
 });
