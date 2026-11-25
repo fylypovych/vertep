@@ -2421,6 +2421,8 @@ def test_backup_critical_mutations_create_and_restore():
         page.route("**/api/system/backups/*/restore/progress", lambda route: route.fulfill(json={"progress": 100, "message": "ok"}))
         page.route("**/api/system/backups", handle_backups)
         page.route("**/api/system/backups/*/restore", lambda route: (post_calls.append("restore"), route.fulfill(json={"ok": True}))[1])
+        # The menu shows «Бекапи» only while the backup service answers (0.0.4.52).
+        page.route("**/api/system/backups/available", lambda route: route.fulfill(json={"available": True}))
 
         page.goto(f"{BASE_URL}/settings")
         expect(page.locator("[data-testid='settings-page']")).to_be_visible()
