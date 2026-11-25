@@ -343,6 +343,13 @@ services:
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
+    # The deployment waits for "healthy" on every selected service; without a check
+    # node-exporter never became healthy and every monitoring deployment rolled back.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9100/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
   monitoring:
     image: ${VERTEP_MONITORING_IMAGE:-prom/prometheus:v3.5.0}
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus",

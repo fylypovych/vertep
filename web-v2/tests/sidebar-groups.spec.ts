@@ -101,3 +101,19 @@ test('сторінки модулів є в меню й відкриваютьс
   await page.goto('/published');
   await expect(page).toHaveURL(/\/$/);
 });
+
+test('без активного модуля «Резервні копії» пункту «Бекапи» немає, а сторінка пояснює причину', async ({ page }) => {
+  await page.route('**/api/**', async (route: any) => {
+    const url = new URL(route.request().url()).pathname;
+    if (url.endsWith('/session')) return route.fulfill({ json: { authenticated: true, user: 'admin', username: 'admin', role: 'admin' } });
+    if (url.endsWith('/status')) return route.fulfill({ json: { system: { state: 'NORMAL' } } });
+    if (url.endsWith('/backups')) return route.fulfill({ status: 503, json: { detail: 'Сервіс BACKUP_URL недоступний' } });
+    return route.fulfill({ json: route.request().method() === 'GET' ? [] : {} });
+  });
+  await activeModules(page, undefined, []);
+  await page.goto('/settings?tab=backup');
+  await expect(page.getByTestId('backup-module-missing')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText('BACKUP_URL')).toHaveCount(0);
+  const groups = await menu(page);
+  expect(groups['Система']).toEqual(SYSTEM.filter(item => item !== 'Бекапи'));
+});

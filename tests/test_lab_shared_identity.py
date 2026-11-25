@@ -131,6 +131,7 @@ def test_administrator_sets_the_lab_panel_address_in_settings(tmp_path, monkeypa
     refused = client.put("/api/settings/lab-panel", json={"url": "https://evil.example"}, cookies=moderator,
                          headers={"X-CSRF-Token": moderator["vertep_csrf"]})
     assert refused.status_code == 403
+    assert client.get("/api/settings/lab-panel", cookies=moderator).status_code == 403
     cookies = _core_session(monkeypatch, tmp_path, "admin", "admin")
     monkeypatch.delenv("LAB_PANEL_URL")
     headers = {"X-CSRF-Token": cookies["vertep_csrf"]}

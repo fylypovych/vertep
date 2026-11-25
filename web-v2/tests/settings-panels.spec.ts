@@ -50,6 +50,6 @@ test('облікові дані соцмереж згруповані плитк
   await expect(youtube).toContainText('YouTube', { timeout: 20000 });
   await expect(youtube).toContainText('youtube_client_id');
   await expect(youtube).toContainText('1/4');
-  await page.goto('/settings?tab=secrets');
+  await page.goto('/settings?tab=telegram');
   await expect(page.getByTestId('secret-group-telegram')).toContainText('telegram_bot_token', { timeout: 20000 });
 });

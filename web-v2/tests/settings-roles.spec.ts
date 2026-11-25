@@ -30,18 +30,19 @@ async function openModules(page: import('@playwright/test').Page) {
   return placements;
 }
 
-test('розміщення модуля зберігає вибраний вузол після reload', async ({ page }) => {
+test('«Розмістити тут» одразу зберігає вузол, після reload він розміщений, а активація чекає на вузол', async ({ page }) => {
   const placements = await openModules(page);
-  const choice = page.getByTestId('place-image-gpu');
-  const save = page.getByTestId('save-placement-image');
-  await expect(save).toBeDisabled();
-  await choice.check();
-  await save.click();
+  await expect(page.getByTestId('activate-blocker-image')).toHaveText('Спершу розмістіть модуль на вузлі');
+  await expect(page.getByTestId('activate-image')).toBeDisabled();
+  await page.getByTestId('place-image-gpu').click();
   await expect.poll(() => placements).toEqual([['gpu']]);
   await page.reload();
-  await expect(choice).toBeChecked();
-  await expect(save).toBeDisabled();
+  await expect(page.getByTestId('placed-image-gpu')).toHaveText('Розміщено');
+  await expect(page.getByTestId('waiting-node-image')).toBeVisible();
+  await expect(page.getByTestId('activate-blocker-image')).toHaveText('Чекаємо на запуск модуля на вузлі');
   await expect(page.getByTestId('ready-image-gpu')).toHaveText('Вузол не повідомляв модуль');
+  await page.getByTestId('unplace-image-gpu').click();
+  await expect.poll(() => placements).toEqual([['gpu'], []]);
 });
 
 test('несумісний вузол показує причину й не приймає модуль', async ({ page }) => {

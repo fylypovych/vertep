@@ -714,3 +714,26 @@ def test_apply_aborts_before_recreate_when_rescue_fails(tmp_path, monkeypatch):
     assert destructive == []
     # Config is rolled back to the previous values instead of left half-applied.
     assert "NODE_ROLE=unassigned" in (root / ".env").read_text(encoding="utf-8")
+
+
+def test_every_role_service_has_a_healthcheck_the_deployment_can_wait_for():
+    """wait_for_healthy needs "healthy" from every selected service: a role service
+    without a healthcheck (node-exporter, 0.0.4.49 stand) never became ready and every
+    deployment with it rolled back after the timeout, taking the Worker with it."""
+    import yaml
+    root = Path(__file__).resolve().parents[1]
+    roles = json.loads((root / "config/node_roles.json").read_text(encoding="utf-8"))
+    services = yaml.safe_load((root / "deploy/docker-compose.yml").read_text(encoding="utf-8"))["services"]
+    wanted = {service for role in roles.values() if isinstance(role, dict) for service in role.get("services", [])}
+    without = sorted(name for name in wanted - {"migrate"}  # a one-shot job, judged by its exit code
+                     if not services[name].get("healthcheck"))
+    assert without == []
+
+
+def test_wait_for_healthy_timeout_names_the_services_that_are_not_ready(monkeypatch):
+    mod = module()
+    rows = [{"Service": "core", "State": "running", "Health": "healthy"},
+            {"Service": "node-exporter", "State": "running", "Health": ""}]
+    monkeypatch.setattr(mod, "compose_rows", lambda *args, **kwargs: rows)
+    with pytest.raises(RuntimeError, match="часу очікування: node-exporter$"):
+        mod.wait_for_healthy(["docker", "compose"], {"core", "node-exporter"}, timeout_seconds=0)

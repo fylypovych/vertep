@@ -10,11 +10,11 @@ from core.first_run import ensure_secret_store, _write_encrypted_secrets
 
 def test_publisher_test_reconnect_scope_error_and_secret_redaction(core, browser, oauth, tmp_path):
     page = browser["page"]
-    page.goto(core["url"] + "/settings?tab=integrations")
-    panel = page.get_by_test_id("settings-integrations")
-    expect(panel).to_be_visible()
+    # The shared platform credentials, their state and reconnect live in «Публікація» (#502).
     with page.expect_response(lambda r: r.url.endswith("/api/integrations") and r.request.method == "GET") as checked:
-        panel.get_by_test_id("publisher-test").click()
+        page.goto(core["url"] + "/settings?tab=publishing")
+    panel = page.get_by_test_id("settings-publishing")
+    expect(panel).to_be_visible()
     assert checked.value.status == 200
     states = []
     def reconnect():

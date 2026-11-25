@@ -107,8 +107,12 @@ def post_workflow_mode(payload: dict):
 
 
 @router.get("/api/settings/lab-panel")
-def get_lab_panel():
-    """#491 L2: the optional connection to the separate LAB panel («Лабораторія» entry)."""
+def get_lab_panel(request: Request):
+    """#491 L2: the optional connection to the separate LAB panel («Лабораторія» entry).
+    The address is the administrator's, like /api/lab/panel."""
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        raise HTTPException(403, "Administrator role required")
     from ..lab_identity import panel_url
     return {"url": panel_url() or None}
 

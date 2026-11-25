@@ -63,10 +63,13 @@ test('соцмережі керуються у «Публікації», сер�
   await page.goto('/settings?tab=secrets');
   const keys = page.getByTestId('settings-secrets');
   await expect(keys.getByRole('heading', { name: 'Ключі інтеграцій' })).toBeVisible();
-  await expect(keys.getByTestId('secret-group-telegram')).toContainText('Збережено');
-  for (const name of SERVICE) await expect(keys).toContainText(name);
+  for (const name of SERVICE.filter(item => item !== 'telegram_bot_token')) await expect(keys).toContainText(name);
   for (const name of SOCIAL) await expect(keys).not.toContainText(name);
-  await expect(keys.getByTestId('secrets-publishing-moved')).toContainText('Публікація');
+  // The management bot's token lives with its status in «Telegram-бот»; channels in «Бренди → Канали».
+  await expect(keys).not.toContainText('telegram_bot_token');
+  await expect(keys.getByTestId('secrets-publishing-moved')).toContainText('Бренди → Канали');
+  await page.goto('/settings?tab=telegram');
+  await expect(page.getByTestId('secret-group-telegram')).toContainText('Збережено');
 });
 
 test('старе посилання tab=secrets відкриває «Ключі інтеграцій»; англійська локаль', async ({ page }) => {
@@ -74,8 +77,8 @@ test('старе посилання tab=secrets відкриває «Ключі 
   await page.addInitScript(() => localStorage.setItem('vertep_language', 'en'));
   await page.goto('/settings?tab=secrets');
   await expect(page.getByTestId('settings-secrets').getByRole('heading', { name: 'Integration keys' })).toBeVisible({ timeout: 20000 });
-  await expect(page.getByTestId('secret-group-telegram')).toContainText('Telegram bot');
+  await expect(page.getByTestId('settings-secrets')).toContainText('Brands → Channels');
   await page.goto('/settings?tab=publishing');
-  await expect(page.getByTestId('settings-publishing')).toContainText('Platform credentials', { timeout: 20000 });
+  await expect(page.getByTestId('settings-publishing')).toContainText('Shared platform credentials (fallback)', { timeout: 20000 });
   await expect(page.getByTestId('secret-group-telegram-publishing')).toContainText('A separate bot used only for publishing to channels');
 });

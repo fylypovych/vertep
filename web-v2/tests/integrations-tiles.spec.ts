@@ -24,11 +24,24 @@ async function open(page: any, integrations = INTEGRATIONS) {
   await page.goto('/settings?tab=integrations');
 }
 
-test('плитки підключень мають зелений, жовтий або червоний колір за станом', async ({ page }) => {
+/** Shared platform credentials and their state live in «Публікація» (#502): channels are set per brand. */
+async function openPublishing(page: any, integrations = INTEGRATIONS) {
+  await open(page, integrations);
+  await page.goto('/settings?tab=publishing');
+}
+
+test('«Стан підключень» показує лише служби, без платформ публікації', async ({ page }) => {
   await open(page);
   const tone = (id: string) => page.getByTestId(id);
   await expect(tone('service-status-ollama')).toHaveAttribute('data-tone', 'green', { timeout: 20000 });
   await expect(tone('service-status-comfyui')).toHaveAttribute('data-tone', 'red');
+  await expect(page.getByTestId('settings-integrations').getByTestId('publisher-status-youtube')).toHaveCount(0);
+});
+
+test('стан спільних облікових даних платформ показано в «Публікації» кольором за станом', async ({ page }) => {
+  await openPublishing(page);
+  const tone = (id: string) => page.getByTestId(id);
+  await expect(page.getByTestId('publishing-brands-hint')).toContainText('Бренди → Канали', { timeout: 20000 });
   await expect(tone('publisher-status-youtube')).toHaveAttribute('data-tone', 'green');
   await expect(tone('publisher-status-telegram')).toHaveAttribute('data-tone', 'green');
   await expect(tone('publisher-status-tiktok')).toHaveAttribute('data-tone', 'red');
@@ -37,7 +50,7 @@ test('плитки підключень мають зелений, жовтий 
   }
   await expect(tone('publisher-status-youtube')).toHaveClass(/bg-emerald-50/);
   await expect(tone('publisher-status-facebook')).toHaveClass(/bg-amber-50/);
-  await expect(tone('publisher-status-tiktok')).toHaveClass(/bg-red-50/);
+  await expect(tone('publisher-status-tiktok')).toHaveClass(/bg-slate-50/);  // not set: channels use their own
 });
 
 test('сервіс, що відповідає з помилкою HTTP, показано жовтим', async ({ page }) => {

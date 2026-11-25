@@ -239,7 +239,9 @@ def wait_for_healthy(compose: list[str], selected: set[str], runner=subprocess.r
         if required_running <= ready:
             return
         if time.monotonic() >= deadline:
-            raise RuntimeError("Вибрані сервіси не стали робочими до завершення часу очікування")
+            # Name them: without the list the failure could not be diagnosed from the panel.
+            raise RuntimeError("Вибрані сервіси не стали робочими до завершення часу очікування: "
+                               + ", ".join(sorted(required_running - ready)))
         time.sleep(5)
 
 

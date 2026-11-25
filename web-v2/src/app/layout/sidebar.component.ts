@@ -28,6 +28,8 @@ interface NavItem {
   exact?: boolean;
   queryParams?: Record<string, string>;
   adminOnly?: boolean;
+  /** A built-in page of a module without its own menu entry: shown only while that module is ACTIVE. */
+  module?: string;
 }
 
 interface SidebarGroup {
@@ -175,7 +177,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
         },
         { id: 'modules', path: '/modules', label: 'Модулі', exact: true, icon: MODULE_ICON, adminOnly: true },
         { id: 'settings-update', path: '/settings', label: 'Оновлення', queryParams: { tab: 'update' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`, adminOnly: true },
-        { id: 'settings-backup', path: '/settings', label: 'Бекапи', queryParams: { tab: 'backup' }, icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>`, adminOnly: true },
+        { id: 'settings-backup', path: '/settings', label: 'Бекапи', queryParams: { tab: 'backup' }, module: 'backup', icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>`, adminOnly: true },
         {
           id: 'real-tests',
           path: '/real-tests',
@@ -213,9 +215,12 @@ export class SidebarComponent implements OnInit, OnDestroy {
   moduleItems = signal<(NavItem & { group: string })[]>([]);
   /** #491 L3: «Лабораторія» for an administrator, only when CORE has LAB_PANEL_URL. */
   labConfigured = signal(false);
+  /** Modules that are ACTIVE: their built-in pages without a module menu entry (Бекапи) are shown. */
+  activeModules = signal<Set<string>>(new Set());
 
   visibleGroups = computed(() => {
     const isAdmin = this.policy.userRole() === 'admin';
+    const active = this.activeModules();
     const modules = this.moduleItems();
     const lab: NavItem = { id: 'lab', path: '/lab', label: 'Лабораторія', icon: MODULE_ICON, adminOnly: true };
     const navGroups = this.labConfigured()
@@ -238,7 +243,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
     return groups
       .map(group => ({
         label: group.label,
-        items: group.items.filter(item => !item.adminOnly || isAdmin),
+        items: group.items.filter(item => (!item.adminOnly || isAdmin) && (!item.module || active.has(item.module))),
       }))
       .filter(group => group.items.length > 0);
   });
@@ -282,6 +287,13 @@ export class SidebarComponent implements OnInit, OnDestroy {
   }
 
   private loadModuleMenu(): void {
+    // The catalog is the administrator's; a refusal (moderator) only means no such entries.
+    this.http.get<{ modules: { module_id: string; state: string }[] }>('/api/nodes/module-catalog',
+        { context: new HttpContext().set(BACKGROUND_REQUEST, true) }).subscribe({
+      next: (catalog) => this.activeModules.set(new Set((Array.isArray(catalog?.modules) ? catalog.modules : [])
+        .filter(item => item.state === 'ACTIVE').map(item => item.module_id))),
+      error: () => this.activeModules.set(new Set()),
+    });
     this.modulesApi.navigation().subscribe(items => this.moduleItems.set(items.map(item => ({
       id: 'module-' + item.module_id + '-' + item.id,
       path: item.path,

@@ -7,7 +7,7 @@ import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
 
-/** Settings → Ключі інтеграцій: keys of services Vertep itself uses; social publishing lives in «Публікація». */
+/** Settings → Ключі інтеграцій: keys of services Vertep itself uses; publishing lives in Бренди → Канали (#502). */
 @Component({
   selector: 'app-settings-secrets',
   standalone: true,
@@ -16,8 +16,9 @@ import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-secrets">
       <h3 class="text-lg font-semibold mb-4">{{ 'Ключі інтеграцій' | t }}</h3>
       <p class="text-sm text-slate-600 mb-2">{{ 'Тут зберігаються токени, API keys і паролі сервісів, з якими працює Vertep. «Збережено» означає наявність значення, а не перевірку його дійсності чи готовність підключення. Доступність сервісів показано в розділі «Стан підключень».' | t }}</p>
-      <p class="text-sm text-slate-600 mb-4" data-testid="secrets-publishing-moved">{{ 'Облікові дані соцмереж для публікації задаються у вкладці' | t }}
-        <a [routerLink]="['/settings']" [queryParams]="{ tab: 'publishing' }" class="text-blue-700">«{{ 'Публікація' | t }}»</a>.</p>
+      <p class="text-sm text-slate-600 mb-4" data-testid="secrets-publishing-moved">{{ 'Облікові дані каналів публікації задаються в' | t }}
+        <a routerLink="/brands" class="text-blue-700">«{{ 'Бренди → Канали' | t }}»</a>, {{ 'токен бота керування — у вкладці' | t }}
+        <a [routerLink]="['/settings']" [queryParams]="{ tab: 'telegram' }" class="text-blue-700">«{{ 'Telegram-бот' | t }}»</a>.</p>
       <app-secret-groups [groups]="serviceGroups" />
       <div class="mt-4 pt-4 border-t border-slate-200">
         <h4 class="text-sm font-medium text-slate-700 mb-2">{{ 'Новий секрет' | t }}</h4>
@@ -43,8 +44,6 @@ export class SecretsSectionComponent {
   newSecretValue = '';
 
   readonly serviceGroups: SecretGroup[] = [
-    { id: 'telegram', label: 'Telegram-бот', names: ['telegram_bot_token'],
-      hint: 'Бот для запитів користувачів, керування Vertep і сповіщень. У канали він не публікує: для цього окремий бот у вкладці «Публікація».' },
     { id: 'moneyprinter', label: 'MoneyPrinterTurbo', names: ['money_printer_token'] },
     { id: 'ai', label: 'Зовнішній AI', names: ['external_ai_api_key'] },
     { id: 'email', label: 'Пошта (SMTP)', names: ['smtp_password'] },

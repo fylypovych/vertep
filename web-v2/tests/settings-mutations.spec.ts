@@ -21,19 +21,19 @@ function mockApi(page: any, overrides: Record<string, any> = {}) {
 
 test.describe('Settings — Secrets', () => {
   test('Вкладка Секрети відображається', async ({ page }) => {
-    await mockApi(page, { secrets: { telegram_bot_token: true, smtp_password: false } });
+    await mockApi(page, { secrets: { smtp_password: true, external_ai_api_key: false } });
     await page.goto('/settings');
     await page.getByText('Ключі інтеграцій').click();
     await expect(page.getByTestId('settings-secrets')).toBeVisible();
-    await expect(page.getByText('telegram_bot_token')).toBeVisible();
+    await expect(page.getByText('smtp_password')).toBeVisible();
     await expect(page.getByText('Збережено', { exact: true }).first()).toBeVisible();
   });
 
   test('Редагування секрету', async ({ page }) => {
-    await mockApi(page, { secrets: { telegram_bot_token: true } });
+    await mockApi(page, { secrets: { smtp_password: true } });
     await page.goto('/settings');
     await page.getByText('Ключі інтеграцій').click();
-    await page.getByText('telegram_bot_token').locator('xpath=ancestor::div[contains(@class,"border-t")][1]').locator('button:has-text("Редагувати")').click();
+    await page.getByText('smtp_password').locator('xpath=ancestor::div[contains(@class,"border-t")][1]').locator('button:has-text("Редагувати")').click();
     await expect(page.getByRole('button', { name: 'Зберегти' })).toBeVisible();
   });
 });
@@ -62,5 +62,18 @@ test.describe('Settings — LAB panel', () => {
     expect(saved).toBe('https://10.10.10.20:8444');
     await page.reload();
     await expect(page.getByTestId('lab-panel-url')).toHaveValue('https://10.10.10.20:8444');
+  });
+});
+
+test.describe('Settings — side reads', () => {
+  test('відмова в адресі LAB чи каталозі модулів не викидає з налаштувань на вхід', async ({ page }) => {
+    await mockApi(page, { status: { system: { state: 'NORMAL' }, version: '0.0.1.19', core: 'OK' } });
+    await page.route('**/api/settings/lab-panel', (route: any) => route.fulfill({ status: 401, json: { detail: 'Not authenticated' } }));
+    await page.route('**/api/nodes/module-catalog', (route: any) => route.fulfill({ status: 401, json: { detail: 'Not authenticated' } }));
+    await page.goto('/settings?tab=system');
+    await expect(page.getByTestId('system-info')).toContainText('0.0.1.19', { timeout: 20000 });
+    await page.goto('/settings?tab=backup');
+    await expect(page.getByTestId('settings-backup')).toBeVisible();
+    await expect(page).toHaveURL(/\/settings\?tab=backup/);
   });
 });

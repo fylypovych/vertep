@@ -248,8 +248,10 @@ def test_browser_first_install_module_choice_join_and_placement(module_runtime_e
             expect(admin_page.get_by_test_id("module-state-text")).not_to_have_text("Не встановлено", timeout=20000)
             expect(admin_page.get_by_test_id("incompatible-image-cpu-node").first).to_contain_text("GPU")
             expect(admin_page.get_by_test_id("place-image-cpu-node")).to_be_disabled()
-            admin_page.get_by_test_id("place-text-cpu-node").check()
-            admin_page.get_by_test_id("save-placement-text").click()
+            admin_page.get_by_test_id("place-text-cpu-node").click()
+            expect(admin_page.get_by_test_id("placed-text-cpu-node")).to_be_visible(timeout=20000)
+            assert beat().status_code == 200  # the node reports the placed module
+            admin_page.reload()
             expect(admin_page.get_by_test_id("activate-text")).to_be_enabled(timeout=20000)
             assert beat().status_code == 200
             admin_page.get_by_test_id("activate-text").click()
@@ -263,7 +265,7 @@ def test_browser_first_install_module_choice_join_and_placement(module_runtime_e
             moderator_page.goto(url + "/modules")
             expect(moderator_page.get_by_test_id("module-text")).to_be_visible(timeout=20000)
             expect(moderator_page.get_by_test_id("deactivate-text")).to_have_count(0)
-            expect(moderator_page.get_by_test_id("place-text-cpu-node")).to_be_disabled()
+            expect(moderator_page.get_by_test_id("place-text-cpu-node")).to_have_count(0)  # no placement control
             csrf = next(cookie["value"] for cookie in moderator.cookies() if cookie["name"] == "vertep_csrf")
             refused = moderator_page.request.post(url + "/api/nodes/module-registry/lifecycle/deactivate",
                                                   data={"module_id": "text"}, headers={"x-csrf-token": csrf})

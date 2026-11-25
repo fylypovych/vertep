@@ -3,6 +3,8 @@ import { Component, OnInit, computed, signal } from '@angular/core';
 import { TimeoutError, timeout } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
+import { IntegrationStatus } from '../../core/models';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { PolicyService } from '../../core/services/policy.service';
@@ -15,10 +17,11 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
 @Component({
   selector: 'app-settings-publishing',
   standalone: true,
-  imports: [TPipe, CommonModule, FormsModule, SecretGroupsComponent],
+  imports: [TPipe, CommonModule, FormsModule, RouterLink, SecretGroupsComponent],
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-publishing">
     <h3 class="text-lg font-semibold mb-1">{{ 'Публікація' | t }}</h3>
-    <p class="text-sm text-slate-500 mb-4">{{ 'Параметри каналів і облікові дані платформ для публікації відео.' | t }}</p>
+    <p class="text-sm text-slate-600 mb-4" data-testid="publishing-brands-hint">{{ 'Куди публікувати, вирішують бренди: канал і його облікові дані задаються в' | t }}
+      <a routerLink="/brands" class="text-blue-700">«{{ 'Бренди → Канали' | t }}»</a>. {{ 'Тут — загальні параметри та спільні облікові дані.' | t }}</p>
     <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="publishing-error">{{ error()! | t }}</div>
     <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-public-url">{{ 'Публічна адреса Vertep' | t }}</label>
     <input id="publishing-public-url" data-testid="publishing-public-url" [ngModel]="publicUrl()" (ngModelChange)="publicUrl.set($event)" [disabled]="!canEdit()"
@@ -26,8 +29,16 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
     <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Потрібна для Threads: платформа сама завантажує відео за посиланням, тому адреса має відкриватися з інтернету. Внутрішня адреса не підійде.' | t }}</p>
     <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" data-testid="publishing-save"
             [disabled]="!canEdit() || saving()" (click)="save()">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
-    <h4 class="text-base font-semibold mt-6 mb-1">{{ 'Облікові дані платформ' | t }}</h4>
-    <p class="text-sm text-slate-500 mb-3">{{ 'Значення зберігаються в захищеному сховищі й після збереження не показуються.' | t }}</p>
+    <h4 class="text-base font-semibold mt-6 mb-1">{{ 'Спільні облікові дані платформ (запасні)' | t }}</h4>
+    <p class="text-sm text-slate-500 mb-3">{{ 'Канал публікує зі своїми обліковими даними. Ці значення використовуються лише для каналу, де адміністратор явно дозволив спільні облікові дані; кожне таке використання записується в аудит. Значення зберігаються в захищеному сховищі й після збереження не показуються.' | t }}</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4" data-testid="publishing-shared-status">
+      <div *ngFor="let ch of publisherChannels()" class="border rounded-xl p-3 text-sm" [ngClass]="toneClass(publisherTone(ch.val))" [attr.data-tone]="publisherTone(ch.val)" [attr.data-testid]="'publisher-status-' + ch.key">
+        <div class="flex flex-wrap justify-between items-center gap-2"><span class="font-semibold">{{ (ch.label) | t }}</span><span>{{ (publisherStatus(ch.val)) | t }}</span>
+          <button *ngIf="ch.key !== 'telegram' && ch.val.configured" type="button" [disabled]="busy() !== null || !canEdit()" (click)="reconnect(ch.key)" [attr.data-testid]="'publisher-reconnect-' + ch.key" class="px-2 py-1 border rounded text-xs">{{ 'Перепідключити' | t }}</button>
+        </div>
+        <p *ngIf="messages()[ch.key]" role="status" class="text-xs">{{ (messages()[ch.key]) | t }}</p>
+      </div>
+    </div>
     <app-secret-groups [groups]="platformGroups" data-testid="publishing-credentials" />
   </div>`,
 })
@@ -51,7 +62,59 @@ export class PublishingSectionComponent implements OnInit {
 
   constructor(private settingsApi: SettingsApiService, private toast: ToastService, private policy: PolicyService) {}
 
+  /** Readiness of the shared platform credentials (formerly «Стан підключень»). */
+  integrations = signal<IntegrationStatus | null>(null);
+  busy = signal<string | null>(null);
+  messages = signal<Record<string, string>>({});
+
+  loadStatus(): void {
+    this.settingsApi.integrations().subscribe({ next: (data) => this.integrations.set(data as unknown as IntegrationStatus), error: () => {} });
+  }
+
+  reconnect(channel: string): void {
+    this.busy.set(channel);
+    this.settingsApi.reconnectPublisher(channel).subscribe({
+      next: data => {
+        this.messages.update(messages => ({ ...messages, [channel]: data.error || (data.reconnected && data.ready ? 'Підключення відновлено' : 'Підключення не готове') }));
+        this.busy.set(null);
+        this.loadStatus();
+      },
+      error: error => {
+        this.messages.update(messages => ({ ...messages, [channel]: error.message }));
+        this.busy.set(null);
+      },
+    });
+  }
+
+  /** Not configured is red; confirmed ready is green; anything in between is a problem (yellow). */
+  publisherTone(val: { configured: boolean; ready?: boolean; missing_scopes?: string[] }): 'green' | 'yellow' | 'red' {
+    if (!val?.configured) return 'red';
+    return val.ready === true && !val.missing_scopes?.length ? 'green' : 'yellow';
+  }
+
+  toneClass(tone: 'green' | 'yellow' | 'red'): string {
+    return { green: 'bg-emerald-50 border-emerald-300', yellow: 'bg-amber-50 border-amber-300', red: 'bg-slate-50 border-slate-200' }[tone];
+  }
+
+  publisherStatus(val: { configured: boolean; ready?: boolean; missing_scopes?: string[] }): string {
+    if (!val?.configured) return 'Не задано';
+    if (val.missing_scopes?.length) return 'Бракує прав доступу';
+    if (val.ready === false) return 'Не готово';
+    return val.ready === true ? 'Готово' : 'Налаштовано; готовність не підтверджено';
+  }
+
+  publisherChannels(): { key: string; label: string; val: { configured: boolean; ready?: boolean; missing_scopes?: string[] } }[] {
+    const pub = this.integrations()?.publisher;
+    if (!pub) { return []; }
+    const labels: Record<string, string> = {
+      youtube: 'YouTube', tiktok: 'TikTok', facebook: 'Facebook',
+      instagram: 'Instagram', threads: 'Threads', telegram: 'Telegram',
+    };
+    return Object.entries(pub).map(([key, val]) => ({ key, label: labels[key] || key, val: val ?? { configured: false, ready: false } }));
+  }
+
   ngOnInit(): void {
+    this.loadStatus();
     this.settingsApi.publishingSettings().subscribe({
       next: (value) => this.publicUrl.set(value.public_url),
       error: (err) => this.error.set(err.message),

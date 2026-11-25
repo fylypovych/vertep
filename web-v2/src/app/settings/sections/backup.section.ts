@@ -1,6 +1,8 @@
 import { TPipe } from '../../core/i18n/t.pipe';
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
+import { ModuleManagementApiService } from '../../core/api/modules.api';
 import { map, Observable, of, throwError, timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { OperationsApiService } from '../../core/api/operations.api';
@@ -19,9 +21,13 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
 @Component({
   selector: 'app-settings-backup',
   standalone: true,
-  imports: [TPipe, CommonModule, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
+  imports: [TPipe, CommonModule, RouterLink, VertepDatePipe, LoadingStateComponent, ErrorStateComponent],
   template: `
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-backup">
+      @if (moduleActive() === false) {
+        <h3 class="text-lg font-semibold text-slate-900 mb-2">{{ 'Резервні копії' | t }}</h3>
+        <p class="text-sm text-slate-600" data-testid="backup-module-missing">{{ 'Модуль «Резервні копії» не встановлено або вимкнено. Встановіть його в розділі' | t }} <a routerLink="/modules" class="text-emerald-700 underline">{{ 'Модулі' | t }}</a>.</p>
+      } @else {
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">{{ 'Резервні копії' | t }}</h3>
         <button (click)="createBackup()" [disabled]="creating.pending()" data-testid="backup-create-button" class="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">{{ (creating.pending() ? 'Створення...' : 'Створити') | t }}</button>
@@ -74,6 +80,7 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
           }
         </div>
       }
+    }
     </div>
   `,
 })
@@ -82,8 +89,22 @@ export class BackupSectionComponent implements OnInit {
   readonly creating = new RemoteMutation();
   readonly restore = new RemoteMutation();
 
-  constructor(private ops: OperationsApiService, private toast: ToastService, private confirm: ConfirmService) {}
-  ngOnInit(): void { this.loadBackups(); }
+  constructor(private ops: OperationsApiService, private toast: ToastService, private confirm: ConfirmService,
+              private modules: ModuleManagementApiService) {}
+  /** null until known; the backup service exists only with the Backup module ACTIVE. */
+  readonly moduleActive = signal<boolean | null>(null);
+  ngOnInit(): void {
+    this.modules.catalog(true).subscribe({
+      next: (catalog) => {
+        // An unreadable catalog says nothing about the module: the page behaves as before.
+        if (!Array.isArray(catalog?.modules)) { this.loadBackups(); return; }
+        const active = catalog.modules.some(item => item.module_id === 'backup' && item.state === 'ACTIVE');
+        this.moduleActive.set(active);
+        if (active) this.loadBackups();
+      },
+      error: () => { this.moduleActive.set(null); this.loadBackups(); },
+    });
+  }
 
   readonly keyFormOpen = signal(false);
   readonly keyBusy = signal(false);

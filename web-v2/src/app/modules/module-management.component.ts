@@ -32,7 +32,7 @@ const REASON_TEXT: Record<string, string> = {
   <div class="p-6 space-y-4" data-testid="module-management">
     <div>
       <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">{{ 'Модулі' | t }}</h1>
-      <p class="text-sm text-slate-500">{{ 'Оберіть модуль і вузол. Вузол без потрібних ресурсів показує причину й не приймає модуль.' | t }}</p>
+      <p class="text-sm text-slate-500">{{ 'Порядок для кожного модуля: встановити → розмістити на вузлі → погодити права → вузол запускає модуль → активувати. Вузол без потрібних ресурсів показує причину й не приймає модуль.' | t }}</p>
     </div>
     @if (error()) { <div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert" data-testid="module-error">{{ error() }}</div> }
     @if (core(); as runtime) {
@@ -66,13 +66,17 @@ const REASON_TEXT: Record<string, string> = {
             <tr class="border-t border-slate-100 dark:border-slate-700 align-top" [attr.data-testid]="'module-node-' + module.module_id + '-' + entry.node_id">
               <td class="py-1.5 pr-2">{{ entry.node_id }}</td>
               <td class="py-1.5 pr-2">
-                <label class="inline-flex items-center gap-2">
-                  <input type="checkbox" [disabled]="!isAdmin() || busy() || entry.compatible_reasons.length > 0"
-                         [checked]="selected(module.module_id).includes(entry.node_id)"
-                         (change)="toggle(module, entry.node_id, $event)"
-                         [attr.data-testid]="'place-' + module.module_id + '-' + entry.node_id">
-                  <span>{{ 'Розмістити' | t }}</span>
-                </label>
+                @if (module.placement.includes(entry.node_id)) {
+                  <span class="text-emerald-700" [attr.data-testid]="'placed-' + module.module_id + '-' + entry.node_id">{{ 'Розміщено' | t }}</span>
+                  @if (isAdmin()) {
+                    <button class="ml-2 text-xs underline text-slate-600 disabled:opacity-50" [disabled]="busy() || module.state === 'ACTIVE'"
+                            (click)="place(module, entry.node_id, false)" [attr.data-testid]="'unplace-' + module.module_id + '-' + entry.node_id">{{ 'Прибрати' | t }}</button>
+                  }
+                } @else if (isAdmin()) {
+                  <button class="px-2 py-1 rounded border text-xs disabled:opacity-50"
+                          [disabled]="busy() || module.state === 'NOT_INSTALLED' || entry.compatible_reasons.length > 0"
+                          (click)="place(module, entry.node_id, true)" [attr.data-testid]="'place-' + module.module_id + '-' + entry.node_id">{{ 'Розмістити тут' | t }}</button>
+                }
                 @for (reason of entry.compatible_reasons; track reason) {
                   <div class="text-xs text-amber-700" [attr.data-testid]="'incompatible-' + module.module_id + '-' + entry.node_id">{{ reason | t }}</div>
                 }
@@ -96,26 +100,52 @@ const REASON_TEXT: Record<string, string> = {
           <div class="rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-800" role="alert" [attr.data-testid]="'module-action-error-' + module.module_id">{{ moduleError()!.message }}</div>
         }
         @if (isAdmin() && !module.system) {
-          <div class="flex flex-wrap gap-2 text-sm">
-            @if (module.state === 'NOT_INSTALLED' && module.bundled) {
-              <button class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50" [disabled]="busy()" (click)="run('install', { bundled: module.module_id })" [attr.data-testid]="'install-' + module.module_id">{{ 'Встановити' | t }}</button>
-            }
-            @if (module.state !== 'NOT_INSTALLED') {
-              <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy() || !placementChanged(module)" (click)="savePlacement(module)" [attr.data-testid]="'save-placement-' + module.module_id">{{ 'Зберегти розміщення' | t }}</button>
-            }
-            @if (module.permissions.length && !approved(module)) {
-              <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy()" (click)="approve(module)" [attr.data-testid]="'approve-' + module.module_id">{{ 'Погодити права' | t }}: {{ module.permissions.join(', ') }}</button>
-            }
-            @if (module.state === 'INSTALLED' || module.state === 'INACTIVE' || module.state === 'FAILED') {
-              <button class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50" [disabled]="busy()" (click)="run('activate', { module_id: module.module_id })" [attr.data-testid]="'activate-' + module.module_id">{{ 'Активувати' | t }}</button>
-            }
-            @if (module.state === 'ACTIVE') {
-              <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy()" (click)="run('deactivate', { module_id: module.module_id })" [attr.data-testid]="'deactivate-' + module.module_id">{{ 'Вимкнути' | t }}</button>
-            }
-            @if (module.state !== 'NOT_INSTALLED') {
+          <ol class="space-y-2 text-sm" [attr.data-testid]="'steps-' + module.module_id">
+            <li class="flex flex-wrap items-center gap-2">
+              <span class="w-5 text-slate-500">1.</span><span class="w-40">{{ 'Встановлення' | t }}</span>
+              @if (module.state === 'NOT_INSTALLED') {
+                @if (module.bundled) {
+                  <button class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50" [disabled]="busy()" (click)="run('install', { bundled: module.module_id })" [attr.data-testid]="'install-' + module.module_id">{{ 'Встановити' | t }}</button>
+                } @else { <span class="text-slate-500">{{ 'Встановлюється з пакета в «Оновленні»' | t }}</span> }
+              } @else { <span class="text-emerald-700">✓ {{ 'Встановлено' | t }}</span> }
+            </li>
+            <li class="flex flex-wrap items-center gap-2">
+              <span class="w-5 text-slate-500">2.</span><span class="w-40">{{ 'Вузол' | t }}</span>
+              @if (module.placement.length) { <span class="text-emerald-700">✓ {{ module.placement.join(', ') }}</span> }
+              @else { <span class="text-slate-500">{{ 'Натисніть «Розмістити тут» біля вузла в таблиці вище' | t }}</span> }
+            </li>
+            <li class="flex flex-wrap items-center gap-2">
+              <span class="w-5 text-slate-500">3.</span><span class="w-40">{{ 'Права' | t }}</span>
+              @if (!module.permissions.length) { <span class="text-emerald-700">✓ {{ 'Не потрібні' | t }}</span> }
+              @else if (approved(module)) { <span class="text-emerald-700">✓ {{ module.permissions.join(', ') }}</span> }
+              @else {
+                <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy() || module.state === 'NOT_INSTALLED'" (click)="approve(module)" [attr.data-testid]="'approve-' + module.module_id">{{ 'Погодити права' | t }}: {{ module.permissions.join(', ') }}</button>
+              }
+            </li>
+            <li class="flex flex-wrap items-center gap-2">
+              <span class="w-5 text-slate-500">4.</span><span class="w-40">{{ 'Запуск на вузлі' | t }}</span>
+              @if (reported(module)) { <span class="text-emerald-700">✓ {{ 'Вузол повідомив модуль' | t }}</span> }
+              @else if (module.placement.length && approved(module)) { <span class="text-slate-500" [attr.data-testid]="'waiting-node-' + module.module_id">{{ 'Очікуємо, поки вузол запустить модуль і повідомить про нього' | t }}</span> }
+              @else { <span class="text-slate-400">—</span> }
+            </li>
+            <li class="flex flex-wrap items-center gap-2">
+              <span class="w-5 text-slate-500">5.</span><span class="w-40">{{ 'Активація' | t }}</span>
+              @if (module.state === 'ACTIVE') {
+                <span class="text-emerald-700">✓ {{ 'Активний' | t }}</span>
+              } @else {
+                <button class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white disabled:opacity-50" [disabled]="busy() || !!activationBlocker(module)" (click)="run('activate', { module_id: module.module_id })" [attr.data-testid]="'activate-' + module.module_id">{{ 'Активувати' | t }}</button>
+                @if (activationBlocker(module); as blocker) { <span class="text-xs text-slate-500" [attr.data-testid]="'activate-blocker-' + module.module_id">{{ blocker | t }}</span> }
+              }
+            </li>
+          </ol>
+          @if (module.state !== 'NOT_INSTALLED') {
+            <div class="flex flex-wrap gap-2 text-sm border-t border-slate-100 dark:border-slate-700 pt-3">
+              @if (module.state === 'ACTIVE') {
+                <button class="px-3 py-1.5 rounded-lg border disabled:opacity-50" [disabled]="busy()" (click)="run('deactivate', { module_id: module.module_id })" [attr.data-testid]="'deactivate-' + module.module_id">{{ 'Вимкнути' | t }}</button>
+              }
               <button class="px-3 py-1.5 rounded-lg border border-red-300 text-red-700 disabled:opacity-50" [disabled]="busy()" (click)="uninstall(module)" [attr.data-testid]="'uninstall-' + module.module_id">{{ 'Видалити (з архівом)' | t }}</button>
-            }
-          </div>
+            </div>
+          }
         }
       </section>
     }
@@ -127,7 +157,6 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
   core = signal<CoreRuntimeState | null>(null);
   error = signal<string | null>(null);
   busy = signal(false);
-  private choices = signal<Record<string, string[]>>({});
   isAdmin = computed(() => this.policy.userRole() === 'admin');
 
   constructor(private api: ModuleManagementApiService, private runtime: CoreRuntimeApiService, private policy: PolicyService) {}
@@ -145,7 +174,6 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
         this.modules.set(catalog.modules);
         this.nodes.set(catalog.nodes);
         this.core.set(core);
-        this.choices.set(Object.fromEntries(catalog.modules.map(module => [module.module_id, [...module.placement]])));
       },
       error: (error: Error) => this.error.set(error.message),
     });
@@ -157,12 +185,8 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
     if (reason.startsWith('interface_unmet:')) return 'Потрібний інтерфейс недоступний';
     return REASON_TEXT[reason] || reason;
   }
-  selected(moduleId: string): string[] { return this.choices()[moduleId] || []; }
   isCore(nodeId: string): boolean { return this.nodes().some(node => node.node_id === nodeId && node.role === 'core'); }
   approved(module: CatalogModule): boolean { return module.permissions.every(item => module.approved_permissions.includes(item)); }
-  placementChanged(module: CatalogModule): boolean {
-    return [...this.selected(module.module_id)].sort().join(',') !== [...module.placement].sort().join(',');
-  }
   runtimePending(): boolean {
     const runtime = this.core();
     return !!runtime?.queued || ['QUEUED', 'APPLYING'].includes(runtime?.deployment?.state || '');
@@ -178,10 +202,23 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
       || (runtime.queued ? 'Очікує системного виконавця' : '');
   }
 
-  toggle(module: CatalogModule, nodeId: string, event: Event): void {
-    const checked = (event.target as HTMLInputElement).checked;
-    const current = this.selected(module.module_id).filter(item => item !== nodeId);
-    this.choices.set({ ...this.choices(), [module.module_id]: checked ? [...current, nodeId] : current });
+  /** One click places (or removes) the module on a node; it is saved at once. */
+  place(module: CatalogModule, nodeId: string, on: boolean): void {
+    const current = module.placement.filter(item => item !== nodeId);
+    this.act(this.api.placement(module.module_id, on ? [...current, nodeId] : current), module.module_id);
+  }
+  /** A placed node has reported the module (step 4): the node runs it only once it is placed and its
+   *  permissions are approved; activation runs the self-test against that report. */
+  reported(module: CatalogModule): boolean {
+    return module.nodes.some(entry => module.placement.includes(entry.node_id) && !!entry.instance);
+  }
+  /** Why «Активувати» is not available yet: the first unfinished step. */
+  activationBlocker(module: CatalogModule): string | null {
+    if (module.state === 'NOT_INSTALLED') return 'Спершу встановіть модуль';
+    if (!module.placement.length) return 'Спершу розмістіть модуль на вузлі';
+    if (module.permissions.length && !this.approved(module)) return 'Спершу погодьте права';
+    if (!this.reported(module)) return 'Чекаємо на запуск модуля на вузлі';
+    return null;
   }
 
   /** The answer appears in the card the administrator acted on, not above the list (out of view). */
@@ -205,7 +242,6 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
   run(action: string, body: Record<string, unknown>): void {
     this.act(this.api.lifecycle(action, body), String(body['module_id'] ?? body['bundled'] ?? '') || undefined);
   }
-  savePlacement(module: CatalogModule): void { this.act(this.api.placement(module.module_id, this.selected(module.module_id)), module.module_id); }
   approve(module: CatalogModule): void { this.act(this.api.approve(module.module_id, module.permissions), module.module_id); }
   prepareCore(role: string): void {
     const active = this.core()?.active_roles || [];

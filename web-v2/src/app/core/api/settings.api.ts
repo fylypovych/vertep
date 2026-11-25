@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
+import { BACKGROUND_REQUEST } from '../interceptors/auth.interceptor';
 import { Observable, catchError, throwError } from 'rxjs';
 
 export interface SecretStatus {
@@ -293,7 +294,9 @@ export class SettingsApiService {
 
   labPanel(): Observable<{ url: string | null }> {
     return this.http
-      .get<{ url: string | null }>(`${this.baseUrl}/settings/lab-panel`, { headers: this.getHeaders() })
+      // A side read of the settings page: a refusal must not send the administrator to the login page.
+      .get<{ url: string | null }>(`${this.baseUrl}/settings/lab-panel`, { headers: this.getHeaders(),
+        context: new HttpContext().set(BACKGROUND_REQUEST, true) })
       .pipe(catchError(this.handleError));
   }
 

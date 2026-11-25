@@ -40,6 +40,8 @@ def test_signed_ui_extension_is_isolated_and_failures_stay_local(core, browser, 
     for name in ("notes", "broken"):
         registry.set_placement(name, ["app-node"])
     page = browser["page"]
+    # The stand-in runtime above has no lifecycle; the menu's catalog read (Бекапи) gets an empty catalog.
+    page.route("**/api/nodes/module-catalog", lambda route: route.fulfill(json={"modules": [], "nodes": []}))
     try:
         page.goto(f"{browser['url']}/")
         nav = page.get_by_test_id("sidebar-nav")

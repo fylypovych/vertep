@@ -1785,11 +1785,9 @@ def test_modules_shows_deployment_status():
         expect(page.get_by_test_id("place-image-core")).to_be_disabled()
         expect(page.get_by_test_id("incompatible-image-core")).to_have_text("Потрібен GPU")
         expect(page.get_by_test_id("ready-image-core")).to_have_text("Вузол не повідомляв модуль")
-        page.get_by_test_id("place-text-core").check()
-        page.get_by_test_id("save-placement-text").click()
-        expect(page.get_by_test_id("place-text-core")).to_be_checked()
+        page.get_by_test_id("place-text-core").click()
+        expect(page.get_by_test_id("placed-text-core")).to_be_visible()
         assert placement_writes == [["core"]]
-        expect(page.get_by_test_id("save-placement-text")).to_be_disabled()
         page.go_back()
         expect(page.get_by_test_id("module-management")).not_to_be_visible()
         page.go_forward()
