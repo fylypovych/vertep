@@ -229,28 +229,28 @@ def test_an_official_module_installed_with_the_release_updates_from_the_official
                                             ["github.com/fylypovych/vertep"])})
     lifecycle = ModuleLifecycle(tmp_path / "lc", lambda p: verify_package(p, trust), drain_timeout=0.1,
                                 system_versions={"core_runtime": "0.0.4.27"})
-    lifecycle.install_bundled("storyboard")  # no migrations: no database needed here
-    installed = lifecycle.record("storyboard")["version"]
+    lifecycle.install_bundled("publishing")  # no migrations: no database needed here
+    installed = lifecycle.record("publishing")["version"]
 
-    unsigned = c.build_package("storyboard", image="ghcr.io/fylypovych/vertep-module-storyboard@sha256:" + "b" * 64)
+    unsigned = c.build_package("publishing", image="ghcr.io/fylypovych/vertep-module-publishing@sha256:" + "b" * 64)
     unsigned["manifest"] = {**unsigned["manifest"], "version": "0.0.9.1"}
     data = json.dumps(c.sign_package(unsigned, private, "vertep-modules-1")).encode()
     network = Network()
-    asset = "https://github.com/fylypovych/vertep/releases/download/storyboard.0.0.9.1/package.json"
+    asset = "https://github.com/fylypovych/vertep/releases/download/publishing.0.0.9.1/package.json"
     network.files[asset] = data
     network.files["https://api.github.com/repos/fylypovych/vertep/releases?per_page=100"] = json.dumps([
         {"tag_name": "0.0.4.27", "draft": False, "prerelease": False, "assets": []},
-        {"tag_name": "storyboard.0.0.9.1", "draft": False, "prerelease": False,
+        {"tag_name": "publishing.0.0.9.1", "draft": False, "prerelease": False,
          "assets": [{"name": "package.json", "browser_download_url": asset}]}]).encode()
     sources = ModuleSources(lifecycle, SourceResolver(network), core_version="0.0.4.27")
 
-    assert sources.pin("storyboard")["official"] is True
+    assert sources.pin("publishing")["official"] is True
     assert sources.pin("text") is None  # role modules have no package of their own
-    [offer] = [item for item in sources.recommendations() if item["module_id"] == "storyboard"]
+    [offer] = [item for item in sources.recommendations() if item["module_id"] == "publishing"]
     assert offer["current"] == installed and offer["available"] == "0.0.9.1" and offer["recommended"], offer
-    result = sources.update("storyboard", "0.0.9.1", approved_profile=offer["profile"])
-    assert result["version"] == "0.0.9.1" and lifecycle.record("storyboard")["version"] == "0.0.9.1"
-    pin = sources.pin("storyboard")
+    result = sources.update("publishing", "0.0.9.1", approved_profile=offer["profile"])
+    assert result["version"] == "0.0.9.1" and lifecycle.record("publishing")["version"] == "0.0.9.1"
+    pin = sources.pin("publishing")
     assert pin.get("official") is None and pin["version"] == "0.0.9.1" and pin["history"] == [installed]
 
 

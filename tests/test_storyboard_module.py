@@ -38,8 +38,14 @@ class TestStoryboardModuleCompatibility:
         manifest = ModuleManifest.from_dict(bundled_manifest("storyboard"))
         assert manifest.schema_version == "2.0"
 
-    def test_storyboard_has_no_database_of_its_own(self):
-        """#501 owner decision: storyboards stay in the jobs; the module reads them."""
+    def test_storyboard_declares_scenario_library_migration(self):
+        """#508: Storyboard owns the Scenario Library in its own PostgreSQL schema;
+        Job Storyboards remain owned by CORE (#501)."""
         manifest = ModuleManifest.from_dict(bundled_manifest("storyboard"))
-        assert manifest.migrations == [] and manifest.permissions == ["storyboard.read"]
-        assert not Path("modules/storyboard/migrations").exists() or not any(Path("modules/storyboard/migrations").iterdir())
+        assert manifest.migrations == [{"id": "m001_initial", "version": "1.0.0"}]
+        assert manifest.permissions == ["storyboard.read"]
+        migration = Path("modules/storyboard/migrations/m001_initial.sql")
+        assert migration.is_file()
+        ddl = migration.read_text(encoding="utf-8")
+        for table in ("scenarios", "scenario_versions", "scenario_shares", "scenario_audit"):
+            assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl

@@ -5,9 +5,11 @@ artifact download/upload/export/import endpoints and the legacy asset ``video``
 and ``job_file`` endpoints.
 """
 import asyncio
+import hashlib
 import io
 import json
 import os
+import threading
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +27,8 @@ from ..configuration import (DefaultCharacterError, default_character_id, load_c
                              missing_character_files)
 from ..dispatcher import can_retry
 from ..file_validation import validate_signature
-from ..models import JobCreate, JobStatus, JobUpdate, StageName, StageStatus
+from ..models import (JobCreate, JobStatus, JobUpdate, StageName, StageStatus,
+                      StoryboardScene, StoryboardVersion, utc_now)
 from ..orchestration import initialize_plan, transition_stage
 from ..pipeline import approve_script, approve_video, claim_video_regeneration, generate_script, queue_storyboard, regenerate_script, regenerate_video, release_video_regeneration, request_script_revision, request_video_revision
 from ..state import executor, store, task_queue
@@ -172,6 +175,261 @@ def create_job(request: JobCreate, http_request: Request = None):
     return job
 
 
+_scenario_job_lock = threading.Lock()
+
+
+class ScenarioJobCreate(BaseModel):
+    scenario_id: str = Field(min_length=2, max_length=64, pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
+    version: int = Field(ge=1)
+    brand_id: str = Field(default="brand01", pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
+    character_id: str | None = Field(default=None, pattern="^[a-z0-9][a-z0-9_-]{1,63}$")
+    topic: str | None = Field(default=None, min_length=1, max_length=500)
+    priority: int = Field(default=5, ge=1, le=10)
+    task_type: str = "image"
+    aspect_ratio: str = Field(default="16:9", pattern="^(16:9|9:16)$")
+    output_preset: str = "youtube"
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+def _canonical_scenario_digest(scenario_id: str, version: int, title: str,
+                               description: str, scenes: list[dict]) -> str:
+    canonical = json.dumps({
+        "scenario_id": scenario_id,
+        "version": version,
+        "title": title,
+        "description": description,
+        "scenes": scenes,
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def create_job_from_scenario_snapshot(
+    *,
+    scenario_id: str,
+    version: int,
+    snapshot: dict,
+    brand_id: str,
+    allowed_brands: set[str] | None,
+    actor: str,
+    character_id: str | None = None,
+    topic: str | None = None,
+    priority: int = 5,
+    task_type: str = "image",
+    aspect_ratio: str = "16:9",
+    output_preset: str = "youtube",
+    idempotency_key: str | None = None,
+):
+    """#508: Create an independent CORE Job from a specific Storyboard scenario version.
+
+    CORE checks target brand access, scenario access (owner or granted share), and
+    every character referenced by the scenario; saves a self-contained initial
+    storyboard snapshot with scenario provenance; and guarantees thread-safe
+    idempotency on repeated requests with the same ``idempotency_key``.
+    """
+    from ..module.navigation import MODULE_INACTIVE, inactive_job_modules
+    if inactive_job_modules():
+        raise HTTPException(503, MODULE_INACTIVE)
+    if allowed_brands is not None and brand_id not in allowed_brands:
+        raise HTTPException(403, "Brand access required")
+    if not jobs_may_be_created():
+        raise HTTPException(503, "Створення завдань тимчасово вимкнено поточним станом системи. Спробуйте пізніше.")
+    if not isinstance(snapshot, dict):
+        raise HTTPException(422, "Invalid scenario version snapshot")
+    if snapshot.get("archived"):
+        raise HTTPException(409, "Cannot create a Job from an archived scenario")
+    if str(snapshot.get("scenario_id") or "") != scenario_id or int(snapshot.get("version") or 0) != int(version):
+        raise HTTPException(422, "Scenario snapshot does not match requested scenario_id/version")
+    owner_brand = str(snapshot.get("owner_brand_id") or "")
+    shared_brands = {str(item) for item in (snapshot.get("shared_brands") or [])}
+    if not owner_brand or (brand_id != owner_brand and brand_id not in shared_brands):
+        raise HTTPException(403, "Brand does not have access to this scenario")
+    raw_scenes = snapshot.get("scenes")
+    if not isinstance(raw_scenes, list) or not raw_scenes:
+        raise HTTPException(422, "Scenario version contains no scenes")
+    snap_title = str(snapshot.get("title") or "").strip()
+    if not snap_title:
+        raise HTTPException(422, "Scenario version title is required")
+    snap_description = str(snapshot.get("description") or "")
+    computed_digest = _canonical_scenario_digest(scenario_id, int(version), snap_title, snap_description, raw_scenes)
+    claimed_digest = snapshot.get("snapshot_sha256")
+    if claimed_digest and claimed_digest != computed_digest:
+        raise HTTPException(422, "Scenario snapshot digest mismatch")
+
+    # Collect all characters referenced in the scenario scenes.
+    scene_characters: list[str] = []
+    for scene in raw_scenes:
+        for cid in (scene.get("characters") or []):
+            if isinstance(cid, str) and cid and cid not in scene_characters:
+                scene_characters.append(cid)
+    primary_char = character_id or (scene_characters[0] if scene_characters else None)
+    if primary_char is None:
+        try:
+            primary_char = default_character_id()
+        except DefaultCharacterError as error:
+            raise HTTPException(422, str(error)) from error
+    all_chars = [primary_char, *[c for c in scene_characters if c != primary_char]]
+    characters_root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
+    foreign_owners: list[str] = []
+    for cid in all_chars:
+        missing = missing_character_files(characters_root, cid)
+        if missing and (characters_root / cid).is_dir():
+            raise HTTPException(422, f"Character {cid!r} is incomplete: missing {', '.join(missing)}")
+        owner = _check_character_module(cid, brand_id)
+        if owner and owner != brand_id and owner not in foreign_owners:
+            foreign_owners.append(owner)
+    try:
+        character = load_character(characters_root, primary_char)
+    except Exception as error:
+        raise HTTPException(400, f"Invalid character configuration: {error}") from error
+    generation = character.generation
+    workflow = generation.get("workflow") or character.workflow
+    min_vram_mb = int(generation.get("min_vram_mb", 0))
+    resolved_aspect = character.visual.get("aspect_ratio", aspect_ratio)
+    resolved_preset = character.visual.get("output_preset", output_preset)
+    try:
+        workflow = _validate_workflow_reference(workflow, task_type)
+    except (ValueError, OSError) as error:
+        raise HTTPException(400, f"Invalid workflow: {error}") from error
+
+    clean_key = (idempotency_key or "").strip() or None
+    if clean_key is not None and len(clean_key) > 128:
+        raise HTTPException(422, "idempotency_key must not exceed 128 characters")
+
+    # Independent deep copy of scenes for the new Job.
+    sb_scenes: list[StoryboardScene] = []
+    script_scenes: list[dict] = []
+    for idx, scene in enumerate(raw_scenes, 1):
+        prompt = str(scene.get("prompt") or snap_title).strip()
+        video_prompt = str(scene.get("video_prompt") or prompt).strip()
+        voiceover = str(scene.get("voiceover") or scene.get("dialogue") or "").strip()
+        duration = float(scene.get("duration", 5.0))
+        scene_id = str(scene.get("scene_id") or f"scene-{idx:03d}")
+        sb_scenes.append(StoryboardScene(
+            index=idx,
+            prompt=prompt,
+            video_prompt=video_prompt,
+            voiceover=voiceover,
+            duration=duration,
+            scene_id=scene_id,
+        ))
+        script_scenes.append({
+            "scene_id": scene_id,
+            "prompt": prompt,
+            "video_prompt": video_prompt,
+            "voiceover": voiceover,
+            "dialogue": str(scene.get("dialogue") or voiceover),
+            "location": str(scene.get("location") or ""),
+            "characters": list(scene.get("characters") or []),
+            "duration": duration,
+        })
+
+    resolved_topic = (topic or snap_title).strip()[:500]
+    with _scenario_job_lock:
+        if clean_key:
+            for existing in store.jobs.values():
+                src = existing.scenario_source or {}
+                if (existing.scenario_idempotency_key == clean_key
+                        and existing.brand_id == brand_id
+                        and src.get("scenario_id") == scenario_id
+                        and src.get("version") == int(version)):
+                    return existing
+        job = store.create(
+            resolved_topic, primary_char, int(priority), f"scenario:{scenario_id}:v{version}",
+            task_type, min_vram_mb, brand_id, workflow, resolved_aspect, resolved_preset,
+        )
+        sb_version = StoryboardVersion(
+            version=1,
+            title=snap_title,
+            description=snap_description,
+            scenes=sb_scenes,
+            status="pending_approval",
+            image_status="pending",
+            approved_script={"title": snap_title, "scenes": script_scenes},
+        )
+        job.script = {"title": snap_title, "description": snap_description, "scenes": script_scenes}
+        job.storyboards = [sb_version]
+        job.active_storyboard_version = 1
+        job.scenario_source = {
+            "scenario_id": scenario_id,
+            "version": int(version),
+            "owner_brand_id": owner_brand,
+            "title": snap_title,
+            "snapshot_sha256": computed_digest,
+            "imported_at": utc_now(),
+        }
+        job.scenario_idempotency_key = clean_key
+        if foreign_owners:
+            job.character_owner_brand = foreign_owners[0]
+            job.character_owner_brands = list(foreign_owners)
+        initialize_plan(job)
+        target_status = JobStatus.STORYBOARD_PENDING_APPROVAL if dispatch_allowed() else JobStatus.WAITING_FOR_SYSTEM
+        store.update(
+            job,
+            target_status,
+            f"SCENARIO SNAPSHOT IMPORTED: {scenario_id} v{version} by {actor}",
+        )
+        if target_status == JobStatus.STORYBOARD_PENDING_APPROVAL:
+            from ..image_storyboard import queue_image_storyboard
+            queue_image_storyboard(store, job, 1)
+        return job
+
+
+@router.post("/api/jobs/from-scenario")
+def create_job_from_scenario(request: ScenarioJobCreate, http_request: Request = None):
+    """#508: Create a CORE Job from a saved Storyboard Scenario Library version."""
+    import httpx
+    from urllib.parse import quote
+    from core.module.gateway import call_module
+
+    identity = getattr(getattr(http_request, "state", None), "vertep_identity", None)
+    actor = identity[0] if identity else "api"
+    role = identity[1] if identity else "admin"
+    brands = getattr(getattr(http_request, "state", None), "vertep_brands", None)
+    if brands is not None and request.brand_id not in brands:
+        raise HTTPException(403, "Brand access required")
+    extra_headers = {
+        "x-vertep-user": actor,
+        "x-vertep-role": role,
+        "x-vertep-brands": "*" if brands is None else ",".join(sorted(brands)),
+    }
+    try:
+        answer = call_module(
+            "storyboard",
+            "GET",
+            f"/scenarios/{quote(request.scenario_id, safe='')}/versions/{request.version}",
+            params={"brand_id": request.brand_id},
+            extra_headers=extra_headers,
+        )
+    except (httpx.HTTPError, ValueError) as error:
+        raise HTTPException(503, "Storyboard module is unavailable") from error
+    if answer is None:
+        raise HTTPException(503, "Storyboard module is unavailable")
+    status_code, snapshot = answer
+    if status_code == 404:
+        raise HTTPException(404, "Scenario version not found")
+    if status_code == 403:
+        raise HTTPException(403, "Scenario access denied")
+    if status_code != 200 or not isinstance(snapshot, dict):
+        raise HTTPException(503, "Storyboard module returned an unexpected response")
+    header_key = http_request.headers.get("idempotency-key") if http_request else None
+    key = request.idempotency_key or header_key
+    return create_job_from_scenario_snapshot(
+        scenario_id=request.scenario_id,
+        version=request.version,
+        snapshot=snapshot,
+        brand_id=request.brand_id,
+        allowed_brands=brands,
+        actor=actor,
+        character_id=request.character_id,
+        topic=request.topic,
+        priority=request.priority,
+        task_type=request.task_type,
+        aspect_ratio=request.aspect_ratio,
+        output_preset=request.output_preset,
+        idempotency_key=key,
+    )
+
+
 
 @router.get("/api/jobs")
 def list_jobs(status: str | None = Query(default=None),
@@ -233,6 +491,7 @@ def get_job(job_id: str):
     except Exception:
         pass
     return job
+
 
 
 
@@ -352,6 +611,7 @@ def regenerate_job(job_id: str):
     return job
 
 
+
 @router.post("/api/jobs/{job_id}/retry")
 def retry_job(job_id: str):
     job = store.jobs.get(job_id)
@@ -372,6 +632,7 @@ def retry_job(job_id: str):
     return job
 
 
+
 @router.post("/api/jobs/{job_id}/pause")
 def pause_job(job_id: str):
     return _job_action(job_id, JobStatus.PAUSED, "JOB PAUSED")
@@ -382,6 +643,7 @@ def resume_job(job_id: str):
     job = _job_action(job_id, JobStatus.NEW, "JOB RESUMED")
     executor.submit(_prepare_and_dispatch, job)
     return job
+
 
 
 @router.post("/api/jobs/{job_id}/cancel")
@@ -423,6 +685,7 @@ def approve_script_endpoint(job_id: str, body: ScriptAction):
     return job
 
 
+
 @router.post("/api/jobs/{job_id}/script/revision")
 def revise_script(job_id: str, body: ScriptRevision):
     job = store.jobs.get(job_id)
@@ -433,6 +696,7 @@ def revise_script(job_id: str, body: ScriptRevision):
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     return job
+
 
 
 @router.post("/api/jobs/{job_id}/script/regenerate")
@@ -446,6 +710,7 @@ def regenerate_script_endpoint(job_id: str, body: ScriptRevision):
         raise HTTPException(409, str(error)) from error
     executor.submit(_prepare_and_dispatch, job)
     return job
+
 
 
 class VideoApproveAction(BaseModel):
@@ -488,6 +753,7 @@ def revise_video(job_id: str, body: ScriptRevision):
     return job
 
 
+
 @router.post("/api/jobs/{job_id}/video/regenerate")
 def regenerate_video_endpoint(job_id: str, body: ScriptAction | None = None):
     job = store.jobs.get(job_id)
@@ -518,6 +784,7 @@ def regenerate_video_endpoint(job_id: str, body: ScriptAction | None = None):
         release_video_regeneration(store, job)
         raise HTTPException(500, f"Could not dispatch regeneration: {error}") from error
     return job
+
 
 
 @router.delete("/api/jobs/{job_id}")
@@ -674,6 +941,7 @@ def publish_job(job_id: str, channels: list[str] | None = None):
         return store.update(job, JobStatus.PUBLISHED, "PUBLISHED (no channels)")
     store.update(job, JobStatus.PUBLISHING, f"PUBLISHING {len(queued_tasks)} channel(s) via Publisher Worker")
     return job
+
 
 
 @router.get("/api/jobs/{job_id}/videos/{version}")

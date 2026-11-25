@@ -166,7 +166,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                     and not (path.startswith("/api/system/backups/") and "/restore" in path)):
                 return self._secure(Response("Restore is in progress; writes are blocked", 423))
             operation = None
-            if path == "/api/jobs" and request.method == "POST":
+            if path in {"/api/jobs", "/api/jobs/from-scenario"} and request.method == "POST":
                 operation = "create_job"
             elif path.startswith("/api/jobs"):
                 operation = "mutate_job"
@@ -371,7 +371,7 @@ def _moderator_may_change(request, brands) -> bool:
         return not path.startswith(("/api/modules/token", "/api/modules/self"))
     if request.method != "POST":
         return False
-    if path == "/api/jobs" or re.fullmatch(r"/api/jobs/[^/]+/(shared-approval(/revoke)?|shared-publications)", path):
+    if path in {"/api/jobs", "/api/jobs/from-scenario"} or re.fullmatch(r"/api/jobs/[^/]+/(shared-approval(/revoke)?|shared-publications)", path):
         return True
     match = _MODERATOR_JOB_ACTIONS.fullmatch(path)
     if match:

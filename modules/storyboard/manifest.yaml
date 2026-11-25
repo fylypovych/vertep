@@ -1,17 +1,18 @@
 schema_version: "2.0"
 name: storyboard
 module_id: storyboard
-version: "0.0.4.15"
+version: "0.0.4.16"
 kind: application
 label: Сторіборд
 core_compatibility: {min: "0.0.4.11", max: "0.0.9.99"}
 dependencies: []
 capabilities:
   - storyboard_view
+  - scenario_library
 resource_requirements:
   min_vram_mb: 0
   min_cpu_cores: 1
-  min_ram_mb: 64
+  min_ram_mb: 128
 placement:
   target: any
   scaling: single_owner
@@ -25,17 +26,28 @@ api:
   routes:
     - "/storyboards"
     - "/storyboards/{job_id}"
+    - "/scenarios"
+    - "/scenarios/{scenario_id}"
+    - "/scenarios/{scenario_id}/versions"
+    - "/scenarios/{scenario_id}/versions/{version}"
+    - "/scenarios/{scenario_id}/copy"
+    - "/scenarios/{scenario_id}/archive"
+    - "/scenarios/{scenario_id}/restore"
+    - "/scenarios/{scenario_id}/shares"
+    - "/scenarios/{scenario_id}/shares/{brand_id}"
+    - "/scenarios/{scenario_id}/jobs"
+    - "/scenarios/{scenario_id}/audit"
 ui:
   entry: index.html
   navigation:
     - {id: storyboard, label: "Сторіборд"}
   files:
-    index.html: "3257bb53e4646882ac4f11477244217a8ce2187dbd581cd19ca539f8c998f348"
-# Reads the storyboards that live in the jobs; no database of its own (#501).
+    index.html: "177365e57cf6e48ff66d209c63b535ece2a0f2a03562ba67a11fc51110e8ed47"
 permissions:
   - storyboard.read
 secret_refs: []
-migrations: []
+migrations:
+  - {id: m001_initial, version: "1.0.0"}
 services:
   - {name: api}
 health:
@@ -48,5 +60,6 @@ container:
   image: "registry.example/vertep/storyboard@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   port: 8080
 description: >
-  Розкадровки завдань у межах брендів користувача. Дані розкадровок залишаються в завданнях CORE
-  (версії, правки, погодження, генерація через Worker, бекап); модуль власної бази не має.
+  Розкадровки завдань у межах брендів користувача (#501) та Бібліотека сценаріїв (#508):
+  незалежні сценарії, сцени, чернетки, незмінні версії, доступ між брендами і створення Job
+  зі знімка у власній PostgreSQL-схемі модуля. Job Storyboards залишаються у власності CORE.

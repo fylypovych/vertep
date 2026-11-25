@@ -1,1 +1,1 @@
-# standard library only
+pg8000==1.31.6

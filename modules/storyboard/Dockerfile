@@ -7,8 +7,8 @@ RUN useradd -u 65532 -m storyboard
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# #501: no database of its own; storyboards live in the jobs and come from CORE.
-COPY storyboard_module.py manifest.yaml ./
+COPY storyboard_logic.py storyboard_module.py manifest.yaml ./
+COPY migrations/ ./migrations/
 COPY ui/ ./ui/
 
 USER 65532

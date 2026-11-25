@@ -366,6 +366,11 @@ class Job(BaseModel):
     # A foreign owner's own, independent publication of the same immutable
     # artifact: {job_id, version, sha256} of the source material (#500 AC5).
     shared_source: dict[str, Any] | None = None
+    # #508 Scenario Library provenance: immutable source metadata when a Job is
+    # created from a saved Storyboard scenario version (never mutates the Job
+    # when the library scenario changes or is archived).
+    scenario_source: dict[str, Any] | None = None
+    scenario_idempotency_key: str | None = None
     # Brand-specific title/description/hashtags/cover; the video stays identical.
     publication_metadata: dict[str, Any] = Field(default_factory=dict)
     # Audit of independent publications created from this material.

@@ -350,3 +350,15 @@ def test_frontend_session_identity_has_a_single_validator_without_role_fallback(
                              source), f"{client} still promotes a non-moderator role to admin"
         assert not re.search(r"role\s*:\s*['\"]admin['\"]\s*(\)|,|\})", source), \
             f"{client} hardcodes an admin role instead of reading the validated one"
+
+
+def test_temporary_cleanup_skips_a_file_an_atomic_write_renamed_meanwhile(tmp_path, monkeypatch):
+    """The .tmp of an atomic write can vanish between the listing and stat(): cleanup must
+    skip it, not fail the maintenance request (CI 0.0.4.53: 500 on /api/maintenance/cleanup)."""
+    gone = tmp_path / "job.json.tmp"
+    old = tmp_path / "left.tmp"
+    old.write_text("x", encoding="utf-8")
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+    real = Path.rglob
+    monkeypatch.setattr(Path, "rglob", lambda self, pattern: iter([gone, *real(self, pattern)]))
+    assert cleanup_temporary_files(tmp_path, older_than_hours=0, dry_run=False) == [str(old)]

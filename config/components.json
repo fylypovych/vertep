@@ -160,7 +160,8 @@
       "image": {"name": "vertep-module-storyboard", "context": "modules/storyboard", "file": "modules/storyboard/Dockerfile"},
       "paths": ["modules/storyboard/**"],
       "tests": ["tests/test_storyboard_module.py", "tests/test_storyboard_module_e2e.py",
-                "tests/test_storyboard_module_restore_e2e.py", "tests/test_storyboard_module_browser_e2e.py"],
+                "tests/test_storyboard_module_restore_e2e.py", "tests/test_storyboard_module_browser_e2e.py",
+                "tests/test_scenario_library_508.py", "tests/test_scenario_library_postgres_508.py"],
       "transition_base": "0.0.4.14",
       "legacy_versions": {"1.0.0": "0.0.4.14"}
     }

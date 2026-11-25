@@ -24,7 +24,11 @@ def cleanup_temporary_files(root: str | Path, older_than_hours: int = 24, dry_ru
     cutoff = datetime.now(timezone.utc).timestamp() - older_than_hours * 3600
     removed = []
     for path in Path(root).rglob("*.tmp"):
-        if path.stat().st_mtime < cutoff:
+        try:
+            modified = path.stat().st_mtime
+        except FileNotFoundError:
+            continue  # an atomic write renamed it meanwhile: not a leftover
+        if modified < cutoff:
             removed.append(str(path))
             if not dry_run:
                 path.unlink(missing_ok=True)

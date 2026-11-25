@@ -5,19 +5,117 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Сторіборд</title>
 <style>
+  * { box-sizing: border-box; }
   body { font-family: system-ui, sans-serif; margin: 16px; color: #0f172a; background: #f8fafc; }
-  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  h2 { margin: 20px 0 8px; font-size: 18px; }
+  h3 { margin: 0 0 8px; font-size: 15px; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
   .muted { color: #64748b; font-size: 13px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .between { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge-own { background: #dbeafe; color: #1e40af; }
+  .badge-shared { background: #fef3c7; color: #92400e; }
+  .badge-archived { background: #e2e8f0; color: #475569; }
+  .badge-ver { background: #dcfce7; color: #166534; }
+  input, select, textarea { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; font-family: inherit; }
+  textarea { width: 100%; }
+  .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; cursor: pointer; font-size: 13px; font-weight: 500; }
+  .btn-primary { background: #0f766e; border-color: #0f766e; color: #fff; }
+  .btn-danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status { padding: 8px 12px; border-radius: 8px; margin: 8px 0; font-size: 13px; }
+  .status-ok { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+  .status-err { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+  .hidden { display: none; }
+  .scene-row { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; margin-bottom: 8px; background: #f8fafc; }
+  .field { margin-bottom: 8px; }
+  .field label { display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 3px; }
   ol { padding-left: 20px; }
+  hr { border: 0; border-top: 1px solid #e2e8f0; margin: 14px 0; }
 </style>
 </head>
 <body>
   <h1>Сторіборд</h1>
-  <p class="muted">Розкадровки завдань ваших брендів. Погодження й правки робляться на сторінці завдання.</p>
-  <div id="list"></div>
+
+  <!-- #508 Scenario Library -->
+  <section data-testid="scenario-library">
+    <div class="between">
+      <div>
+        <h2>Бібліотека сценаріїв</h2>
+        <p class="muted">Незалежні сценарії, версії та спільний доступ між брендами. Зміни в бібліотеці не змінюють уже створені Jobs.</p>
+      </div>
+      <button type="button" class="btn btn-primary" data-testid="scenario-new-btn" id="btn-new-scenario">Новий сценарій</button>
+    </div>
+
+    <div class="card row" data-testid="scenario-filters">
+      <input type="text" id="filter-q" data-testid="scenario-search" placeholder="Пошук сценаріїв...">
+      <input type="text" id="filter-brand" data-testid="scenario-brand-filter" placeholder="Бренд (необов'язково)">
+      <select id="filter-scope" data-testid="scenario-scope-filter">
+        <option value="all">Усі</option>
+        <option value="own">Власний</option>
+        <option value="shared">Спільний</option>
+      </select>
+      <select id="filter-archived" data-testid="scenario-archived-filter">
+        <option value="false">Активні</option>
+        <option value="true">Архівні</option>
+        <option value="all">Усі (з архівом)</option>
+      </select>
+      <button type="button" class="btn" id="btn-refresh-scenarios" data-testid="scenario-refresh-btn">Оновити</button>
+    </div>
+
+    <div id="scenario-status" data-testid="scenario-status" class="status hidden" role="status"></div>
+
+    <!-- Draft create/edit panel -->
+    <div id="scenario-editor" data-testid="scenario-editor" class="card hidden">
+      <h3 id="editor-heading">Новий сценарій</h3>
+      <input type="hidden" id="editor-scenario-id">
+      <div class="row">
+        <div class="field" style="flex:1; min-width:180px;">
+          <label for="editor-brand">Бренд-власник</label>
+          <input type="text" id="editor-brand" data-testid="editor-brand" placeholder="brand01" style="width:100%">
+        </div>
+        <div class="field" style="flex:2; min-width:240px;">
+          <label for="editor-title">Назва сценарію</label>
+          <input type="text" id="editor-title" data-testid="editor-title" placeholder="Назва сценарію" style="width:100%">
+        </div>
+      </div>
+      <div class="field">
+        <label for="editor-description">Опис</label>
+        <textarea id="editor-description" data-testid="editor-description" rows="2"></textarea>
+      </div>
+      <div class="between" style="margin-bottom:6px;">
+        <strong>Сцени</strong>
+        <button type="button" class="btn" id="btn-add-scene" data-testid="editor-add-scene">+ Додати сцену</button>
+      </div>
+      <div id="editor-scenes" data-testid="editor-scenes"></div>
+      <div class="row" style="margin-top:10px;">
+        <button type="button" class="btn btn-primary" id="btn-save-draft" data-testid="editor-save-btn">Зберегти чернетку</button>
+        <button type="button" class="btn" id="btn-cancel-editor" data-testid="editor-cancel-btn">Скасувати</button>
+      </div>
+    </div>
+
+    <!-- Catalog grid -->
+    <div id="scenario-list" data-testid="scenario-list" class="grid"></div>
+
+    <!-- Selected scenario card -->
+    <div id="scenario-detail" data-testid="scenario-detail" class="card hidden"></div>
+  </section>
+
+  <hr>
+
+  <!-- #501 Job Storyboards -->
+  <section data-testid="job-storyboards">
+    <h2>Розкадровки завдань</h2>
+    <p class="muted">Розкадровки завдань ваших брендів. Погодження й правки робляться на сторінці завдання.</p>
+    <div id="list"></div>
+  </section>
+
   <script>
     // The extension has no network of its own (CSP default-src 'none'); the panel relays
-    // requests to this module's Gateway API with the user's session (#493/#501).
+    // requests to this module's Gateway API with the user's session (#493/#501/#508).
     const vertepFetch = (() => {
       let next = 0;
       const pending = new Map();
@@ -38,13 +136,477 @@
     })();
 
     const API = '/api/modules/storyboard/v1';
-    function text(value) { const span = document.createElement('span'); span.textContent = value == null ? '' : String(value); return span.innerHTML; }
-    async function getJSON(path) {
-      const response = await vertepFetch(API + path);
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      return response.json();
+    let selectedScenario = null;
+    let selectedVersion = null;
+    let editorScenes = [];
+
+    function text(value) {
+      const span = document.createElement('span');
+      span.textContent = value == null ? '' : String(value);
+      return span.innerHTML;
     }
-    async function load() {
+
+    function showStatus(message, isError = false) {
+      const box = document.getElementById('scenario-status');
+      if (!message) {
+        box.className = 'status hidden';
+        box.textContent = '';
+        return;
+      }
+      box.className = 'status ' + (isError ? 'status-err' : 'status-ok');
+      box.textContent = message;
+    }
+
+    async function apiCall(path, options = {}) {
+      const response = await vertepFetch(API + path, options);
+      const body = await response.json();
+      if (!response.ok) {
+        const msg = (body && (body.error || body.detail)) || ('HTTP ' + response.status);
+        throw new Error(msg);
+      }
+      return body;
+    }
+
+    async function getJSON(path) {
+      return apiCall(path);
+    }
+
+    // -- Scenario Library -----------------------------------------------------
+    function buildQuery() {
+      const params = new URLSearchParams();
+      const q = document.getElementById('filter-q').value.trim();
+      const brand = document.getElementById('filter-brand').value.trim();
+      const scope = document.getElementById('filter-scope').value;
+      const archived = document.getElementById('filter-archived').value;
+      if (q) params.set('q', q);
+      if (brand) params.set('brand_id', brand);
+      if (scope && scope !== 'all') params.set('scope', scope);
+      if (archived) params.set('archived', archived);
+      const qs = params.toString();
+      return qs ? '?' + qs : '';
+    }
+
+    function renderEditorScenes() {
+      const root = document.getElementById('editor-scenes');
+      if (!editorScenes.length) {
+        root.innerHTML = '<p class="muted">Сцен ще немає. Додайте щонайменше одну сцену перед збереженням версії.</p>';
+        return;
+      }
+      root.innerHTML = editorScenes.map((scene, idx) => `
+        <div class="scene-row" data-scene-idx="${idx}">
+          <div class="between" style="margin-bottom:6px;">
+            <strong>Сцена ${idx + 1}</strong>
+            <div class="row">
+              <button type="button" class="btn" data-scene-up="${idx}" ${idx === 0 ? 'disabled' : ''}>↑</button>
+              <button type="button" class="btn" data-scene-down="${idx}" ${idx === editorScenes.length - 1 ? 'disabled' : ''}>↓</button>
+              <button type="button" class="btn btn-danger" data-scene-del="${idx}">Видалити</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Опис / промпт сцени</label>
+            <textarea rows="2" data-field="prompt" data-idx="${idx}">${text(scene.prompt || '')}</textarea>
+          </div>
+          <div class="row">
+            <div class="field" style="flex:1; min-width:150px;">
+              <label>Персонажі (ID через кому)</label>
+              <input type="text" data-field="characters" data-idx="${idx}" value="${text((scene.characters || []).join(', '))}" style="width:100%">
+            </div>
+            <div class="field" style="flex:1; min-width:150px;">
+              <label>Локація</label>
+              <input type="text" data-field="location" data-idx="${idx}" value="${text(scene.location || '')}" style="width:100%">
+            </div>
+            <div class="field" style="width:110px;">
+              <label>Тривалість (с)</label>
+              <input type="number" min="0.5" max="600" step="0.5" data-field="duration" data-idx="${idx}" value="${text(scene.duration || 5)}" style="width:100%">
+            </div>
+          </div>
+          <div class="field">
+            <label>Діалог / озвучка</label>
+            <textarea rows="2" data-field="dialogue" data-idx="${idx}">${text(scene.dialogue || scene.voiceover || '')}</textarea>
+          </div>
+        </div>
+      `).join('');
+
+      root.querySelectorAll('[data-field]').forEach((el) => {
+        el.addEventListener('input', () => {
+          const i = Number(el.dataset.idx);
+          const f = el.dataset.field;
+          if (f === 'characters') {
+            editorScenes[i].characters = el.value.split(',').map(s => s.trim()).filter(Boolean);
+          } else if (f === 'duration') {
+            editorScenes[i].duration = Number(el.value) || 5;
+          } else if (f === 'dialogue') {
+            editorScenes[i].dialogue = el.value;
+            editorScenes[i].voiceover = el.value;
+          } else {
+            editorScenes[i][f] = el.value;
+          }
+        });
+      });
+      root.querySelectorAll('[data-scene-up]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.dataset.sceneUp);
+          if (i > 0) { const tmp = editorScenes[i - 1]; editorScenes[i - 1] = editorScenes[i]; editorScenes[i] = tmp; renderEditorScenes(); }
+        });
+      });
+      root.querySelectorAll('[data-scene-down]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.dataset.sceneDown);
+          if (i < editorScenes.length - 1) { const tmp = editorScenes[i + 1]; editorScenes[i + 1] = editorScenes[i]; editorScenes[i] = tmp; renderEditorScenes(); }
+        });
+      });
+      root.querySelectorAll('[data-scene-del]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          editorScenes.splice(Number(btn.dataset.sceneDel), 1);
+          renderEditorScenes();
+        });
+      });
+    }
+
+    function openEditor(scenario = null) {
+      const panel = document.getElementById('scenario-editor');
+      panel.classList.remove('hidden');
+      const brandInput = document.getElementById('editor-brand');
+      if (scenario) {
+        document.getElementById('editor-heading').textContent = 'Редагувати чернетку: ' + scenario.scenario_id;
+        document.getElementById('editor-scenario-id').value = scenario.scenario_id;
+        brandInput.value = scenario.owner_brand_id;
+        brandInput.disabled = true;
+        document.getElementById('editor-title').value = (scenario.draft && scenario.draft.title) || scenario.title || '';
+        document.getElementById('editor-description').value = (scenario.draft && scenario.draft.description) || scenario.description || '';
+        editorScenes = JSON.parse(JSON.stringify((scenario.draft && scenario.draft.scenes) || []));
+      } else {
+        document.getElementById('editor-heading').textContent = 'Новий сценарій';
+        document.getElementById('editor-scenario-id').value = '';
+        brandInput.value = document.getElementById('filter-brand').value.trim() || 'brand01';
+        brandInput.disabled = false;
+        document.getElementById('editor-title').value = '';
+        document.getElementById('editor-description').value = '';
+        editorScenes = [{ prompt: '', dialogue: '', voiceover: '', location: '', characters: [], duration: 5 }];
+      }
+      renderEditorScenes();
+    }
+
+    function closeEditor() {
+      document.getElementById('scenario-editor').classList.add('hidden');
+    }
+
+    async function saveDraft() {
+      showStatus('');
+      const sid = document.getElementById('editor-scenario-id').value.trim();
+      const brand = document.getElementById('editor-brand').value.trim();
+      const title = document.getElementById('editor-title').value.trim();
+      const description = document.getElementById('editor-description').value.trim();
+      const scenes = editorScenes.filter(s => (s.prompt || '').trim().length > 0);
+      try {
+        let saved;
+        if (sid) {
+          saved = await apiCall('/scenarios/' + encodeURIComponent(sid), {
+            method: 'PUT',
+            body: JSON.stringify({ title, description, scenes }),
+          });
+          showStatus('Чернетку оновлено.');
+        } else {
+          saved = await apiCall('/scenarios', {
+            method: 'POST',
+            body: JSON.stringify({ owner_brand_id: brand, title, description, scenes }),
+          });
+          showStatus('Сценарій створено: ' + saved.scenario_id);
+        }
+        closeEditor();
+        await loadScenarios();
+        await openScenario(saved.scenario_id);
+      } catch (error) {
+        showStatus('Помилка збереження: ' + error.message, true);
+      }
+    }
+
+    async function loadScenarios() {
+      const root = document.getElementById('scenario-list');
+      try {
+        const items = await apiCall('/scenarios' + buildQuery());
+        if (!items.length) {
+          root.innerHTML = '<p class="muted">Сценаріїв у бібліотеці не знайдено.</p>';
+          return;
+        }
+        root.innerHTML = items.map(item => `
+          <div class="card" data-testid="scenario-card-${text(item.scenario_id)}">
+            <div class="between">
+              <strong>${text(item.title)}</strong>
+              <span class="badge ${item.relation === 'shared' ? 'badge-shared' : 'badge-own'}" data-testid="scenario-badge-${text(item.scenario_id)}">${item.relation === 'shared' ? 'Спільний' : 'Власний'}</span>
+            </div>
+            <div class="muted" style="margin:4px 0 8px;">
+              ${text(item.scenario_id)} · бренд ${text(item.owner_brand_id)}
+              ${item.latest_version ? ' · версія ' + text(item.latest_version) : ' · чернетка'}
+              ${item.archived ? ' · <span class="badge badge-archived">Архів</span>' : ''}
+            </div>
+            ${item.description ? '<p class="muted" style="margin:0 0 8px;">' + text(item.description) + '</p>' : ''}
+            <button type="button" class="btn" data-open-scenario="${text(item.scenario_id)}" data-testid="scenario-open-${text(item.scenario_id)}">Відкрити картку</button>
+          </div>
+        `).join('');
+        root.querySelectorAll('[data-open-scenario]').forEach((btn) => {
+          btn.addEventListener('click', () => openScenario(btn.dataset.openScenario));
+        });
+      } catch (error) {
+        root.innerHTML = '<p class="muted">Не вдалося завантажити бібліотеку сценаріїв: ' + text(error.message) + '</p>';
+      }
+    }
+
+    function renderScenesList(scenes) {
+      if (!scenes || !scenes.length) {
+        return '<p class="muted">Сцен немає.</p>';
+      }
+      return '<ol>' + scenes.map(s => `
+        <li>
+          <strong>${text(s.prompt)}</strong>
+          <span class="muted">(${text(s.duration)} с${s.location ? ' · локація: ' + text(s.location) : ''}${s.characters && s.characters.length ? ' · персонажі: ' + text(s.characters.join(', ')) : ''})</span>
+          ${s.dialogue || s.voiceover ? '<div class="muted">' + text(s.dialogue || s.voiceover) + '</div>' : ''}
+        </li>
+      `).join('') + '</ol>';
+    }
+
+    function renderDetail() {
+      const box = document.getElementById('scenario-detail');
+      const s = selectedScenario;
+      if (!s) {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+        return;
+      }
+      box.classList.remove('hidden');
+      const versions = s.versions || [];
+      if (selectedVersion === null && versions.length) {
+        selectedVersion = versions[0].version;
+      }
+      const activeVersionObj = versions.find(v => v.version === selectedVersion) || null;
+      const shownScenes = activeVersionObj ? activeVersionObj.scenes : (s.draft ? s.draft.scenes : []);
+      const defaultTargetBrand = document.getElementById('filter-brand').value.trim() || (s.relation === 'shared' && s.shared_brands && s.shared_brands[0]) || s.owner_brand_id;
+
+      const versionOptions = versions.map(v =>
+        `<option value="${v.version}" ${v.version === selectedVersion ? 'selected' : ''}>Версія ${v.version}${v.note ? ' — ' + text(v.note) : ''}</option>`
+      ).join('');
+
+      const versionHistoryHtml = versions.length
+        ? `<ul data-testid="version-history">${versions.map(v =>
+            `<li><button type="button" class="btn" data-select-ver="${v.version}">v${v.version}</button> ${text(v.title)} <span class="muted">(${v.scene_count} сцен${v.note ? ' · ' + text(v.note) : ''})</span></li>`
+          ).join('')}</ul>`
+        : '<p class="muted">Збережених версій ще немає.</p>';
+
+      const sharesHtml = s.can_manage_access ? `
+        <hr>
+        <div data-testid="shares-panel">
+          <h3>Доступ між брендами</h3>
+          <div class="row" style="margin-bottom:8px;">
+            <input type="text" id="grant-share-brand" data-testid="grant-share-brand" placeholder="ID бренду (напр. brand-b)">
+            <button type="button" class="btn" id="btn-grant-share" data-testid="grant-share-btn">Надати доступ</button>
+          </div>
+          <div id="shares-list">
+            ${(s.shared_brands && s.shared_brands.length)
+              ? s.shared_brands.map(b => `<span class="badge badge-shared" style="margin-right:6px;">${text(b)} <button type="button" class="btn" style="padding:1px 6px;" data-revoke-share="${text(b)}" data-testid="revoke-share-${text(b)}">Відкликати</button></span>`).join('')
+              : '<span class="muted">Доступ відкрито лише бренду-власнику.</span>'}
+          </div>
+        </div>
+      ` : '';
+
+      box.innerHTML = `
+        <div class="between">
+          <div>
+            <h3>${text(s.title)}
+              <span class="badge ${s.relation === 'shared' ? 'badge-shared' : 'badge-own'}" data-testid="detail-relation-badge">${s.relation === 'shared' ? 'Спільний' : 'Власний'}</span>
+              ${s.archived ? '<span class="badge badge-archived">Архів</span>' : ''}
+            </h3>
+            <div class="muted">${text(s.scenario_id)} · власник: ${text(s.owner_brand_id)}${s.copied_from_scenario_id ? ' · скопійовано з ' + text(s.copied_from_scenario_id) + (s.copied_from_version ? ' v' + text(s.copied_from_version) : '') : ''}</div>
+          </div>
+          <div class="row">
+            ${s.can_edit ? '<button type="button" class="btn" id="btn-edit-draft" data-testid="action-edit-draft">Редагувати чернетку</button>' : ''}
+            ${s.can_archive ? (s.archived
+              ? '<button type="button" class="btn" id="btn-restore-scenario" data-testid="action-restore">Відновити з архіву</button>'
+              : '<button type="button" class="btn btn-danger" id="btn-archive-scenario" data-testid="action-archive">Архівувати</button>') : ''}
+          </div>
+        </div>
+
+        ${s.can_edit ? `
+          <div class="row" style="margin-top:10px;">
+            <input type="text" id="version-note-input" data-testid="version-note-input" placeholder="Коментар до версії (необов'язково)">
+            <button type="button" class="btn btn-primary" id="btn-save-version" data-testid="action-save-version">Зберегти версію</button>
+          </div>
+        ` : ''}
+
+        <hr>
+        <h3>Історія версій</h3>
+        ${versionHistoryHtml}
+
+        <h3>Сцени ${activeVersionObj ? '(версія ' + activeVersionObj.version + ')' : '(чернетка)'}</h3>
+        ${renderScenesList(shownScenes)}
+
+        <hr>
+        <div class="row" data-testid="scenario-actions">
+          ${versions.length ? `<label>Версія: <select id="action-version-select" data-testid="version-select">${versionOptions}</select></label>` : ''}
+          ${s.can_create_job ? `
+            <input type="text" id="job-target-brand" data-testid="job-target-brand" value="${text(defaultTargetBrand)}" placeholder="Цільовий бренд">
+            <input type="text" id="job-character-id" data-testid="job-character-id" placeholder="Персонаж (необов'язково)">
+            <button type="button" class="btn btn-primary" id="btn-create-job" data-testid="action-create-job">Створити Job</button>
+          ` : ''}
+          ${s.can_copy ? `
+            <input type="text" id="copy-target-brand" data-testid="copy-target-brand" value="${text(defaultTargetBrand)}" placeholder="Бренд для копії">
+            <button type="button" class="btn" id="btn-copy-scenario" data-testid="action-copy-scenario">Створити копію</button>
+          ` : ''}
+        </div>
+        ${sharesHtml}
+      `;
+
+      box.querySelectorAll('[data-select-ver]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          selectedVersion = Number(btn.dataset.selectVer);
+          renderDetail();
+        });
+      });
+      const verSelect = document.getElementById('action-version-select');
+      if (verSelect) {
+        verSelect.addEventListener('change', () => {
+          selectedVersion = Number(verSelect.value);
+          renderDetail();
+        });
+      }
+      const editBtn = document.getElementById('btn-edit-draft');
+      if (editBtn) editBtn.addEventListener('click', () => openEditor(s));
+      const saveVerBtn = document.getElementById('btn-save-version');
+      if (saveVerBtn) {
+        saveVerBtn.addEventListener('click', async () => {
+          showStatus('');
+          try {
+            const note = (document.getElementById('version-note-input') || {}).value || '';
+            const created = await apiCall('/scenarios/' + encodeURIComponent(s.scenario_id) + '/versions', {
+              method: 'POST',
+              body: JSON.stringify({ note }),
+            });
+            selectedVersion = created.version;
+            showStatus('Збережено версію ' + created.version + '.');
+            await loadScenarios();
+            await openScenario(s.scenario_id, created.version);
+          } catch (error) {
+            showStatus('Не вдалося зберегти версію: ' + error.message, true);
+          }
+        });
+      }
+      const archiveBtn = document.getElementById('btn-archive-scenario');
+      if (archiveBtn) {
+        archiveBtn.addEventListener('click', async () => {
+          showStatus('');
+          try {
+            await apiCall('/scenarios/' + encodeURIComponent(s.scenario_id) + '/archive', { method: 'POST', body: '{}' });
+            showStatus('Сценарій архівовано.');
+            await loadScenarios();
+            await openScenario(s.scenario_id);
+          } catch (error) {
+            showStatus('Помилка архівування: ' + error.message, true);
+          }
+        });
+      }
+      const restoreBtn = document.getElementById('btn-restore-scenario');
+      if (restoreBtn) {
+        restoreBtn.addEventListener('click', async () => {
+          showStatus('');
+          try {
+            await apiCall('/scenarios/' + encodeURIComponent(s.scenario_id) + '/restore', { method: 'POST', body: '{}' });
+            showStatus('Сценарій відновлено з архіву.');
+            await loadScenarios();
+            await openScenario(s.scenario_id);
+          } catch (error) {
+            showStatus('Помилка відновлення: ' + error.message, true);
+          }
+        });
+      }
+      const createJobBtn = document.getElementById('btn-create-job');
+      if (createJobBtn) {
+        createJobBtn.addEventListener('click', async () => {
+          showStatus('');
+          try {
+            const ver = Number((document.getElementById('action-version-select') || {}).value || selectedVersion);
+            const brandId = document.getElementById('job-target-brand').value.trim();
+            const charId = document.getElementById('job-character-id').value.trim() || undefined;
+            const key = 'ui-' + Date.now() + '-' + Math.random().toString(16).slice(2, 10);
+            const job = await apiCall('/scenarios/' + encodeURIComponent(s.scenario_id) + '/jobs', {
+              method: 'POST',
+              body: JSON.stringify({ version: ver, brand_id: brandId, character_id: charId, idempotency_key: key }),
+            });
+            showStatus('Створено Job ' + job.job_id + ' зі сценарію ' + s.scenario_id + ' (версія ' + ver + ').');
+            await loadJobStoryboards();
+          } catch (error) {
+            showStatus('Не вдалося створити Job: ' + error.message, true);
+          }
+        });
+      }
+      const copyBtn = document.getElementById('btn-copy-scenario');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', async () => {
+          showStatus('');
+          try {
+            const verEl = document.getElementById('action-version-select');
+            const ver = verEl ? Number(verEl.value) : null;
+            const targetBrand = document.getElementById('copy-target-brand').value.trim();
+            const copy = await apiCall('/scenarios/' + encodeURIComponent(s.scenario_id) + '/copy', {
+              method: 'POST',
+              body: JSON.stringify({ target_brand_id: targetBrand, version: ver }),
+            });
+            showStatus('Створено копію: ' + copy.scenario_id);
+            await loadScenarios();
+            await openScenario(copy.scenario_id);
+          } catch (error) {
+            showStatus('Не вдалося створити копію: ' + error.message, true);
+          }
+        });
+      }
+      const grantBtn = document.getElementById('btn-grant-share');
+      if (grantBtn) {
+        grantBtn.addEventListener('click', async () => {
+          showStatus('');
+          try {
+            const targetBrand = document.getElementById('grant-share-brand').value.trim();
+            await apiCall('/scenarios/' + encodeURIComponent(s.scenario_id) + '/shares', {
+              method: 'POST',
+              body: JSON.stringify({ brand_id: targetBrand }),
+            });
+            showStatus('Доступ надано бренду ' + targetBrand + '.');
+            await loadScenarios();
+            await openScenario(s.scenario_id);
+          } catch (error) {
+            showStatus('Помилка надання доступу: ' + error.message, true);
+          }
+        });
+      }
+      box.querySelectorAll('[data-revoke-share]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          showStatus('');
+          try {
+            const targetBrand = btn.dataset.revokeShare;
+            await apiCall('/scenarios/' + encodeURIComponent(s.scenario_id) + '/shares/' + encodeURIComponent(targetBrand), {
+              method: 'DELETE',
+            });
+            showStatus('Доступ для бренду ' + targetBrand + ' відкликано.');
+            await loadScenarios();
+            await openScenario(s.scenario_id);
+          } catch (error) {
+            showStatus('Помилка відкликання доступу: ' + error.message, true);
+          }
+        });
+      });
+    }
+
+    async function openScenario(scenarioId, pickVersion = null) {
+      try {
+        const brand = document.getElementById('filter-brand').value.trim();
+        const qs = brand ? '?brand_id=' + encodeURIComponent(brand) : '';
+        selectedScenario = await apiCall('/scenarios/' + encodeURIComponent(scenarioId) + qs);
+        selectedVersion = pickVersion !== null ? pickVersion : (selectedScenario.versions && selectedScenario.versions.length ? selectedScenario.versions[0].version : null);
+        renderDetail();
+      } catch (error) {
+        showStatus('Не вдалося відкрити сценарій: ' + error.message, true);
+      }
+    }
+
+    // -- #501 Job Storyboards -------------------------------------------------
+    async function loadJobStoryboards() {
       const root = document.getElementById('list');
       try {
         const items = await getJSON('/storyboards');
@@ -53,8 +615,9 @@
           const detail = await getJSON('/storyboards/' + encodeURIComponent(item.job_id));
           const active = detail.storyboards.find(v => v.version === detail.active_version) || detail.storyboards[detail.storyboards.length - 1];
           const scenes = (active ? active.scenes : []).map(s => '<li>' + text(s.prompt) + ' <span class="muted">' + text(s.duration) + ' с</span></li>').join('');
+          const src = item.scenario_source ? ' · сценарій ' + text(item.scenario_source.scenario_id) + ' v' + text(item.scenario_source.version) : '';
           parts.push('<div class="card"><strong>' + text(item.topic) + '</strong> <span class="muted">' + text(item.job_id) + ' · ' +
-            text(item.brand_id) + ' · ' + text(item.character_id) + ' · версія ' + text(item.active_version) + ' · ' + text(item.active_status) +
+            text(item.brand_id) + ' · ' + text(item.character_id) + ' · версія ' + text(item.active_version) + ' · ' + text(item.active_status) + src +
             '</span><ol>' + scenes + '</ol></div>');
         }
         root.innerHTML = parts.join('') || '<p class="muted">Розкадровок ще немає.</p>';
@@ -62,7 +625,21 @@
         root.innerHTML = '<p class="muted">Не вдалося завантажити розкадровки: ' + text(error.message) + '</p>';
       }
     }
-    load();
+
+    document.getElementById('btn-new-scenario').addEventListener('click', () => openEditor(null));
+    document.getElementById('btn-cancel-editor').addEventListener('click', closeEditor);
+    document.getElementById('btn-save-draft').addEventListener('click', saveDraft);
+    document.getElementById('btn-add-scene').addEventListener('click', () => {
+      editorScenes.push({ prompt: '', dialogue: '', voiceover: '', location: '', characters: [], duration: 5 });
+      renderEditorScenes();
+    });
+    document.getElementById('btn-refresh-scenarios').addEventListener('click', loadScenarios);
+    ['filter-q', 'filter-brand', 'filter-scope', 'filter-archived'].forEach((id) => {
+      document.getElementById(id).addEventListener('change', loadScenarios);
+    });
+
+    loadJobStoryboards();
+    loadScenarios();
   </script>
 </body>
 </html>

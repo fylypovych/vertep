@@ -35,7 +35,7 @@ _audit_lock = threading.Lock()
 TOKEN_KEY_NAME = "module_token_key"
 UI_CSP = ("sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
           "img-src data:; frame-ancestors 'self'")
-_FORWARD_HEADERS = {"content-type", "accept", "accept-language"}
+_FORWARD_HEADERS = {"content-type", "accept", "accept-language", "idempotency-key"}
 
 
 # -- audit -----------------------------------------------------------------------
@@ -152,7 +152,8 @@ def _ready_instance(registry, module_id: str, node_id: str | None = None):
 
 
 def call_module(module_id: str, method: str, route: str, params: dict | None = None,
-                json_body: object | None = None) -> tuple[int, object] | None:
+                json_body: object | None = None,
+                extra_headers: dict[str, str] | None = None) -> tuple[int, object] | None:
     """CORE-internal call to a READY module's declared API route.
 
     None when the module has no READY instance (optional module not in use);
@@ -166,9 +167,12 @@ def call_module(module_id: str, method: str, route: str, params: dict | None = N
         return None
     if not instance.manifest.api or not _route_matches(instance.manifest.api["routes"], route.split("?", 1)[0]):
         raise ValueError(f"Route {route} is not declared by module {module_id}")
+    headers = {"x-vertep-module-token": issue_token(instance.module_id, instance.node_id),
+               "x-vertep-caller": "core"}
+    if extra_headers:
+        headers.update(extra_headers)
     response = httpx.request(method, f"{instance.endpoint}{route}", params=params, json=json_body, timeout=10,
-                             headers={"x-vertep-module-token": issue_token(instance.module_id, instance.node_id),
-                                      "x-vertep-caller": "core"})
+                             headers=headers)
     audit("module.core_call", "allowed", module=module_id, path=route, status=response.status_code)
     try:
         return response.status_code, response.json()
@@ -256,7 +260,8 @@ def _storyboard_summary(job) -> dict:
                                                  + ([job.character_owner_brand] if job.character_owner_brand else []))),
             "status": str(getattr(job.status, "value", job.status)), "active_version": job.active_storyboard_version,
             "active_status": active.status if active else None, "versions": len(job.storyboards),
-            "scenes": len(active.scenes) if active else 0}
+            "scenes": len(active.scenes) if active else 0,
+            "scenario_source": job.scenario_source}
 
 
 def _require_storyboard_module(request: Request):
@@ -299,6 +304,59 @@ def module_storyboard(job_id: str, request: Request):
                          "decided_by": version.decided_by, "decided_at": version.decided_at, "scenes": scenes})
     audit("module.storyboards", "allowed", module=caller.module_id, job=job_id)
     return {**_storyboard_summary(job), "storyboards": versions}
+
+
+@router.post("/api/modules/self/storyboards/jobs")
+async def module_storyboard_create_job(request: Request):
+    """#508: Create an independent CORE Job from a saved Scenario Library version.
+
+    CORE verifies the Gateway-signed user context, re-derives the caller's brands,
+    verifies access to the scenario, target brand and referenced characters, and
+    creates the Job with an immutable snapshot and idempotency support.
+    """
+    from core.api.jobs import create_job_from_scenario_snapshot
+    from core.security import user_brands
+    caller = _require_storyboard_module(request)
+    try:
+        user, role = verify_user_context(request.headers.get("x-vertep-user-context", ""), caller.module_id)
+    except PermissionError as error:
+        audit("module.storyboards.create_job", "denied", module=caller.module_id, reason=str(error))
+        raise HTTPException(401, "Invalid user context") from error
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(422, "Request body must be a JSON object")
+    scenario_id = str(body.get("scenario_id") or "")
+    try:
+        version = int(body.get("version") or 0)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(422, "version must be an integer") from error
+    brand_id = str(body.get("brand_id") or "")
+    if not scenario_id or version < 1 or not brand_id:
+        raise HTTPException(422, "scenario_id, version and brand_id are required")
+    brands = user_brands(user, role)
+    try:
+        job = create_job_from_scenario_snapshot(
+            scenario_id=scenario_id,
+            version=version,
+            snapshot=body.get("snapshot"),
+            brand_id=brand_id,
+            allowed_brands=brands,
+            actor=user,
+            character_id=body.get("character_id"),
+            topic=body.get("topic"),
+            priority=int(body.get("priority", 5)),
+            task_type=str(body.get("task_type") or "image"),
+            aspect_ratio=str(body.get("aspect_ratio") or "16:9"),
+            output_preset=str(body.get("output_preset") or "youtube"),
+            idempotency_key=body.get("idempotency_key"),
+        )
+    except HTTPException as error:
+        audit("module.storyboards.create_job", "refused", module=caller.module_id, actor=user,
+              scenario=scenario_id, version=version, brand=brand_id, status=error.status_code)
+        raise
+    audit("module.storyboards.create_job", "allowed", module=caller.module_id, actor=user,
+          scenario=scenario_id, version=version, brand=brand_id, job=job.job_id)
+    return job.model_dump()
 
 
 def _publications(job, brand_store_channels=None) -> dict:

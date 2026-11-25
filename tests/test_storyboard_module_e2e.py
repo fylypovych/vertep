@@ -34,13 +34,26 @@ def storyboard(api, tmp_path, monkeypatch):
     from core.state import store
     monkeypatch.syspath_prepend(str(MODULE_DIR))
     import storyboard_module
-    # Platform lifecycle: install/activate with no schema at all.
+    # Platform lifecycle: install/activate provisions the module schema (#508).
+    class _StubModuleDatabase:
+        def __init__(self):
+            self.migrated = []
+        def exists(self, module_id): return False
+        def ensure(self, module_id):
+            return {"role": f"mod_{module_id}", "schema": f"mod_{module_id}", "password": "pw", "database": "vertep"}
+        def migrate(self, module_id, migrations, sources):
+            self.migrated.extend(m["id"] for m in migrations)
+            return [m["id"] for m in migrations]
+        def drop(self, module_id): pass
+
+    db = _StubModuleDatabase()
     registry = ModuleInstanceRegistry({"core_runtime": "0.0.4.12"}, PlacementStore(tmp_path / "p.json"))
-    lifecycle = ModuleLifecycle(tmp_path / "lc", lambda package: None, database=None, registry=registry,
+    lifecycle = ModuleLifecycle(tmp_path / "lc", lambda package: None, database=db, registry=registry,
                                 system_versions={"core_runtime": "0.0.4.12"})
     assert lifecycle.install_bundled("storyboard")["state"] == "INSTALLED"
     registry.approve_permissions("storyboard", ["storyboard.read"])
-    assert lifecycle.activate("storyboard")["state"] == "ACTIVE"  # no database needed
+    assert lifecycle.activate("storyboard")["state"] == "ACTIVE"
+    assert db.migrated == ["m001_initial"]
     # The module talks to CORE with its token (TestClient stands in for the HTTP hop).
     monkeypatch.setattr(storyboard_module, "TOKEN", issue_token("storyboard", "text-node"))
 

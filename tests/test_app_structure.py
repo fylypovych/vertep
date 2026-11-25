@@ -99,6 +99,8 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["GET", "/api/jobs/{job_id}/videos/{version}"],
         ["GET", "/api/modules/self/storyboards"],  # #501 the Storyboard module reads job storyboards.
         ["GET", "/api/modules/self/storyboards/{job_id}"],
+        ["POST", "/api/jobs/from-scenario"],  # #508 Scenario Library: create independent Job from scenario version.
+        ["POST", "/api/modules/self/storyboards/jobs"],  # #508 Storyboard module creates Job via CORE.
         ["GET", "/api/channels/{channel_id}/credentials"],  # #502 one credential set per channel.
         ["PUT", "/api/channels/{channel_id}/credentials"],
         ["GET", "/api/modules/self/publications"],  # #502 Publishing module: read and act for a verified user.

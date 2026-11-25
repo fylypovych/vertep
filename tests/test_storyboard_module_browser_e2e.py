@@ -34,6 +34,8 @@ def _storyboard_module(core, monkeypatch, tmp_path):
     monkeypatch.setattr("core.module.gateway._modules_or_none", lambda: registry)
     monkeypatch.setattr(storyboard_module, "CORE", core["url"])
     monkeypatch.setattr(storyboard_module, "TOKEN", issue_token("storyboard", "app-node"))
+    from tests.test_scenario_library_508 import make_sqlite_scenario_store
+    monkeypatch.setattr(storyboard_module, "_state", {"connection": None, "store": make_sqlite_scenario_store()})
     server = ThreadingHTTPServer(("127.0.0.1", 0), storyboard_module.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     manifest = ModuleManifest.from_dict(bundled_manifest("storyboard"))
