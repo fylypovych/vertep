@@ -58,7 +58,6 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "invalid_base64_artifact": { uk: "Файл base64 недійсний", en: "Invalid base64 artifact" },
   "invalid_brand_id": { uk: "Неправильний ID бренду", en: "Invalid brand ID" },
   "invalid_capabilities_payload": { uk: "Неправильний перелік можливостей", en: "Invalid capabilities payload" },
-  "invalid_character_id": { uk: "Неправильний ID персонажа", en: "Invalid character ID" },
   "invalid_confirmation_token": { uk: "Неправильний токен підтвердження", en: "Invalid confirmation token" },
   "invalid_issued_publication_receipt": { uk: "Підтвердження публікації недійсне", en: "Invalid issued publication receipt" },
   "invalid_laboratory_token": { uk: "Неправильний токен лабораторії", en: "Invalid laboratory token" },

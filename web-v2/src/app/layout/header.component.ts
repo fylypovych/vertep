@@ -6,6 +6,7 @@ import { CommonModule } from '@angular/common';
 import { filter, Subscription } from 'rxjs';
 import { SidebarService } from '../core/services/sidebar.service';
 import { ThemeService } from '../core/services/theme.service';
+import { UiVersionService } from '../core/services/ui-version.service';
 import { AuthApiService } from '../core/api/auth.api';
 import { SystemApiService } from '../core/api/system.api';
 import { PolicyService, SystemMode } from '../core/services/policy.service';
@@ -52,6 +53,7 @@ export class HeaderComponent implements OnInit, OnDestroy {
     private router: Router,
     private sidebarService: SidebarService,
     private themeService: ThemeService,
+    private uiVersion: UiVersionService,
     private auth: AuthApiService,
     private system: SystemApiService,
     private policy: PolicyService,
@@ -84,6 +86,12 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
   toggleSidebar(): void { this.sidebarService.toggle(); }
   toggleTheme(): void   { this.themeService.toggle(); }
+
+  switchToV3(): void {
+    this.uiVersion.setVersion('v3');
+    const target = this.uiVersion.toV3Route(this.router.url);
+    this.router.navigate([target.path], { queryParams: target.queryParams, fragment: target.fragment });
+  }
 
   toggleProfileMenu(): void {
     this.showProfileMenu = !this.showProfileMenu;

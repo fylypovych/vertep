@@ -18,6 +18,11 @@ export const routes: Routes = [
     data: { metadata: { title: 'Налаштування', icon: 'setup-icon' } }
   },
   {
+    path: 'v3',
+    canActivateChild: [AuthGuard],
+    loadChildren: () => import('./v3/v3.routes').then(m => m.V3_ROUTES),
+  },
+  {
     path: '',
     component: LayoutComponent,
     canActivateChild: [AuthGuard],

@@ -14,6 +14,7 @@ export const modulePageGuard: CanActivateFn = (route: ActivatedRouteSnapshot) =>
   return inject(ModulesApiService).navigation().pipe(map(items => {
     if (items.some(item => item.path === page)) return true;
     toast.show(i18n.t('Модуль вимкнено: ця сторінка працює лише з активним модулем'), 'error');
-    return router.createUrlTree(['/']);
+    const inV3 = route.pathFromRoot.some(part => part.routeConfig?.path === 'v3');
+    return router.createUrlTree([inV3 ? '/v3' : '/']);
   }));
 };
