@@ -74,3 +74,4 @@ audit-0311-closed-issues.md
 /.claude-flow
 /.vertep_code_agents
 config/module-images.json
+/reports

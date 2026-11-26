@@ -333,6 +333,13 @@ async def module_storyboard_create_job(request: Request):
     brand_id = str(body.get("brand_id") or "")
     if not scenario_id or version < 1 or not brand_id:
         raise HTTPException(422, "scenario_id, version and brand_id are required")
+    # The same bounds as POST /api/jobs/from-scenario: the module is not trusted with the values.
+    from core.api.jobs import ScenarioJobCreate
+    from pydantic import ValidationError
+    try:
+        ScenarioJobCreate(**{key: body[key] for key in ScenarioJobCreate.model_fields if key in body})
+    except ValidationError as error:
+        raise HTTPException(422, "Invalid scenario job request") from error
     brands = user_brands(user, role)
     try:
         job = create_job_from_scenario_snapshot(

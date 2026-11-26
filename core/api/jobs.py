@@ -258,9 +258,14 @@ def create_job_from_scenario_snapshot(
     # Collect all characters referenced in the scenario scenes.
     scene_characters: list[str] = []
     for scene in raw_scenes:
-        for cid in (scene.get("characters") or []):
+        for cid in (scene.get("characters") or []) if isinstance(scene, dict) else []:
             if isinstance(cid, str) and cid and cid not in scene_characters:
                 scene_characters.append(cid)
+    # The IDs name directories under CHARACTERS_ROOT: the module supplies them, CORE checks them.
+    from ..configuration import SAFE_ID
+    for cid in [character_id, *scene_characters]:
+        if cid is not None and (not isinstance(cid, str) or not SAFE_ID.fullmatch(cid)):
+            raise HTTPException(422, "Invalid character ID")
     primary_char = character_id or (scene_characters[0] if scene_characters else None)
     if primary_char is None:
         try:

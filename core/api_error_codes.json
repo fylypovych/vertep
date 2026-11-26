@@ -5,6 +5,8 @@
  "Непідтримувана конфігурація перевірки": "unsupported_health_configuration",
  "Модуль «Зображення та відео» потребує GPU, а на цьому сервері його не виявлено": "gpu_module_requires_gpu",
  "Invalid LAB panel address": "invalid_lab_panel_address",
+ "Invalid character ID": "invalid_character_id",
+ "Invalid scenario job request": "invalid_scenario_job_request",
  "Active jobs must be drained before restore": "active_jobs_must_be_drained_before_restore",
  "Alert not found": "alert_not_found",
  "Another restore is awaiting confirmation or executing": "another_restore_is_awaiting_confirmation_or_executing",
