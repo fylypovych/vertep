@@ -1,3 +1,6 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.4.57
+- Коди помилок API (#508): додано 15 відсутніх кодів помилок для `HTTPException` із `core/api/jobs.py` та `core/module/gateway.py` у `core/api_error_codes.json` і їхні uk/en переклади в `web-v2/src/app/core/i18n/api-errors.ts` (виправлення `test_every_api_error_message_has_a_code` у CI 0.0.4.56). web-ui — 0.0.4.32.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.4.56
 - Web UI v3 (#536): додано lazy-loaded світлий «паперовий» дизайн-шар `web-v2/src/app/v3/` під `/v3/...` зі спільним `core/`, кнопкою-перемикачем `v2 ↔ v3` у header/navbar (збереження вибору в `localStorage` і двосторонній мапінг маршрутів та deep-links), реорганізованим меню `V3Layout` (RBAC, динамічні модулі `modulesApi.navigation()`, Лабораторія, fallback неперенесених сторінок усередині `V3Layout`), базовими примітивами `v3/ui/` (`PaperCard`, `KpiStatCard`, `EntityProfileLayout`, `MembersListCard`, `TabbedWorkspace`), MVP-сторінками (`Dashboard`, `Profile`, `Brands` із блоками «Персонажі бренду» та «Модератори бренду», `Characters`, `Character Detail`), 5 вкладковими розділами (`Завдання і черга`, `Моніторинг`, `Модулі та обслуговування`, `Конвеєр`, `Налаштування`) та Playwright E2E-тестами `issue-536-web-v3.spec.ts`. web-ui — 0.0.4.31.
 - Web UI: усунуто дублікат ключа `invalid_character_id` у `web-v2/src/app/core/i18n/api-errors.ts`, що спричиняв помилку збірки після 0.0.4.55.
