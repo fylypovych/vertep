@@ -483,7 +483,8 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
     if node_role != "core" and (not core_url or not node_credentials):
         raise ValueError("A non-Core node must be registered with Core")
     secrets_store = ensure_secret_store()
-    version = os.getenv("VERTEP_VERSION", "unknown")
+    from .version import application_version
+    version = os.getenv("VERTEP_VERSION") or application_version()
     from .health_checks import health_selection
     selected_roles, _ = health_selection(node_role, backend)
     additional_roles = sorted(selected_roles - {node_role})

@@ -480,9 +480,11 @@ export interface WorkflowVersion {
 export interface WorkflowUsage {
   workflow: string;
   jobs: Array<{ job_id: string; topic: string; status: string }>;
-  characters: Array<{ character_id: string; field: string }>;
+  characters: Array<{ character_id: string; field: string; automatic?: boolean }>;
+  automatic?: Array<{ scope: string; label: string }>;
   total_jobs: number;
   total_characters: number;
+  total_automatic?: number;
 }
 
 export interface WorkflowDocument {

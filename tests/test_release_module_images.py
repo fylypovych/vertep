@@ -28,7 +28,7 @@ def test_release_builds_module_images_before_core_and_pins_them():
     workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
     jobs = workflow["jobs"]
     modules = jobs["build-module-images"]
-    assert set(modules["strategy"]["matrix"]["name"]) == {"characters", "monitoring", "brands", "storyboard", "publishing"}
+    assert set(modules["strategy"]["matrix"]["name"]) == {"characters", "monitoring", "brands", "storyboard"}
     for name in modules["strategy"]["matrix"]["name"]:
         assert (ROOT / "modules" / name / "Dockerfile").is_file()
     assert "build-module-images" in jobs["build-images"]["needs"]

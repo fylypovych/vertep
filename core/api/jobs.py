@@ -566,7 +566,7 @@ def regenerate_job(job_id: str):
     ) or job.status == JobStatus.PUBLISHING
     if mid_render:
         raise HTTPException(409, "Cannot regenerate while render in progress")
-    if job.knowledge_snapshot:
+    if job.knowledge_snapshot or job.voice_knowledge_snapshot:
         from ..knowledge_context import (
             KnowledgeRightsBlocked,
             KnowledgeVerificationUnavailable,
@@ -579,6 +579,7 @@ def regenerate_job(job_id: str):
         except KnowledgeRightsBlocked as error:
             raise HTTPException(409, "Character knowledge rights were revoked for rerun") from error
         job.knowledge_snapshot = None
+        job.voice_knowledge_snapshot = None
     for task_id, scene_id in list(job.active_task_ids.items()):
         scene = next((item for item in job.scenes if item.scene_id == scene_id), None)
         if scene and scene.assigned_worker:
@@ -897,7 +898,7 @@ def shared_publication(job_id: str, body: dict, http_request: Request = None):
     return derived
 
 
-@router.post("/api/jobs/{job_id}/publish", dependencies=[require_module("publishing")])
+@router.post("/api/jobs/{job_id}/publish", dependencies=[require_module("publisher")])
 def publish_job(job_id: str, channels: list[str] | None = None):
     job = store.jobs.get(job_id)
     if not job:
@@ -918,7 +919,7 @@ def publish_job(job_id: str, channels: list[str] | None = None):
         allowed, reason = publication_allowed(job, store.root)
     if not allowed:
         raise HTTPException(409, reason)
-    if job.knowledge_snapshot:
+    if job.knowledge_snapshot or job.voice_knowledge_snapshot:
         from ..knowledge_context import (
             KnowledgeRightsBlocked,
             KnowledgeVerificationUnavailable,

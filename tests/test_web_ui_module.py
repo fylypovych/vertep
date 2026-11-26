@@ -36,7 +36,7 @@ class TestWebUIModuleCompatibility:
         assert "characters" in manifest.dependencies
         assert "brands" in manifest.dependencies
         assert "storyboard" in manifest.dependencies
-        assert "publishing" in manifest.dependencies
+        assert "publisher" in manifest.dependencies
         assert "monitoring" in manifest.dependencies
 
     def test_web_ui_provides_web_ui_capability(self):

@@ -1,8 +1,8 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, ViewChild, signal } from '@angular/core';
+import { Component, ViewChild, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
@@ -17,8 +17,8 @@ import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
       <h3 class="text-lg font-semibold mb-4">{{ 'Ключі інтеграцій' | t }}</h3>
       <p class="text-sm text-slate-600 mb-2">{{ 'Тут зберігаються токени, API keys і паролі сервісів, з якими працює Vertep. «Збережено» означає наявність значення, а не перевірку його дійсності чи готовність підключення. Доступність сервісів показано в розділі «Стан підключень».' | t }}</p>
       <p class="text-sm text-slate-600 mb-4" data-testid="secrets-publishing-moved">{{ 'Облікові дані каналів публікації задаються в' | t }}
-        <a routerLink="/brands" class="text-blue-700">«{{ 'Бренди → Канали' | t }}»</a>, {{ 'токен бота керування — у вкладці' | t }}
-        <a [routerLink]="['/settings']" [queryParams]="{ tab: 'telegram' }" class="text-blue-700">«{{ 'Telegram-бот' | t }}»</a>.</p>
+        <a [routerLink]="[routePrefix + '/brands']" class="text-blue-700">«{{ 'Бренди → Канали' | t }}»</a>, {{ 'токен бота керування — у вкладці' | t }}
+        <a [routerLink]="[routePrefix + '/settings']" [queryParams]="{ tab: 'telegram' }" class="text-blue-700">«{{ 'Telegram-бот' | t }}»</a>.</p>
       <app-secret-groups [groups]="serviceGroups" />
       <div class="mt-4 pt-4 border-t border-slate-200">
         <h4 class="text-sm font-medium text-slate-700 mb-2">{{ 'Новий секрет' | t }}</h4>
@@ -38,6 +38,8 @@ import { SecretGroup, SecretGroupsComponent } from './secret-groups.component';
     </div>`,
 })
 export class SecretsSectionComponent {
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
   @ViewChild(SecretGroupsComponent) private groups?: SecretGroupsComponent;
   secretSaving = signal(false);
   newSecretName = '';

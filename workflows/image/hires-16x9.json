@@ -1,0 +1,93 @@
+{
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "{{CHECKPOINT}}"
+    },
+    "_meta": {"title": "Load Checkpoint"}
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 768,
+      "height": 432,
+      "batch_size": 1
+    },
+    "_meta": {"title": "Base Latent 16:9 (768x432)"}
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{TOPIC}}",
+      "clip": ["4", 1]
+    },
+    "_meta": {"title": "Positive Prompt"}
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, low quality, worst quality, jpeg artifacts, deformed, text, watermark, logo",
+      "clip": ["4", 1]
+    },
+    "_meta": {"title": "Negative Prompt"}
+  },
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 22,
+      "cfg": 6.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": ["4", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["5", 0]
+    },
+    "_meta": {"title": "Base KSampler"}
+  },
+  "10": {
+    "class_type": "LatentUpscale",
+    "inputs": {
+      "samples": ["3", 0],
+      "upscale_method": "nearest-exact",
+      "width": 1536,
+      "height": 864,
+      "crop": "disabled"
+    },
+    "_meta": {"title": "Upscale Latent 2x (1536x864)"}
+  },
+  "11": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 14,
+      "cfg": 6.0,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 0.45,
+      "model": ["4", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["10", 0]
+    },
+    "_meta": {"title": "Hires Refine KSampler"}
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["11", 0],
+      "vae": ["4", 2]
+    },
+    "_meta": {"title": "VAE Decode"}
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Vertep_Hires_16x9",
+      "images": ["8", 0]
+    },
+    "_meta": {"title": "Save Image"}
+  }
+}

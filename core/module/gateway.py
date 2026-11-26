@@ -379,7 +379,7 @@ def _publications(job, brand_store_channels=None) -> dict:
 def _require_publishing_module(request: Request, permission: str):
     registry = _registry()
     caller = _caller_module(request, registry)
-    if caller is None or caller.module_id != "publishing" or permission not in caller.manifest.permissions:
+    if caller is None or caller.module_id != "publisher" or permission not in caller.manifest.permissions:
         audit("module.publications", "denied", module=caller.module_id if caller else None)
         raise HTTPException(403, "Module may call only APIs it declares")
     return caller

@@ -2,6 +2,7 @@
 """Застосування вибраної у Web Wizard ролі на appliance-хості."""
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -194,6 +195,39 @@ def rescue_legacy_ephemeral_roots(compose: list[str], selected: set[str], stagin
                     f"{getattr(result, 'stderr', '') or 'docker cp failed'}")
             rescued.setdefault(container_id, []).append(label)
     return rescued
+
+
+def _pull_images(compose: list[str], selected: set[str], runner=subprocess.run,
+                 attempts: int = 3, retry_delay: float = 5.0) -> None:
+    """Pull only missing images for the selected services, retrying transient failures."""
+    command = [*compose, "pull", "--policy", "missing", *sorted(selected)]
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            runner(command, check=True, timeout=3600)
+            return
+        except subprocess.CalledProcessError:
+            if attempt >= attempts:
+                raise
+            time.sleep(retry_delay)
+
+
+@contextlib.contextmanager
+def _host_storage_env(root: Path):
+    """Point persistent_data helpers at ``<root>/storage`` when running on the host.
+
+    ``vertep-deployment.service`` runs outside containers with
+    ``ProtectSystem=strict`` and ``ReadWritePaths=<root>``, so defaulting to
+    ``/data/storage`` fails with ``EROFS`` and never merges rescued legacy roots.
+    Explicit ``STORAGE_ROOT`` / ``JOB_ROOT`` overrides are preserved.
+    """
+    if os.getenv("STORAGE_ROOT") or os.getenv("JOB_ROOT"):
+        yield
+        return
+    os.environ["STORAGE_ROOT"] = str(root / "storage")
+    try:
+        yield
+    finally:
+        os.environ.pop("STORAGE_ROOT", None)
 
 
 def assert_migrate_evidence(rows: list[dict]) -> None:
@@ -473,16 +507,17 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         # restarting the previous runtime set. This ensures user data created
         # in /app/{characters,brands,workflows} during a previous version is
         # copied to persistent storage before the old containers are recreated.
-        try:
-            ensure_persistent_user_data_legacy_migration()
-        except Exception as error:  # noqa: BLE001 - never block restore on migration
-            print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
-        # Merge the roots rescued before the containers were recreated so a
-        # failed apply does not lose the only copy of legacy user data.
-        try:
-            migrate_staged_legacy_roots(rescue_staging)
-        except Exception as error:  # noqa: BLE001
-            print(f"WARNING: staged legacy migration failed: {error}", file=sys.stderr)
+        with _host_storage_env(root):
+            try:
+                ensure_persistent_user_data_legacy_migration()
+            except Exception as error:  # noqa: BLE001 - never block restore on migration
+                print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
+            # Merge the roots rescued before the containers were recreated so a
+            # failed apply does not lose the only copy of legacy user data.
+            try:
+                migrate_staged_legacy_roots(rescue_staging)
+            except Exception as error:  # noqa: BLE001
+                print(f"WARNING: staged legacy migration failed: {error}", file=sys.stderr)
         # A failed apply may have partially started/stopped the new service set;
         # restore the previously-working runtime so the host is not left half-applied.
         return _restore_runtime(compose_command(), previous_services, new_services, runner)
@@ -532,7 +567,7 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         raise
     try:
         phase("PULLING")
-        runner([*compose, "pull", *sorted(selected)], check=True, timeout=3600)
+        _pull_images(compose, selected, runner)
         # Worker verifies the expected inventory before it can become ready.
         # Publishing it after wait_for_healthy creates a readiness dependency cycle.
         gpu_runtime_inventory(root)
@@ -584,15 +619,16 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
                 raise RuntimeError("Не вдалося вимкнути служби: " + ", ".join(sorted(remaining)))
         # Migrate legacy ephemeral roots from old container filesystem after
         # successful apply, so user data from previous versions is preserved.
-        try:
-            ensure_persistent_user_data_legacy_migration()
-        except Exception as error:  # noqa: BLE001
-            print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
-        # Merge the roots rescued from the pre-recreate containers.
-        try:
-            migrate_staged_legacy_roots(rescue_staging)
-        except Exception as error:  # noqa: BLE001
-            print(f"WARNING: staged legacy migration failed: {error}", file=sys.stderr)
+        with _host_storage_env(root):
+            try:
+                ensure_persistent_user_data_legacy_migration()
+            except Exception as error:  # noqa: BLE001
+                print(f"WARNING: legacy migration failed: {error}", file=sys.stderr)
+            # Merge the roots rescued from the pre-recreate containers.
+            try:
+                migrate_staged_legacy_roots(rescue_staging)
+            except Exception as error:  # noqa: BLE001
+                print(f"WARNING: staged legacy migration failed: {error}", file=sys.stderr)
         status.update({"state": "SUCCEEDED", "phase": "COMPLETED", "updated_at": datetime.now(timezone.utc).isoformat(),
                        "runtime_set_verified": True, "observed_services": sorted(observed)})
         atomic_json(root / "config/deployment-status.json", status)

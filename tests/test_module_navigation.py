@@ -54,7 +54,7 @@ def test_manifest_rejects_an_invalid_menu_entry(entry):
 
 def test_core_api_of_a_module_page_answers_503_without_the_module(monkeypatch):
     from core.app import app
-    _registry(monkeypatch, _instance("publishing"))
+    _registry(monkeypatch, _instance("publisher"))
     client = TestClient(app, raise_server_exceptions=False)
     auth = ("admin", __import__("os").getenv("ADMIN_PASSWORD", "test-admin-pw-long"))
     for response in (client.get("/api/characters", auth=auth), client.post("/api/brands/x/channels", auth=auth, json={})):

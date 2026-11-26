@@ -15,7 +15,7 @@ from fastapi import Depends, HTTPException
 MODULE_PAGES: dict[str, tuple[str, ...]] = {
     "characters": ("/characters",),
     "brands": ("/brands",),
-    "publishing": ("/published",),
+    "publisher": ("/published",),
 }
 MODULE_INACTIVE = "Module is not active"
 

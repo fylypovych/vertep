@@ -1412,7 +1412,9 @@ export const EN: Record<string, string> = {
   "Користувач": "User",
   "Не вдалося завантажити бренди": "Failed to load brands",
   "Не вдалося завантажити персонажів": "Failed to load characters",
-  "Референси": "References"
+  "Референси": "References",
+  "Автоматичний вибір CORE:": "Automatic CORE selection:",
+  "Кадри персонажів з еталонними зображеннями (автоматично)": "Character frames with reference images (automatic)"
 };
 /** Texts built at run time: the values stay as they are. */
 export const EN_PATTERNS: [RegExp, string][] = [

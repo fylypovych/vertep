@@ -86,7 +86,11 @@ function coerceInputValue(value: unknown, type?: string): unknown {
                   </td>
                   <td class="px-4 py-3">
                     @if (usageMap()[wf.kind + '/' + wf.name]?.length) {
-                      <span class="text-xs text-slate-600">{{ usageMap()[wf.kind + '/' + wf.name]!.join(', ') }}</span>
+                      <span class="text-xs text-slate-600">
+                        @for (label of usageMap()[wf.kind + '/' + wf.name]!; track label; let last = $last) {
+                          {{ label | t }}{{ last ? '' : ', ' }}
+                        }
+                      </span>
                     } @else {
                       <span class="text-xs text-slate-400">—</span>
                     }
@@ -238,6 +242,16 @@ function coerceInputValue(value: unknown, type?: string): unknown {
           <p class="text-sm text-slate-600 mb-4">{{ (conflictMessage()) | t }}</p>
           @if (conflictUsage()) {
             <div class="space-y-3 mb-4 text-xs">
+              @if (conflictUsage()!.automatic?.length) {
+                <div>
+                  <div class="font-semibold text-slate-700">{{ 'Автоматичний вибір CORE:' | t }}</div>
+                  <ul class="list-disc pl-4 text-slate-600">
+                    @for (auto of conflictUsage()!.automatic!; track auto.scope) {
+                      <li>{{ auto.label | t }}</li>
+                    }
+                  </ul>
+                </div>
+              }
               @if (conflictUsage()!.characters.length) {
                 <div>
                   <div class="font-semibold text-slate-700">{{ 'Персонажі:' | t }}</div>
@@ -333,6 +347,7 @@ export class WorkflowsComponent implements OnInit {
   private usageLabels(usage: WorkflowUsage | null): string[] {
     if (!usage) return [];
     return [
+      ...(usage.automatic || []).map((item) => item.label),
       ...usage.characters.map((char) => `персонаж: ${char.character_id}`),
       ...usage.jobs.map((job) => `завдання: ${job.job_id}`),
     ];

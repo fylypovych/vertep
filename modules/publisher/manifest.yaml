@@ -1,9 +1,11 @@
+schema_version: "2.0"
 name: publisher
-version: "0.0.3.94"
-label: PublisherModule
+version: "0.0.3.95"
+label: Публікація
 role: publisher
 capabilities:
   - publishing
+  - publishing_view
 entrypoint: modules.publisher.publisher_module:PublisherModule
 depends_on: []
 resources:
@@ -11,8 +13,13 @@ resources:
   cpu_cores: 1
   ram_mb: 512
   gpu_required: false
+ui:
+  entry: index.html
+  navigation:
+    - {id: publisher, label: "Опубліковане", route: "/published", group: content}
+  files: {}
 coexists_with:
   - publisher_node
 feature_flag: VERTEP_PUBLISHER_MODULE_ENABLED
 description: >
-  Публікаційний модуль (Publisher Module) над чинним виконавцем Publisher Node; платформи — адаптери publishers/.
+  Єдиний модуль публікації: екран «Опубліковане», редакторські дії та завантаження на платформи через адаптери publishers/.

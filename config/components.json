@@ -91,6 +91,8 @@
       "paths": ["modules/publisher/**", "publishers/**"],
       "tests": ["tests/test_publisher_durable_reconciliation.py", "tests/test_publisher_http_boundary.py",
                 "tests/test_publisher_live_adapters.py", "tests/test_publisher_oauth_state.py",
+                "tests/test_publisher_module_container.py", "tests/test_publishing_module.py",
+                "tests/test_publishing_module_e2e.py",
                 "tests/test_issue_411_publisher_channels.py", "tests/test_delivery_process_acceptance.py"],
       "transition_base": "0.0.3.90"
     },
@@ -120,15 +122,6 @@
       "paths": ["modules/monitoring/**"],
       "tests": ["tests/test_monitoring_module.py", "tests/test_monitoring_retention.py",
                 "tests/test_monitoring_ingest_e2e.py", "tests/test_monitoring_module_ui_offline.py"],
-      "transition_base": "0.0.4.14",
-      "legacy_versions": {"1.0.0": "0.0.4.14"}
-    },
-    "publishing": {
-      "kind": "module",
-      "version_source": "modules/publishing/manifest.yaml",
-      "image": {"name": "vertep-module-publishing", "context": "modules/publishing", "file": "modules/publishing/Dockerfile"},
-      "paths": ["modules/publishing/**"],
-      "tests": ["tests/test_publishing_module.py", "tests/test_publishing_module_e2e.py"],
       "transition_base": "0.0.4.14",
       "legacy_versions": {"1.0.0": "0.0.4.14"}
     },

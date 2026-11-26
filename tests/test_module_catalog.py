@@ -112,3 +112,19 @@ def test_system_components_refuse_lifecycle_actions_and_official_permissions_can
     assert entry(api, "monitoring")["approved_permissions"] == ["monitoring.read"]
     assert api.put("/api/nodes/module-registry/approval/monitoring",
                    json={"permissions": ["monitoring.write"]}).status_code in {400, 422}
+
+
+def test_catalog_hides_retired_publishing_record_from_older_installs(api):
+    """Servers upgraded from before the merge may still have state/publishing.json on disk;
+    only the unified publisher module must appear in the catalog."""
+    state_dir = api.runtime.lifecycle.root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "publishing.json").write_text(json.dumps({
+        "module_id": "publishing", "version": "0.0.4.16", "state": "INSTALLED",
+        "package": {"manifest": {"schema_version": "2.0", "name": "publishing", "module_id": "publishing",
+                                 "version": "0.0.4.16", "kind": "application", "capabilities": ["publishing_view"],
+                                 "container": {"image": "registry.example/vertep/publishing@sha256:" + "0" * 64, "port": 8080}}},
+    }), encoding="utf-8")
+    ids = [m["module_id"] for m in api.get("/api/nodes/module-catalog").json()["modules"]]
+    assert "publisher" in ids
+    assert "publishing" not in ids

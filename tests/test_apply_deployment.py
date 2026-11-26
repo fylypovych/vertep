@@ -737,3 +737,54 @@ def test_wait_for_healthy_timeout_names_the_services_that_are_not_ready(monkeypa
     monkeypatch.setattr(mod, "compose_rows", lambda *args, **kwargs: rows)
     with pytest.raises(RuntimeError, match="часу очікування: node-exporter$"):
         mod.wait_for_healthy(["docker", "compose"], {"core", "node-exporter"}, timeout_seconds=0)
+
+
+def test_pull_images_uses_missing_policy_and_retries_transient_error(monkeypatch):
+    import subprocess
+
+    mod = module()
+    calls = []
+    sleeps = []
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if len(calls) < 2:
+            raise subprocess.CalledProcessError(1, command)
+
+    mod._pull_images(["docker", "compose"], {"ollama", "tts"}, runner=runner, attempts=3, retry_delay=2.0)
+    assert len(calls) == 2
+    assert calls[0] == ["docker", "compose", "pull", "--policy", "missing", "ollama", "tts"]
+    assert sleeps == [2.0]
+
+
+def test_apply_migrates_rescued_roots_into_host_storage_without_env(tmp_path, monkeypatch):
+    """On the host systemd unit STORAGE_ROOT is unset and /data is read-only;
+    rescued roots must land in <root>/storage rather than failing on /data."""
+    from types import SimpleNamespace
+
+    root = fixture(tmp_path, "core")
+    for var in ("STORAGE_ROOT", "JOB_ROOT", "CHARACTERS_ROOT", "BRANDS_ROOT", "WORKFLOWS_ROOT"):
+        monkeypatch.delenv(var, raising=False)
+    selected = {"proxy", "core", "postgres", "ollama"}
+
+    def runner(command, **kwargs):
+        if command[:2] == ["docker", "compose"] and "ps" in command and "--all" in command:
+            rows = [json.dumps({"Service": s, "ID": f"old-{s}", "State": "running",
+                                "Health": "healthy"}) for s in sorted(selected)]
+            return SimpleNamespace(stdout="\n".join(rows) + "\n", returncode=0, stderr="")
+        if command[:2] == ["docker", "exec"]:
+            return SimpleNamespace(returncode=0 if command[-1] == "/app/characters" else 1,
+                                   stdout="", stderr="")
+        if command[:2] == ["docker", "cp"]:
+            destination = Path(command[3])
+            destination.mkdir(parents=True, exist_ok=True)
+            if command[2] == "old-core:/app/characters":
+                (destination / "hero.json").write_text("rescued", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = module().apply(root, runner=runner)
+    assert result["state"] == "SUCCEEDED"
+    assert (root / "storage" / "characters" / "hero.json").read_text(encoding="utf-8") == "rescued"
+    assert "STORAGE_ROOT" not in __import__("os").environ

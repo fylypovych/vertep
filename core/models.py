@@ -374,6 +374,7 @@ class Job(BaseModel):
     # #506 Character Knowledge & Memory: immutable context snapshot pinned at
     # generation time (for provenance, rerun rights checks & legal publish holds).
     knowledge_snapshot: dict[str, Any] | None = None
+    voice_knowledge_snapshot: dict[str, Any] | None = None
     # Brand-specific title/description/hashtags/cover; the video stays identical.
     publication_metadata: dict[str, Any] = Field(default_factory=dict)
     # Audit of independent publications created from this material.

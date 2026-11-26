@@ -102,8 +102,13 @@ def _dispatch_assets(store, job) -> None:
                 JobStatus.FAILED,
                 "RECOVERY FAILED: IMAGE ARTIFACTS ARE MISSING")
         return
-    queued_tasks = [(scene, _enqueue_job_task(job, scene))
-                    for scene in pending_scenes(job) if not scene.task_id]
+    queued_tasks = []
+    for scene in pending_scenes(job):
+        if not scene.task_id:
+            queued = _enqueue_job_task(job, scene)
+            if queued is None:
+                return
+            queued_tasks.append((scene, queued))
     from ...local_fallback import local_fallback_allowed
     if local_fallback_allowed():
         images = []
@@ -189,9 +194,9 @@ def _dispatch_tts(store, job) -> None:
             store.transition(job, JobStatus.ASSETS_READY,
                              "TTS SKIPPED; NO VOICEOVER")
         return
-    [_enqueue_tts_task(job, scene)
-     for scene in _pending_voice_scenes(job)
-     if _tts_attempts_remaining(job, scene)]
+    for scene in _pending_voice_scenes(job):
+        if _tts_attempts_remaining(job, scene) and _enqueue_tts_task(job, scene) is None:
+            return
     # Issue i.0.0.1.5: a scene whose separate TTS budget is already spent is
     # never silently re-dispatched.  It fails the TTS stage and is dead-lettered
     # instead of looping on an exhausted budget, so worker loss or a lost ack

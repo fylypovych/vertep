@@ -238,7 +238,7 @@ class WebUIModule:
             {"namespace": "characters", "label": "Персонажі", "path": "/characters", "icon": "user", "enabled": True},
             {"namespace": "brands", "label": "Бренди", "path": "/brands", "icon": "tag", "enabled": True},
             {"namespace": "storyboard", "label": "Сторіборд", "path": "/storyboard", "icon": "film", "enabled": True},
-            {"namespace": "publishing", "label": "Публікація", "path": "/publishing", "icon": "share", "enabled": True},
+            {"namespace": "publisher", "label": "Публікація", "path": "/published", "icon": "share", "enabled": True},
             {"namespace": "monitoring", "label": "Моніторинг", "path": "/monitoring", "icon": "activity", "enabled": True},
             {"namespace": "modules", "label": "Модулі", "path": "/modules", "icon": "package", "enabled": True},
             {"namespace": "settings", "label": "Налаштування", "path": "/settings", "icon": "settings", "enabled": True},

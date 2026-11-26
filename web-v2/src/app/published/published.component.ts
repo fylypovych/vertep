@@ -1,8 +1,8 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterModule } from '@angular/router';
+import { Router, RouterModule } from '@angular/router';
 import { JobsApiService } from '../core/api/jobs.api';
 import { ToastService } from '../core/services/toast.service';
 import { VertepDatePipe } from '../shared/vertep-date.pipe';
@@ -85,7 +85,7 @@ import { statusLabel } from '../core/presentation';
               </div>
 
               <div class="mt-3">
-                <a [routerLink]="['/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити завдання' | t }}</a>
+                <a [routerLink]="[routePrefix + '/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити завдання' | t }}</a>
               </div>
             </div>
           }
@@ -95,6 +95,8 @@ import { statusLabel } from '../core/presentation';
   `,
 })
 export class PublishedComponent implements OnInit {
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
   loading = signal(false);
   error = signal<string | null>(null);
   publishedJobs = signal<Job[]>([]);

@@ -182,6 +182,17 @@ test('#536: перемикач v2 ↔ v3 зберігає стан у localStora
   await page.goto('/v3/queue');
   await expect(page.getByTestId('v3-jobs-workspace')).toBeVisible();
   await expect(page.getByTestId('v3-tab-queue')).toHaveAttribute('aria-selected', 'true');
+
+  // Switching tabs inside /v3/jobs must stay inside v3 (never bounce to v2 /queue or /jobs)
+  await page.goto('/v3/jobs');
+  await expect(page.getByTestId('v3-jobs-workspace')).toBeVisible();
+  await page.getByTestId('v3-tab-queue').click();
+  await expect(page).toHaveURL(/\/v3\/jobs\?tab=queue$/);
+  await expect(page.getByTestId('v3-layout')).toBeVisible();
+  await expect(page.getByTestId('v3-tab-queue')).toHaveAttribute('aria-selected', 'true');
+  await page.getByTestId('v3-tab-list').click();
+  await expect(page).toHaveURL(/\/v3\/jobs\?tab=list$/);
+  await expect(page.getByTestId('v3-layout')).toBeVisible();
 });
 
 test('#536: реорганізоване меню V3Layout враховує RBAC, динамічні модулі, Лабораторію та офлайн-ресурси', async ({ page }) => {

@@ -1,7 +1,7 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { map, Observable, of, throwError, timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { OperationsApiService } from '../../core/api/operations.api';
@@ -25,7 +25,7 @@ function mapToSnapshots(): (source: Observable<BackupListResponse>) => Observabl
     <div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-backup">
       @if (moduleActive() === false) {
         <h3 class="text-lg font-semibold text-slate-900 mb-2">{{ 'Резервні копії' | t }}</h3>
-        <p class="text-sm text-slate-600" data-testid="backup-module-missing">{{ 'Служба резервних копій не запущена: модуль «Резервні копії» не встановлено або не активовано. Встановіть його в розділі' | t }} <a routerLink="/modules" class="text-emerald-700 underline">{{ 'Модулі' | t }}</a>.</p>
+        <p class="text-sm text-slate-600" data-testid="backup-module-missing">{{ 'Служба резервних копій не запущена: модуль «Резервні копії» не встановлено або не активовано. Встановіть його в розділі' | t }} <a [routerLink]="[routePrefix + '/modules']" class="text-emerald-700 underline">{{ 'Модулі' | t }}</a>.</p>
       } @else {
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-semibold text-slate-900">{{ 'Резервні копії' | t }}</h3>
@@ -102,6 +102,9 @@ export class BackupSectionComponent implements OnInit {
     });
   }
 
+
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
 
   readonly keyFormOpen = signal(false);
   readonly keyBusy = signal(false);

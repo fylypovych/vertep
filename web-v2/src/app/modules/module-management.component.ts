@@ -81,7 +81,7 @@ const REASON_TEXT: Record<string, string> = {
                   <div class="text-xs text-amber-700" [attr.data-testid]="'incompatible-' + module.module_id + '-' + entry.node_id">{{ reason | t }}</div>
                 }
                 @if (isAdmin() && module.runtime_role && isCore(entry.node_id) && entry.runtime_missing) {
-                  <button class="mt-1 text-xs text-emerald-700 underline disabled:opacity-50" [disabled]="busy() || runtimePending()"
+                  <button class="mt-1 text-xs text-emerald-700 underline disabled:opacity-50" [disabled]="busy() || runtimePending() || !core()"
                           (click)="prepareCore(module.runtime_role)" [attr.data-testid]="'prepare-core-' + module.module_id">{{ 'Підготувати середовище на центральному вузлі' | t }}</button>
                 }
               </td>
@@ -244,7 +244,9 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
   }
   approve(module: CatalogModule): void { this.act(this.api.approve(module.module_id, module.permissions), module.module_id); }
   prepareCore(role: string): void {
-    const active = this.core()?.active_roles || [];
+    const runtime = this.core();
+    if (!runtime) return;
+    const active = runtime.active_roles || [];
     this.act(this.runtime.prepare([...new Set([...active, role])]));
   }
   uninstall(module: CatalogModule): void {

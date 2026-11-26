@@ -43,7 +43,7 @@ def test_the_module_catalog_registry_and_node_reports_work_without_dynamic_workf
     catalog = static_core.get("/api/nodes/module-catalog")
     assert catalog.status_code == 200, catalog.text
     modules = {item["module_id"]: item for item in catalog.json()["modules"]}
-    assert {"characters", "brands", "storyboard", "publishing", "monitoring"} <= set(modules)
+    assert {"characters", "brands", "storyboard", "publisher", "monitoring"} <= set(modules)
     text_nodes = {node["node_id"]: node for node in modules["text"]["nodes"]}
     assert text_nodes["text-node"]["compatible_reasons"] == []
 

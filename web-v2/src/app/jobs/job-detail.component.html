@@ -604,7 +604,7 @@
                  }
                  {{ (event.message) | t }}
                  @if (event.node) {
-                   <a [routerLink]="['/workers', event.node]" class="text-blue-600 hover:underline">@ {{ event.node }}</a>
+                   <a [routerLink]="[routePrefix + '/workers', event.node]" class="text-blue-600 hover:underline">@ {{ event.node }}</a>
                  }
                  @if (event.task_id) {
                    <span class="text-slate-400">· #{{ event.task_id }}</span>

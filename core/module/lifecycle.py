@@ -39,7 +39,7 @@ JOURNAL_FORMAT = "vertep-module-journal/1"
 INSTALLED, ACTIVE, INACTIVE, FAILED, UNINSTALLED = "INSTALLED", "ACTIVE", "INACTIVE", "FAILED", "UNINSTALLED"
 # Execution modules shipped inside the signed Vertep release (#497): their code
 # and manifest come with the release itself, so no separate package signature.
-BUNDLED = ("text", "image", "audio", "publisher", "backup", "characters", "brands", "storyboard", "publishing", "monitoring", "web-ui")
+BUNDLED = ("text", "image", "audio", "publisher", "backup", "characters", "brands", "storyboard", "monitoring", "web-ui")
 
 
 MODULE_IMAGES = Path(__file__).resolve().parents[2] / "config" / "module-images.json"

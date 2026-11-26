@@ -1,8 +1,8 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { ChangeDetectorRef, Component, OnInit, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterModule } from '@angular/router';
+import { Router, RouterModule } from '@angular/router';
 import { Subscription, timer } from 'rxjs';
 import { WorkersApiService } from '../core/api/workers.api';
 import { ToastService } from '../core/services/toast.service';
@@ -54,7 +54,7 @@ import { RemoteState } from '../core/state/remote-state';
                @for (worker of pagedWorkers; track worker.node_id) {
                  <tr class="border-t border-slate-100">
                    <td class="px-4 py-3">
-                     <a [routerLink]="['/workers', worker.node_id]" class="font-medium text-slate-900 hover:text-emerald-600">{{ worker.node_name }}</a>
+                     <a [routerLink]="[routePrefix + '/workers', worker.node_id]" class="font-medium text-slate-900 hover:text-emerald-600">{{ worker.node_name }}</a>
                      <div class="text-xs text-slate-500">{{ worker.node_id }}</div>
                    </td>
                   <td class="px-4 py-3">{{ (nodeRoleLabel(worker.role)) | t }}</td>
@@ -254,6 +254,9 @@ export class WorkersComponent implements OnInit {
       this.pollTimer = null;
     }
   }
+
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
 
   get filteredWorkers(): Worker[] {
     const list = this.workers();

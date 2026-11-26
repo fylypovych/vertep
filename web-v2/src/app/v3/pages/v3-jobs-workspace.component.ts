@@ -16,7 +16,7 @@ import { TabbedWorkspaceComponent, WorkspaceTab } from '../ui/tabbed-workspace.c
       [activeTab]="activeTab()"
       (tabChange)="selectTab($event)"
       testId="v3-jobs-workspace">
-      <app-jobs />
+      <app-jobs [hideViewTabs]="true" />
     </app-v3-tabbed-workspace>
   `,
 })
@@ -57,7 +57,7 @@ export class V3JobsWorkspaceComponent implements OnInit, AfterViewInit, OnDestro
 
   private syncChild(tab: 'list' | 'queue'): void {
     if (this.jobsComponent && this.jobsComponent.view() !== tab) {
-      this.jobsComponent.setView(tab);
+      this.jobsComponent.applyView(tab);
     }
   }
 }

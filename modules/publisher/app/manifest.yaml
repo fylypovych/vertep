@@ -4,13 +4,14 @@
 schema_version: "2.0"
 name: publisher
 module_id: publisher
-version: "0.0.3.94"
+version: "0.0.3.95"
 kind: application
 label: Публікація
 core_compatibility: {min: "0.0.4.30", max: "0.0.9.99"}
 dependencies: []
 capabilities:
   - publishing
+  - publishing_view
 resource_requirements:
   min_vram_mb: 0
   min_cpu_cores: 1
@@ -27,8 +28,16 @@ api:
   version: "1.0"
   routes:
     - "/publish"
+    - "/publications"
+    - "/publications/{job_id}/publish"
+ui:
+  entry: index.html
+  navigation:
+    - {id: publisher, label: "Опубліковане", route: "/published", group: content}
+  files:
+    index.html: "113e6f0cb65f50ce1b5aa19f05fdff2e48af1abea65af83c045e82a82696e579"
 permissions:
-  # Uploads only; the Worker that owns the task hands over the video and its credentials.
+  - publishing.read
   - publishing.publish
 secret_refs: []
 migrations: []
@@ -44,5 +53,4 @@ container:
   image: "registry.example/vertep/publisher@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   port: 8080
 description: >
-  Публікація на платформи в окремому контейнері: завантаження через адаптери publishers/.
-  Відео й облікові дані задачі передає воркер, що володіє задачею; оновлені токени повертаються йому.
+  Єдиний модуль публікації: екран «Опубліковане», редакторські дії та завантаження на платформи через адаптери publishers/.

@@ -1,8 +1,8 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, Input, OnInit, signal } from '@angular/core';
+import { Component, Input, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
 import { ConfirmService } from '../../core/services/confirm.service';
@@ -41,7 +41,7 @@ export interface SecretGroup {
             <span [class.text-emerald-700]="secrets()?.[shared.name]" [class.text-slate-500]="!secrets()?.[shared.name]">
               — {{ (secrets()?.[shared.name] ? 'Збережено' : 'Не збережено') | t }}</span></span>
           <span class="block text-xs text-slate-500">{{ shared.note | t }}</span>
-          <a [routerLink]="['/settings']" [queryParams]="{ tab: shared.tab }" class="text-sm text-blue-700">{{ 'Змінити у вкладці' | t }} «{{ shared.tabLabel | t }}»</a>
+          <a [routerLink]="[routePrefix + '/settings']" [queryParams]="{ tab: shared.tab }" class="text-sm text-blue-700">{{ 'Змінити у вкладці' | t }} «{{ shared.tabLabel | t }}»</a>
         </div>
         <div *ngFor="let name of group.names" class="flex flex-wrap items-center justify-between gap-2 py-2 border-t border-slate-100">
           <span class="min-w-0"><span class="block text-sm font-medium">{{ secretLabel(name) | t }}</span><span class="block font-mono text-xs text-slate-400 break-all">{{ name }}</span></span>
@@ -67,6 +67,8 @@ export interface SecretGroup {
     </div>`,
 })
 export class SecretGroupsComponent implements OnInit {
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
   @Input({ required: true }) groups: SecretGroup[] = [];
   secrets = signal<Record<string, boolean> | null>(null);
   loading = signal(false);

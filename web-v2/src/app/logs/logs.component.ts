@@ -1,7 +1,7 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterModule } from '@angular/router';
+import { Router, RouterModule } from '@angular/router';
 import { finalize } from 'rxjs';
 import { LogsApiService } from '../core/api/logs.api';
 import { LogEntry } from '../core/models';
@@ -87,7 +87,7 @@ import { RemoteState } from '../core/state/remote-state';
                   </td>
                   <td class="px-4 py-3 text-xs text-slate-600">
                     @if (entry.node_name) {
-                      <a [routerLink]="['/workers', entry.node_name]" class="block text-emerald-700 hover:underline">{{ entry.node_name }}</a>
+                      <a [routerLink]="[routePrefix + '/workers', entry.node_name]" class="block text-emerald-700 hover:underline">{{ entry.node_name }}</a>
                     } @else {
                       <div>{{ entry.logger || 'CORE' }}</div>
                     }
@@ -101,7 +101,7 @@ import { RemoteState } from '../core/state/remote-state';
                   </td>
                   <td class="px-4 py-3 text-xs">
                     @if (entry.job_id) {
-                      <a [routerLink]="['/jobs', entry.job_id]" class="block text-emerald-700 hover:underline">Job {{ entry.job_id }}</a>
+                      <a [routerLink]="[routePrefix + '/jobs', entry.job_id]" class="block text-emerald-700 hover:underline">Job {{ entry.job_id }}</a>
                     }
                     @if (entry.action) { <div class="text-slate-500">{{ entry.action }}</div> }
                   </td>
@@ -124,6 +124,8 @@ import { RemoteState } from '../core/state/remote-state';
   `,
 })
 export class LogsComponent implements OnInit {
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
   readonly logsState = new RemoteState<LogEntry[]>([]);
   readonly loadingOlder = signal(false);
   readonly hasMore = signal(false);

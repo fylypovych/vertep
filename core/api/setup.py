@@ -258,14 +258,14 @@ async def first_run_selection(request: Request):
                 or (role != "core" and chosen)):
             raise HTTPException(422, "Непідтримувана конфігурація перевірки")
         extras = set(chosen)
+    elif previous_selection.get("managed_text"):
+        # An implicit managed Text role belongs only to the selected local backend.
+        extras.discard("text")
     # Only a bootstrap detection that found no GPU refuses; a host without hardware.json is unknown.
     if "gpu" in extras | {role} and (_read("hardware.json").get("gpu") or {}).get("vendor") == "none":
         # Bootstrap drops the GPU role on such a host too: ComfyUI cannot start, and its failed
         # start rolls back every other selected service (Ollama, Voice, Publisher, Monitoring).
         raise HTTPException(422, "Модуль «Зображення та відео» потребує GPU, а на цьому сервері його не виявлено")
-    # An implicit managed Text role belongs only to the selected local backend.
-    elif _read("setup-selection.json").get("managed_text"):
-        extras.discard("text")
     managed = role == "core" and backend == "ollama" and not payload.get("backend_url")
     managed_text_added = managed and "text" not in extras
     if managed:

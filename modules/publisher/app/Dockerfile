@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir httpx==0.28.1 \
 # The module data volume takes this owner on first use (the container runs as 65532).
 COPY core/__init__.py core/logging_config.py /app/core/
 COPY publishers /app/publishers
+COPY modules/publisher/ui /app/ui
 COPY modules/publisher/app/publisher_app.py /app/publisher_app.py
 ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1
 USER 65532:65532

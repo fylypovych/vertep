@@ -1,7 +1,7 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, OnDestroy, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterModule } from '@angular/router';
+import { Router, RouterModule } from '@angular/router';
 import { Subscription, timer } from 'rxjs';
 import { OperationsApiService } from '../core/api/operations.api';
 import { ToastService } from '../core/services/toast.service';
@@ -73,7 +73,7 @@ const SEVERITY_LABELS: Record<string, string> = {
               </div>
               <div class="flex items-center gap-2 shrink-0 ml-2">
                 @if (alert.job_id) {
-                  <a [routerLink]="['/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
+                  <a [routerLink]="[routePrefix + '/jobs', alert.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                 }
                 @if (alert.state === 'firing') {
                   <button type="button" (click)="acknowledge(alert)" [disabled]="acknowledging() === alert.id"
@@ -91,6 +91,8 @@ const SEVERITY_LABELS: Record<string, string> = {
   `,
 })
 export class AlertsComponent implements OnInit, OnDestroy {
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
   readonly list = new RemoteState<Alert[]>([]);
   readonly acknowledging = signal<string | null>(null);
   private pollTimer: Subscription | null = null;

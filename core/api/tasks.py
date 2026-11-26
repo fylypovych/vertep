@@ -13,6 +13,9 @@ from pathlib import Path
 from fastapi.responses import FileResponse
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
+from ..knowledge_context import (
+    KnowledgeRightsBlocked, KnowledgeVerificationUnavailable, verify_job_publish_rights,
+)
 from ..models import (JobStatus, StageName, StageStatus, TaskClaim, TaskRenew,
                       TaskResult, utc_now)
 from ..orchestration import start_scene, transition_stage
@@ -249,8 +252,22 @@ def _claim_task(payload: TaskClaim):
                 task_queue.ack(task["task_id"])
                 continue
             from ..shared_content import publication_allowed
+            rights_error = None
+            try:
+                verify_job_publish_rights(job)
+            except KnowledgeRightsBlocked as error:
+                rights_error = str(error)
+            except KnowledgeVerificationUnavailable:
+                # Keep the pending send retryable during a verification outage.
+                held_tasks.append(task["task_id"])
+                continue
             with store.lock:
+                if job.status != JobStatus.PUBLISHING or job.publish_task_ids.get(task["task_id"]) != channel:
+                    task_queue.ack(task["task_id"])
+                    continue
                 allowed, reason = publication_allowed(job, store.root)
+                if rights_error:
+                    allowed, reason = False, rights_error
                 if not allowed:
                     # #500 AC6/AC7: revoked or changed before the send started.
                     task_queue.ack(task["task_id"])

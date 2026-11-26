@@ -1,0 +1,71 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "{{CHECKPOINT}}"
+    },
+    "_meta": {"title": "Load Checkpoint (Video 9:16)"}
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "{{TOPIC}}",
+      "clip": ["1", 1]
+    },
+    "_meta": {"title": "Positive Prompt"}
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, low quality, worst quality, flickering, deformed, text, watermark, logo",
+      "clip": ["1", 1]
+    },
+    "_meta": {"title": "Negative Prompt"}
+  },
+  "3": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 576,
+      "height": 1024,
+      "batch_size": 16
+    },
+    "_meta": {"title": "Empty Latent Video 9:16 (16 frames)"}
+  },
+  "4": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 24,
+      "cfg": 6.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": ["1", 0],
+      "positive": ["2", 0],
+      "negative": ["7", 0],
+      "latent_image": ["3", 0]
+    },
+    "_meta": {"title": "KSampler"}
+  },
+  "5": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["4", 0],
+      "vae": ["1", 2]
+    },
+    "_meta": {"title": "VAE Decode"}
+  },
+  "6": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["5", 0],
+      "frame_rate": 8,
+      "loop_count": 0,
+      "filename_prefix": "Vertep_Video_9x16",
+      "format": "video/h264-mp4",
+      "pingpong": false,
+      "save_output": true
+    },
+    "_meta": {"title": "Video Combine (MP4)"}
+  }
+}

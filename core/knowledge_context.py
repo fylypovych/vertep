@@ -130,7 +130,7 @@ def pin_job_knowledge_snapshot(
     max_timeline_order: int | None = None,
     budget_tokens: int | None = None,
 ) -> dict[str, Any] | None:
-    """Fetch and pin an immutable knowledge snapshot onto ``job.knowledge_snapshot``."""
+    """Fetch and pin an immutable knowledge snapshot on the Job for the requested profile."""
     ctx = fetch_job_context(
         job,
         profile=profile,
@@ -170,14 +170,14 @@ def pin_job_knowledge_snapshot(
         "no_grounded_sources": bool(ctx.get("no_grounded_sources", not items)),
         "formatted_context": formatted,
     }
-    job.knowledge_snapshot = snapshot
+    if profile == "voice":
+        job.voice_knowledge_snapshot = snapshot
+    else:
+        job.knowledge_snapshot = snapshot
     return snapshot
 
 
-def _verify_rights(job, purpose: str) -> dict[str, Any]:
-    snap = getattr(job, "knowledge_snapshot", None)
-    if not snap:
-        return {"allowed": True, "skipped": True, "purpose": purpose}
+def _verify_snapshot_rights(job, snap: dict[str, Any], purpose: str) -> dict[str, Any]:
     payload = {
         "purpose": purpose,
         "snapshot_id": snap.get("snapshot_id"),
@@ -205,6 +205,23 @@ def _verify_rights(job, purpose: str) -> dict[str, Any]:
         detail = "; ".join(str(r) for r in reasons) if reasons else f"Knowledge rights blocked for {purpose}"
         raise KnowledgeRightsBlocked(detail)
     return body
+
+
+def _verify_rights(job, purpose: str) -> dict[str, Any]:
+    result = {"allowed": True, "skipped": True, "purpose": purpose}
+    for snapshot in (job.knowledge_snapshot, job.voice_knowledge_snapshot):
+        if snapshot:
+            result = _verify_snapshot_rights(job, snapshot, purpose)
+    return result
+
+
+def prepare_voice_knowledge(job, *, query: str) -> str | None:
+    """Authorize narration and pin the Voice profile for the current Job."""
+    verify_job_rerun_rights(job)
+    snapshot = job.voice_knowledge_snapshot
+    if snapshot is None:
+        snapshot = pin_job_knowledge_snapshot(job, profile="voice", query=query)
+    return snapshot.get("snapshot_id") if snapshot else None
 
 
 def verify_job_rerun_rights(job) -> dict[str, Any]:

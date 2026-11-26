@@ -7,7 +7,7 @@ ACTIVE_MODULE_MENU = [
     {"module_id": "brands", "id": "brands", "label": "Бренди", "path": "/brands", "group": "content", "admin_only": False},
     {"module_id": "characters", "id": "characters", "label": "Персонажі", "path": "/characters", "group": "content",
      "admin_only": False},
-    {"module_id": "publishing", "id": "publishing", "label": "Опубліковане", "path": "/published", "group": "content",
+    {"module_id": "publisher", "id": "publisher", "label": "Опубліковане", "path": "/published", "group": "content",
      "admin_only": False},
 ]
 

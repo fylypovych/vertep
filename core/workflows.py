@@ -6,11 +6,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from adapters.comfyui import SUPPORTED_PLACEHOLDERS
+
 WORKFLOW_TYPES = {"image", "video", "character"}
 SAFE_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}\.json$")
 VERSION_DIR = "versions"
+DEFAULT_IMAGE_WORKFLOW = "workflows/image/demo.json"
+DEFAULT_REFERENCE_WORKFLOW = "workflows/image/ip-adapter.json"
 
-SUPPORTED_PLACEHOLDERS = {"TOPIC", "CHECKPOINT", "SEED", "WIDTH", "HEIGHT"}
+
+def reference_workflow_path() -> str:
+    return os.getenv("COMFYUI_REFERENCE_WORKFLOW", DEFAULT_REFERENCE_WORKFLOW)
 
 
 class WorkflowInUseError(ValueError):
@@ -95,38 +101,70 @@ class WorkflowRegistry:
                 })
         return sorted(result, key=lambda item: (item["type"], item["name"]))
 
-    def usage(self, kind: str, name: str) -> dict:
-        self._validate_path(kind, name)
-        reference = f"workflows/{kind}/{name}"
+    def _collect_usage(self, reference: str) -> dict:
+        from core.character_references import list_references
         from core.state import store
+
         dependent_jobs = [
             {"job_id": job.job_id, "topic": job.topic, "status": job.status.value}
             for job in store.jobs.values()
             if job.workflow == reference
         ]
+        ref_workflow = reference_workflow_path()
         character_root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
         dependent_characters = []
         if character_root.exists():
-            for directory in character_root.iterdir():
-                if directory.is_dir():
-                    for fname in ("character.json", "generation.json"):
-                        fpath = directory / fname
-                        if fpath.exists():
-                            try:
-                                data = json.loads(fpath.read_text(encoding="utf-8"))
-                                if data.get("workflow") == reference:
-                                    dependent_characters.append(
-                                        {"character_id": directory.name, "field": fname.replace(".json", "")})
-                                    break
-                            except Exception:
-                                pass
+            for directory in sorted(character_root.iterdir(), key=lambda p: p.name):
+                if not directory.is_dir():
+                    continue
+                configured_workflow: str | None = None
+                matched_explicit = False
+                for fname in ("generation.json", "character.json"):
+                    fpath = directory / fname
+                    if fpath.exists():
+                        try:
+                            data = json.loads(fpath.read_text(encoding="utf-8"))
+                            wf_val = data.get("workflow")
+                            if wf_val and configured_workflow is None:
+                                configured_workflow = wf_val
+                            if wf_val == reference and not matched_explicit:
+                                dependent_characters.append(
+                                    {"character_id": directory.name, "field": fname.replace(".json", "")}
+                                )
+                                matched_explicit = True
+                        except Exception:
+                            pass
+                if (
+                    not matched_explicit
+                    and reference == ref_workflow
+                    and (not configured_workflow or configured_workflow == DEFAULT_IMAGE_WORKFLOW)
+                    and list_references(directory.name)
+                ):
+                    dependent_characters.append(
+                        {"character_id": directory.name, "field": "references", "automatic": True}
+                    )
+
+        automatic_usage = []
+        if reference == ref_workflow:
+            automatic_usage.append({
+                "scope": "character_references",
+                "label": "Кадри персонажів з еталонними зображеннями (автоматично)",
+            })
+
         return {
             "workflow": reference,
             "jobs": dependent_jobs,
             "characters": dependent_characters,
+            "automatic": automatic_usage,
             "total_jobs": len(dependent_jobs),
             "total_characters": len(dependent_characters),
+            "total_automatic": len(automatic_usage),
         }
+
+    def usage(self, kind: str, name: str) -> dict:
+        self._validate_path(kind, name)
+        reference = f"workflows/{kind}/{name}"
+        return self._collect_usage(reference)
 
     def load(self, kind: str, name: str) -> dict:
         self._validate_path(kind, name)
@@ -175,41 +213,31 @@ class WorkflowRegistry:
         self._validate_path(kind, name)
         reference = f"workflows/{kind}/{name}"
 
-        from core.state import store
-        dependent_jobs = [
-            {"job_id": job.job_id, "topic": job.topic, "status": job.status.value}
-            for job in store.jobs.values()
-            if job.workflow == reference
-        ]
-
-        character_root = Path(os.getenv("CHARACTERS_ROOT", "characters"))
-        dependent_characters = []
-        if character_root.exists():
-            for directory in character_root.iterdir():
-                if directory.is_dir():
-                    char_data = {}
-                    for fname in ("character.json", "generation.json"):
-                        fpath = directory / fname
-                        if fpath.exists():
-                            try:
-                                data = json.loads(fpath.read_text(encoding="utf-8"))
-                                if data.get("workflow") == reference:
-                                    dependent_characters.append({"character_id": directory.name, "field": fname.replace(".json", "")})
-                                    break
-                            except Exception:
-                                pass
+        usage = self._collect_usage(reference)
+        dependent_jobs = usage["jobs"]
+        dependent_characters = usage["characters"]
+        automatic_usage = usage["automatic"]
 
         dependencies = {
             "jobs": dependent_jobs,
             "characters": dependent_characters,
+            "automatic": automatic_usage,
         }
 
-        has_dependencies = bool(dependent_jobs or dependent_characters)
+        has_dependencies = bool(dependent_jobs or dependent_characters or automatic_usage)
 
         if has_dependencies and not force:
-            references = ", ".join(
-                f"персонаж {item['character_id']}" for item in dependent_characters
-            ) or ", ".join(f"завдання {item['job_id']}" for item in dependent_jobs) or "інші ресурси"
+            parts = []
+            if dependent_characters:
+                parts.append(", ".join(f"персонаж {item['character_id']}" for item in dependent_characters))
+            if automatic_usage:
+                parts.append(
+                    ", ".join(item["label"] for item in automatic_usage)
+                    + " — оберіть інший дефолтний шаблон (COMFYUI_REFERENCE_WORKFLOW) перед видаленням"
+                )
+            if dependent_jobs:
+                parts.append(", ".join(f"завдання {item['job_id']}" for item in dependent_jobs))
+            references = "; ".join(parts) or "інші ресурси"
             raise WorkflowInUseError(
                 message="Робочий процес використовується у: " + references
                 + " (referenced by other resources); використовуйте force=true to delete anyway.",

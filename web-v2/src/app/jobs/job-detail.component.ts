@@ -259,7 +259,7 @@ export class JobDetailComponent implements OnInit, OnDestroy {
         this.jobsApi.delete(j.job_id).subscribe({
           next: () => {
             this.toast.show('Завдання видалено', 'success');
-            this.router.navigate(['/jobs']);
+            this.router.navigate([this.routePrefix + '/jobs']);
           },
           error: (err) => {
             this.toast.show(err.message || 'Помилка видалення', 'error');
@@ -269,8 +269,12 @@ export class JobDetailComponent implements OnInit, OnDestroy {
     });
   }
 
+  get routePrefix(): string {
+    return this.router.url.startsWith('/v3') ? '/v3' : '';
+  }
+
   goBack(): void {
-    this.router.navigate(['/jobs']);
+    this.router.navigate([this.routePrefix + '/jobs']);
   }
 
   canPause(): boolean {

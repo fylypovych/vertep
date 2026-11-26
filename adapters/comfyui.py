@@ -4,6 +4,31 @@ import json
 from pathlib import Path
 import httpx
 
+REFERENCE_PLACEHOLDER = "REFERENCE_IMAGE"
+TEXT_PLACEHOLDERS = frozenset({
+    "TOPIC",
+    "CHECKPOINT",
+    "SEED",
+    "WIDTH",
+    "HEIGHT",
+    "IPADAPTER_MODEL",
+    "CLIP_VISION_MODEL",
+})
+SUPPORTED_PLACEHOLDERS = TEXT_PLACEHOLDERS | {REFERENCE_PLACEHOLDER}
+
+
+def placeholder_values(topic: str) -> dict[str, str]:
+    """Runtime substitution mapping for ComfyUI workflow string placeholders."""
+    return {
+        "TOPIC": topic,
+        "CHECKPOINT": os.getenv("COMFYUI_CHECKPOINT", "model.safetensors"),
+        "SEED": os.getenv("COMFYUI_SEED", "42"),
+        "WIDTH": os.getenv("COMFYUI_WIDTH", "768"),
+        "HEIGHT": os.getenv("COMFYUI_HEIGHT", "432"),
+        "IPADAPTER_MODEL": os.getenv("COMFYUI_IPADAPTER_MODEL", "ip-adapter-plus_sdxl_vit-h.safetensors"),
+        "CLIP_VISION_MODEL": os.getenv("COMFYUI_CLIP_VISION_MODEL", "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"),
+    }
+
 def _substitute_placeholders(obj, mapping: dict[str, str]):
     """Recursively replace ``{{TOKEN}}`` placeholders inside a workflow structure.
 
@@ -34,10 +59,11 @@ def apply_references(workflow: dict, names: list[str]) -> dict:
     through ImageBatch. A workflow without that input fails: silently ignoring the
     references would render a different character.
     """
+    ref_token = f"{{{{{REFERENCE_PLACEHOLDER}}}}}"
     node_id = next((key for key, node in workflow.items()
-                    if node.get("inputs", {}).get("image") == "{{REFERENCE_IMAGE}}"), None)
+                    if node.get("inputs", {}).get("image") == ref_token), None)
     if node_id is None:
-        raise RuntimeError("Workflow has no {{REFERENCE_IMAGE}} input for the character references")
+        raise RuntimeError(f"Workflow has no {ref_token} input for the character references")
     workflow[node_id]["inputs"]["image"] = names[0]
     output = node_id
     for index, name in enumerate(names[1:], 1):
@@ -129,19 +155,10 @@ class ComfyUIAdapter:
         if not path.exists():
             raise FileNotFoundError(f"ComfyUI workflow not found: {workflow_path}")
         workflow = json.loads(path.read_text(encoding="utf-8"))
-        # API workflows may use {{TOPIC}}/{{CHECKPOINT}}/{{SEED}}/{{WIDTH}}/{{HEIGHT}}
-        # in any string input. Substitute inside the workflow structure so that
-        # arbitrary ``topic`` values (newlines, backslashes, quotes, Unicode)
-        # cannot corrupt the serialized JSON.
-        workflow = _substitute_placeholders(workflow, {
-            "TOPIC": topic,
-            "CHECKPOINT": os.getenv("COMFYUI_CHECKPOINT", "model.safetensors"),
-            "SEED": os.getenv("COMFYUI_SEED", "42"),
-            "WIDTH": os.getenv("COMFYUI_WIDTH", "768"),
-            "HEIGHT": os.getenv("COMFYUI_HEIGHT", "432"),
-            "IPADAPTER_MODEL": os.getenv("COMFYUI_IPADAPTER_MODEL", "ip-adapter-plus_sdxl_vit-h.safetensors"),
-            "CLIP_VISION_MODEL": os.getenv("COMFYUI_CLIP_VISION_MODEL", "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"),
-        })
+        # API workflows may use SUPPORTED_PLACEHOLDERS in string inputs. Substitute
+        # inside the workflow structure so that arbitrary ``topic`` values
+        # (newlines, backslashes, quotes, Unicode) cannot corrupt serialized JSON.
+        workflow = _substitute_placeholders(workflow, placeholder_values(topic))
         if references:
             workflow = apply_references(
                 workflow, [self._upload_reference(name, data) for name, data in references])

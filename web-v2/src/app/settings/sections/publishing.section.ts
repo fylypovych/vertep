@@ -1,9 +1,9 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, OnInit, computed, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { TimeoutError, timeout } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { IntegrationStatus } from '../../core/models';
 import { SettingsApiService } from '../../core/api/settings.api';
 import { ToastService } from '../../core/services/toast.service';
@@ -21,7 +21,7 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
   template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-publishing">
     <h3 class="text-lg font-semibold mb-1">{{ 'Публікація' | t }}</h3>
     <p class="text-sm text-slate-600 mb-4" data-testid="publishing-brands-hint">{{ 'Куди публікувати, вирішують бренди: канал і його облікові дані задаються в' | t }}
-      <a routerLink="/brands" class="text-blue-700">«{{ 'Бренди → Канали' | t }}»</a>. {{ 'Тут — загальні параметри та спільні облікові дані.' | t }}</p>
+      <a [routerLink]="[routePrefix + '/brands']" class="text-blue-700">«{{ 'Бренди → Канали' | t }}»</a>. {{ 'Тут — загальні параметри та спільні облікові дані.' | t }}</p>
     <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="publishing-error">{{ error()! | t }}</div>
     <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-public-url">{{ 'Публічна адреса Vertep' | t }}</label>
     <input id="publishing-public-url" data-testid="publishing-public-url" [ngModel]="publicUrl()" (ngModelChange)="publicUrl.set($event)" [disabled]="!canEdit()"
@@ -43,6 +43,8 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
   </div>`,
 })
 export class PublishingSectionComponent implements OnInit {
+  private readonly router = inject(Router);
+  get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
   publicUrl = signal('');
   saving = signal(false);
   error = signal<string | null>(null);

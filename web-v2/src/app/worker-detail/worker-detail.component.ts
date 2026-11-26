@@ -19,7 +19,7 @@ import { VertepDatePipe } from '../shared/vertep-date.pipe';
   template: `
     <div class="space-y-5" data-testid="worker-detail-page">
       <div class="flex items-center gap-4">
-        <a routerLink="/workers" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">{{ '&larr; Назад до воркерів' | t }}</a>
+        <a [routerLink]="[routePrefix + '/workers']" class="text-emerald-600 hover:text-emerald-700 text-sm font-medium">{{ '&larr; Назад до воркерів' | t }}</a>
         @if (node()) {
           <h2 class="text-xl font-semibold text-slate-900">{{ node()!.node_name }}</h2>
         }
@@ -326,11 +326,15 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
     });
   }
 
+  get routePrefix(): string {
+    return this.router.url.startsWith('/v3') ? '/v3' : '';
+  }
+
   runAction(action: NodeActionPayload): void {
     if (action.action === 'logs') {
       const nodeName = this.node()?.node_name;
       if (nodeName) {
-        this.router.navigate(['/logs'], { queryParams: { node_name: nodeName } });
+        this.router.navigate([this.routePrefix + '/logs'], { queryParams: { node_name: nodeName } });
       }
       return;
     }
@@ -354,7 +358,7 @@ export class WorkerDetailComponent implements OnInit, OnDestroy {
       next: () => {
         this.actioning.set(false);
         this.toast.show('Вузол відкликано', 'success');
-        this.router.navigate(['/workers']);
+        this.router.navigate([this.routePrefix + '/workers']);
       },
       error: (err) => {
         this.actioning.set(false);

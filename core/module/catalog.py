@@ -13,7 +13,9 @@ from .lifecycle import BUNDLED, bundled_manifest
 from .manifest import ModuleManifest
 
 BUNDLED_LABELS = {"text": "Текст і сценарії", "image": "Зображення та відео", "audio": "Голос",
-                  "publisher": "Публікація", "backup": "Резервні копії", "characters": "Персонажі", "brands": "Бренди", "storyboard": "Сторіборд", "publishing": "Публікація", "monitoring": "Моніторинг", "web-ui": "Web UI"}
+                  "publisher": "Публікація", "backup": "Резервні копії", "characters": "Персонажі", "brands": "Бренди", "storyboard": "Сторіборд", "monitoring": "Моніторинг", "web-ui": "Web UI"}
+# Legacy bundled module IDs merged into another official module (hide stale on-disk records).
+RETIRED_BUNDLED = frozenset({"publishing"})
 
 
 def _deployed_roles(node: dict) -> set[str]:
@@ -117,6 +119,8 @@ def catalog(runtime) -> dict:
     for module_id in BUNDLED:
         entries[module_id] = (ModuleManifest.from_dict(bundled_manifest(module_id)), True)
     for module_id, record in records.items():
+        if module_id in RETIRED_BUNDLED:
+            continue
         if module_id not in entries:
             entries[module_id] = (ModuleManifest.from_dict(record["package"]["manifest"]), False)
         elif "bundled" not in (record.get("package") or {"bundled": True}):

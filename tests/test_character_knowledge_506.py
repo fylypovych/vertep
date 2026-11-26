@@ -718,6 +718,94 @@ def test_k4_context_api_gateway_profiles_hybrid_search_budget_and_snapshot_pinni
     assert added_item["item_id"] not in [r["item_id"] for r in snap["item_refs"]]
 
 
+@pytest.mark.parametrize("task_type", ["video", "voice"])
+def test_voice_dispatch_pins_context_and_blocks_retry_after_revocation(
+    knowledge_env, monkeypatch, task_type,
+):
+    from core.api.job_helpers.dispatch import _dispatch_assets, _dispatch_tts
+    from core.api.job_helpers.scene_tasks import _enqueue_job_task
+    from core.api.job_helpers.tts import _enqueue_tts_task
+    from core.state import store, task_queue
+    from worker import role_executor
+
+    env = knowledge_env
+    profile = complete_profile("narrator")
+    profile["voice"] = {"provider": "espeak-ng", "voice": "uk", "language": "uk"}
+    assert _mod_call(env, "POST", "/characters?brand_id=brand-a", body=profile)[0] == 201
+    assert _mod_call(env, "POST", "/characters/narrator/activate?brand_id=brand-a")[0] == 200
+    status, item = _mod_call(
+        env, "POST", "/characters/narrator/knowledge/items?brand_id=brand-a",
+        body={"layer": "memory", "title": "Степ", "content": "Оповідач бачить степ.",
+              "truth_status": "verified", "risk_level": "low"},
+    )
+    assert status == 201
+
+    narration = "Оповідач бачить степ."
+    job = store.create(narration, "narrator", 5, task_type=task_type, brand_id="brand-a")
+    job.script = {"scenes": [{"prompt": "Степ", "voiceover": narration, "duration": 2}]}
+    if task_type == "video":
+        _dispatch_tts(store, job)
+    else:
+        monkeypatch.setenv("LOCAL_WORKER_FALLBACK", "0")
+        _dispatch_assets(store, job)
+
+    task = task_queue.claim()
+    assert task["job_id"] == job.job_id and task["task"] == "voice"
+    snapshot = job.voice_knowledge_snapshot
+    assert snapshot["profile"] == "voice"
+    assert snapshot["item_ids"] == [item["item_id"]]
+    assert task["knowledge_snapshot_id"] == snapshot["snapshot_id"]
+    restored_job = next(saved for saved in store.repository.load_jobs() if saved.job_id == job.job_id)
+    assert restored_job.voice_knowledge_snapshot == snapshot
+
+    def synthesize(_http, _endpoint, *, json, timeout):
+        assert json["text"] == narration
+        assert "knowledge_snapshot_id" not in json
+        return role_executor.httpx.Response(
+            200, content=b"RIFF-test-audio", headers={"content-type": "audio/wav"},
+            request=role_executor.httpx.Request("POST", _endpoint),
+        )
+
+    monkeypatch.setattr(role_executor, "migration_post", synthesize)
+    [artifact] = execute_role_task("voice", task)
+    assert artifact["contract"]["mime_type"] == "audio/wav"
+    task_queue.ack(task["task_id"])
+
+    status, _ = _mod_call(
+        env, "POST", "/characters/narrator/knowledge/revocations?brand_id=brand-a",
+        body={"target_type": "item", "target_id": item["item_id"], "action": "revoke",
+              "reason": "Джерело відкликано", "legal_block": True},
+    )
+    assert status == 201
+    enqueue = _enqueue_tts_task if task_type == "video" else _enqueue_job_task
+    assert enqueue(job, job.scenes[0]) is None
+    assert job.status == JobStatus.FAILED
+    assert task_queue.claim() is None
+    with pytest.raises(KnowledgeRightsBlocked):
+        verify_job_publish_rights(restored_job)
+
+    from core.api import tasks
+    from core.models import TaskClaim
+
+    monkeypatch.setattr(tasks, "dispatch_allowed", lambda: True)
+    monkeypatch.setattr(tasks, "hold_gpu_for_laboratory", lambda worker: False)
+    monkeypatch.setattr("core.shared_content.publication_allowed", lambda *_: (True, ""))
+    monkeypatch.setitem(store.workers, "publisher-node", {"node_name": "publisher-node"})
+    pending = task_queue.enqueue({"job_id": job.job_id, "task": "publish", "channel": "youtube"})
+    job.publish_task_ids = {pending["task_id"]: "youtube"}
+    store.update(job, JobStatus.PUBLISHING, "PUBLICATION QUEUED")
+    claim = TaskClaim(node_name="publisher-node")
+    with monkeypatch.context() as patch:
+        patch.setattr("core.knowledge_context.call_module", lambda *args, **kwargs: None)
+        assert tasks._claim_task(claim)["task"] is None
+        assert job.publish_task_ids == {pending["task_id"]: "youtube"}
+        assert task_queue.depth() == 1
+    assert tasks._claim_task(claim)["task"] is None
+    assert job.publish_task_ids == {}
+    assert job.status == JobStatus.READY
+    assert task_queue.depth() == 0
+
+
 # ---------------------------------------------------------------------------
 # K5: Versioned canon, isolated timelines, explicit event transfer & migration
 # ---------------------------------------------------------------------------

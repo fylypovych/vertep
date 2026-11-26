@@ -1,5 +1,5 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnInit, signal, OnDestroy } from '@angular/core';
+import { Component, Input, OnInit, signal, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
@@ -32,10 +32,12 @@ import { RemoteState } from '../core/state/remote-state';
         }
       </div>
 
-      <div class="mb-4 flex gap-2 border-b border-slate-200">
-        <button (click)="setView('list')" [class.border-b-2]="view() === 'list'" [class.border-emerald-600]="view() === 'list'" [class.text-emerald-700]="view() === 'list'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Список' | t }}</button>
-        <button (click)="setView('queue')" [class.border-b-2]="view() === 'queue'" [class.border-emerald-600]="view() === 'queue'" [class.text-emerald-700]="view() === 'queue'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Черга виконання' | t }}</button>
-      </div>
+      @if (!hideViewTabs) {
+        <div class="mb-4 flex gap-2 border-b border-slate-200">
+          <button (click)="setView('list')" [class.border-b-2]="view() === 'list'" [class.border-emerald-600]="view() === 'list'" [class.text-emerald-700]="view() === 'list'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Список' | t }}</button>
+          <button (click)="setView('queue')" [class.border-b-2]="view() === 'queue'" [class.border-emerald-600]="view() === 'queue'" [class.text-emerald-700]="view() === 'queue'" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900">{{ 'Черга виконання' | t }}</button>
+        </div>
+      }
 
       @if (view() === 'list') {
         <div class="mb-4 grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
@@ -153,7 +155,7 @@ import { RemoteState } from '../core/state/remote-state';
                         <span class="text-sm font-medium text-slate-900">{{ job.topic }}</span>
                         <p class="text-xs text-slate-500">ID: {{ job.job_id }} {{ '· Заплановано:' | t }} {{ job.scheduled_for | vertepDate }}</p>
                       </div>
-                      <a [routerLink]="['/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
+                      <a [routerLink]="[routePrefix + '/jobs', job.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                     </div>
                   }
                 </div>
@@ -170,7 +172,7 @@ import { RemoteState } from '../core/state/remote-state';
                         <span class="text-sm font-medium text-slate-900">{{ task.task }}</span>
                         <p class="text-xs text-slate-500">{{ 'Задача:' | t }} {{ task.task_id }} {{ '· Сцена:' | t }} {{ task.scene_id }}</p>
                       </div>
-                      <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
+                      <a [routerLink]="[routePrefix + '/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                     </div>
                   }
                 </div>
@@ -187,7 +189,7 @@ import { RemoteState } from '../core/state/remote-state';
                         <span class="text-sm font-medium text-slate-900">{{ task.task }}</span>
                         <p class="text-xs text-slate-500">{{ 'Задача:' | t }} {{ task.task_id }} {{ '· Сцена:' | t }} {{ task.scene_id }}</p>
                       </div>
-                      <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
+                      <a [routerLink]="[routePrefix + '/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                     </div>
                   }
                 </div>
@@ -206,7 +208,7 @@ import { RemoteState } from '../core/state/remote-state';
                         <p class="text-xs text-red-600">{{ task.error }}</p>
                       </div>
                       <div class="flex gap-2">
-                        <a [routerLink]="['/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
+                        <a [routerLink]="[routePrefix + '/jobs', task.job_id]" class="text-xs text-emerald-600 hover:text-emerald-700 font-medium">{{ 'Відкрити' | t }}</a>
                         <button (click)="retryTask(task.task_id)" [disabled]="retrying() === task.task_id" class="text-xs px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50">
                           {{ (retrying() === task.task_id ? 'Повтор...' : 'Повторити') | t }}
                         </button>
@@ -317,6 +319,7 @@ import { RemoteState } from '../core/state/remote-state';
   `,
 })
 export class JobsComponent implements OnInit, OnDestroy {
+  @Input() hideViewTabs = false;
   view = signal<'list' | 'queue'>('list');
   pagedJobs = signal<Job[]>([]);
   total = signal(0);
@@ -391,7 +394,25 @@ export class JobsComponent implements OnInit, OnDestroy {
     }
   }
 
+  get routePrefix(): string {
+    return this.router.url.startsWith('/v3') ? '/v3' : '';
+  }
+
+  applyView(v: 'list' | 'queue'): void {
+    this.view.set(v);
+    if (v === 'queue') this.startQueuePolling();
+    else this.stopQueuePolling();
+  }
+
   setView(v: 'list' | 'queue'): void {
+    if (this.router.url.startsWith('/v3')) {
+      this.applyView(v);
+      void this.router.navigate(['/v3/jobs'], {
+        queryParams: { ...this.route.snapshot.queryParams, tab: v },
+        replaceUrl: true,
+      });
+      return;
+    }
     void this.router.navigate([v === 'queue' ? '/queue' : '/jobs'], {
       queryParams: { ...this.route.snapshot.queryParams, tab: null },
     });
@@ -562,13 +583,13 @@ export class JobsComponent implements OnInit, OnDestroy {
   }
 
   openJob(id: string): void {
-    this.router.navigate(['/jobs', id]);
+    this.router.navigate([this.routePrefix + '/jobs', id]);
   }
 
   allowed(action: string, status: string): boolean { return jobActionAllowed(action, status); }
 
   editJob(id: string): void {
-    this.router.navigate(['/jobs', id], { queryParams: { edit: '1' } });
+    this.router.navigate([this.routePrefix + '/jobs', id], { queryParams: { edit: '1' } });
   }
 
   runJobAction(id: string, action: 'pause' | 'resume' | 'cancel'): void {

@@ -7,12 +7,14 @@ from pathlib import Path
 import httpx
 
 from ...dispatcher import available_worker
+from ...models import StageName
 from ...state import (
     store,
     task_queue,
     workflow_registry,
 )
 from .._internal import _internal_auth_headers
+from .tts import _authorize_voice_task
 
 
 def _select_worker(
@@ -106,8 +108,12 @@ def _enqueue_job_task(
         scene=None,
         *,
         new_attempt: bool = False,
-        delay: float = 0) -> dict:
+        delay: float = 0) -> dict | None:
     task = _task_for(job, scene)
+    if job.task_type == "voice" and not _authorize_voice_task(
+        job, task, StageName.ASSETS, query=task["topic"]
+    ):
+        return None
     if delay:
         task["not_before"] = time.time() + delay
     queued = task_queue.enqueue(task, new_attempt=new_attempt)

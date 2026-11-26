@@ -392,3 +392,21 @@ def test_signed_bundle_contains_complete_observer_contract(tmp_path):
     probe.write_bytes(altered)
     with pytest.raises(RuntimeError, match='digest mismatch'):
         validate_release_contract(manifest, bundle, public)
+
+
+def test_explicit_text_role_not_dropped_after_managed_text_selection(client):
+    """Previously staged managed_text must not strip an explicitly chosen 'text' role."""
+    api, root, _ = client
+    assert api.post('/api/setup/selection', json={'node_role': 'core', 'ai_backend': 'ollama'}).status_code == 200
+    assert json.loads((root / 'setup-selection.json').read_text())['managed_text'] is True
+
+    resp = api.post('/api/setup/selection', json={
+        'node_role': 'core',
+        'ai_backend': 'skip',
+        'additional_roles': ['backup', 'publisher', 'text', 'voice'],
+    })
+    assert resp.status_code == 200
+    saved = json.loads((root / 'setup-selection.json').read_text())
+    assert saved['additional_roles'] == ['backup', 'publisher', 'text', 'voice']
+    req = json.loads((root / 'deployment-request.json').read_text())
+    assert req['additional_roles'] == ['backup', 'publisher', 'text', 'voice']

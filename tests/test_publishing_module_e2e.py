@@ -20,7 +20,7 @@ from core.models import Channel, JobStatus, VideoVersion
 
 pytestmark = pytest.mark.strict_channel_credentials
 WORKER = {"X-Vertep-Token": "worker-token"}
-MODULE_DIR = Path(__file__).resolve().parents[1] / "modules" / "publishing"
+MODULE_DIR = Path(__file__).resolve().parents[1] / "modules" / "publisher" / "app"
 
 
 @pytest.fixture
@@ -154,8 +154,8 @@ def test_automatic_policy_publishes_after_approval_and_waits_for_foreign_owners(
 
 
 def test_publishing_module_acts_only_for_a_verified_user_on_its_own_brand(env, monkeypatch):
+    import yaml
     from core.module.gateway import issue_token, issue_user_context, read_audit
-    from core.module.lifecycle import bundled_manifest
     from core.module.manifest import ModuleManifest
     from core.state import store, task_queue
     from core.workflow.runtime import WorkflowRuntime
@@ -170,9 +170,9 @@ def test_publishing_module_acts_only_for_a_verified_user_on_its_own_brand(env, m
     monkeypatch.setattr("core.workflow.runtime.workflow_runtime", lambda: runtime)
     monkeypatch.setenv("USERS_JSON", json.dumps({"mod-a": {"password_hash": "x", "role": "moderator", "brands": ["brand-a"]}}))
     monkeypatch.syspath_prepend(str(MODULE_DIR))
-    import publishing_module
-    token = issue_token("publishing", "text-node")
-    monkeypatch.setattr(publishing_module, "TOKEN", token)
+    import publisher_app
+    token = issue_token("publisher", "text-node")
+    monkeypatch.setattr(publisher_app, "TOKEN", token)
 
     def core(method, path, body=None, user_context=""):
         headers = {"x-vertep-module-token": token, "Authorization": ""}
@@ -180,14 +180,14 @@ def test_publishing_module_acts_only_for_a_verified_user_on_its_own_brand(env, m
             headers["x-vertep-user-context"] = user_context
         response = client.request(method, path, json=body, headers=headers)
         return response.status_code, response.json()
-    monkeypatch.setattr(publishing_module, "_core", core)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), publishing_module.Handler)
+    monkeypatch.setattr(publisher_app, "_core", core)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), publisher_app.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    manifest = ModuleManifest.from_dict(bundled_manifest("publishing"))
+    manifest = ModuleManifest.from_dict(yaml.safe_load((MODULE_DIR / "manifest.yaml").read_text(encoding="utf-8")))
     runtime.modules.report_node("text-node", [{**manifest.to_dict(), "ready": True,
                                                "endpoint": f"http://127.0.0.1:{server.server_address[1]}"}])
-    runtime.modules.set_placement("publishing", ["text-node"])
-    runtime.modules.approve_permissions("publishing", list(manifest.permissions))
+    runtime.modules.set_placement("publisher", ["text-node"])
+    runtime.modules.approve_permissions("publisher", list(manifest.permissions))
     _channel("ch-a-mod", "brand-a")
     client.put("/api/channels/ch-a-mod/credentials", json={"secrets": {"telegram_publisher_bot_token": "A-TOKEN"}})
     own, foreign = _ready_job("brand-a"), _ready_job("brand-c")
@@ -206,16 +206,16 @@ def test_publishing_module_acts_only_for_a_verified_user_on_its_own_brand(env, m
         return status
 
     try:
-        context = issue_user_context("mod-a", "moderator", "publishing")
+        context = issue_user_context("mod-a", "moderator", "publisher")
         assert act(foreign.job_id, context) == 403  # not this moderator's brand
         assert act(own.job_id, "forged") == 401
         assert act(own.job_id, issue_user_context("mod-a", "moderator", "characters")) == 401  # another module's context
-        assert act(own.job_id, issue_user_context("mod-a", "moderator", "publishing", now=time.time() - 3600)) == 401
-        assert act(own.job_id, issue_user_context("mod-a", "admin", "publishing")) in {200, 403}  # role re-derived
+        assert act(own.job_id, issue_user_context("mod-a", "moderator", "publisher", now=time.time() - 3600)) == 401
+        assert act(own.job_id, issue_user_context("mod-a", "admin", "publisher")) in {200, 403}  # role re-derived
         assert act(own.job_id, context) == 200 or store.jobs[own.job_id].status == JobStatus.PUBLISHING
         assert store.jobs[own.job_id].status == JobStatus.PUBLISHING
         published = [e for e in read_audit() if e["action"] == "module.publications.publish" and e["outcome"] == "allowed"]
-        assert published and published[-1]["actor"] == "mod-a" and published[-1]["module"] == "publishing"
+        assert published and published[-1]["actor"] == "mod-a" and published[-1]["module"] == "publisher"
         task = _claim(client, own.job_id)
         task_queue.ack(task["task_id"])
     finally:

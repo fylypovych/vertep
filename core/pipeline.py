@@ -287,10 +287,11 @@ def request_script_revision(store: JobStore, job: Job, revision: str, actor: str
 def regenerate_script(store: JobStore, job: Job, revision: str | None = None) -> Job:
     if job.status != JobStatus.SCRIPT_REVISION_REQUESTED:
         raise ValueError(f"Cannot regenerate script in status {job.status.value}")
-    if job.knowledge_snapshot:
+    if job.knowledge_snapshot or job.voice_knowledge_snapshot:
         from .knowledge_context import verify_job_rerun_rights
         verify_job_rerun_rights(job)
         job.knowledge_snapshot = None
+        job.voice_knowledge_snapshot = None
     # Issue #64 T3: carry the revision request forward.  Without this the
     # regenerated script is produced without the feedback that triggered the
     # revision, so the worker re-reads a stale prompt and the loop repeats.

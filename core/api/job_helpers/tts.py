@@ -8,6 +8,11 @@ from pathlib import Path
 
 from ...artifacts import register_artifact
 from ...configuration import load_character
+from ...knowledge_context import (
+    KnowledgeRightsBlocked,
+    KnowledgeVerificationUnavailable,
+    prepare_voice_knowledge,
+)
 from ...models import (
     JobStatus,
     StageName,
@@ -196,8 +201,26 @@ def _tts_backoff_seconds(job, scene) -> float:
     return min(cap, base ** max(0, attempt))
 
 
-def _enqueue_tts_task(job, scene, *, delay: float = 0) -> dict:
+def _authorize_voice_task(job, task: dict, stage: StageName, *, query: str) -> bool:
+    previous_snapshot = job.voice_knowledge_snapshot
+    try:
+        snapshot_id = prepare_voice_knowledge(job, query=query)
+    except (KnowledgeRightsBlocked, KnowledgeVerificationUnavailable) as error:
+        transition_stage(job, stage, StageStatus.FAILED, str(error))
+        store.update(job, JobStatus.FAILED, f"VOICE KNOWLEDGE CHECK FAILED: {error}")
+        return False
+    if job.voice_knowledge_snapshot is not previous_snapshot:
+        store.event(job, "VOICE KNOWLEDGE SNAPSHOT PINNED")
+    if snapshot_id:
+        task["knowledge_snapshot_id"] = snapshot_id
+    return True
+
+
+def _enqueue_tts_task(job, scene, *, delay: float = 0) -> dict | None:
     task = _tts_task_for(job, scene)
+    narration = "\n".join(item.voiceover for item in job.scenes if item.voiceover)
+    if not _authorize_voice_task(job, task, StageName.TTS, query=narration or task["topic"]):
+        return None
     if delay:
         task["not_before"] = time.time() + delay
     queued = task_queue.enqueue(task)
