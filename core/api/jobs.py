@@ -942,6 +942,13 @@ def publish_job(job_id: str, channels: list[str] | None = None):
     unknown = [channel for channel in targets if channel not in publisher.available_channels()]
     if unknown:
         raise HTTPException(400, f"Unknown publishers: {', '.join(unknown)}")
+    # A retry after partial success must not upload the same video version again (#538).
+    def already_published(channel: str) -> bool:
+        receipt = job.publication_results.get(channel) or {}
+        return receipt.get("status") == "PUBLISHED" and (
+            job.active_video_version is None
+            or str(receipt.get("video_version")) == str(job.active_video_version))
+    targets = [channel for channel in targets if not already_published(channel)]
     from .job_helpers import _enqueue_publish_task, _has_publisher_worker, _publish_local
     has_publisher = _has_publisher_worker(store)
     transition_stage(job, StageName.PUBLISH, StageStatus.RUNNING)

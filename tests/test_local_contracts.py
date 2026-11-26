@@ -259,6 +259,19 @@ def test_worker_heartbeat_exposes_gtx_1660_profile(monkeypatch):
     assert metrics["driver_version"] == "550.54.14"
 
 
+def test_multi_gpu_worker_reports_the_largest_single_gpu(monkeypatch):
+    """#538 AC5: a task needing 10 GB must not land on a node with two 6 GB cards."""
+    class Result:
+        stdout = ("NVIDIA GeForce GTX 1660, 6144, 5000, 51, 12, 550.54.14, 7.5\n"
+                  "NVIDIA GeForce GTX 1660, 6144, 5900, 48, 3, 550.54.14, 7.5\n")
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: Result())
+    metrics = gpu_info()
+    assert metrics["gpu_count"] == 2
+    assert metrics["vram_mb"] == 6144 and metrics["free_vram_mb"] == 5900
+    assert [gpu["free_vram_mb"] for gpu in metrics["gpus"]] == [5000, 5900]
+
+
 def test_comfyui_worker_is_loopback_only_and_uses_gpu_profile():
     unit = open("installer/vertep-comfyui.service", encoding="utf-8").read()
     installer = open("installer/install-comfyui.sh", encoding="utf-8").read()
@@ -301,6 +314,22 @@ def test_maintenance_dry_run_and_cleanup(tmp_path):
     os.utime(temporary, (time.time() - 3600, time.time() - 3600))
     assert str(temporary) in cleanup_temporary_files(tmp_path, older_than_hours=0, dry_run=False)
     assert not temporary.exists()
+
+
+def test_cleanup_removes_stale_part_leftovers_only(tmp_path):
+    """#538 AC7: ``.part`` files a killed write left behind are removed once stale;
+    fresh (active) ones and numbered backup chunks are kept."""
+    stale = [tmp_path / "job" / ".video.abcd1234.part.mp4", tmp_path / "job" / ".audio.wav.abcd1234.part"]
+    fresh = tmp_path / "job" / ".image.png.efgh5678.part"
+    chunk = tmp_path / "backup.vtbackup.part0001"
+    for path in (*stale, fresh, chunk):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    for path in (*stale, chunk):
+        os.utime(path, (time.time() - 48 * 3600, time.time() - 48 * 3600))
+    removed = cleanup_temporary_files(tmp_path, older_than_hours=24, dry_run=False)
+    assert sorted(removed) == sorted(str(path) for path in stale)
+    assert fresh.exists() and chunk.exists() and not any(path.exists() for path in stale)
 
 
 def test_api_routes_have_unique_method_path_pairs():

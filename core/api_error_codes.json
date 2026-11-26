@@ -86,6 +86,7 @@
  "Post-restore health checks failed": "post_restore_health_checks_failed",
  "Publish input is no longer owned by this worker": "publish_input_is_no_longer_owned_by_this_worker",
  "Publish result does not match the active task lease": "publish_result_does_not_match_the_active_task_lease",
+ "Image storyboard result does not match the active task lease": "image_storyboard_result_does_not_match_the_active_task_lease",
  "Published input version is no longer approved": "published_input_version_is_no_longer_approved",
  "Quarantined worker must be explicitly unquarantined": "quarantined_worker_must_be_explicitly_unquarantined",
  "Reference not found": "reference_not_found",

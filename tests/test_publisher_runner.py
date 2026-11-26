@@ -67,3 +67,24 @@ def test_the_worker_delegates_to_the_runner_with_its_own_helpers(monkeypatch):
     monkeypatch.setattr("publishers.runner.run_publication", fake)
     assert executor.execute_publisher({"job_id": "j", "channel": "youtube"}) == []
     assert seen["hooks"] == ["artifact", "core_base_url", "fetch_input", "secret_source", "upload", "use_task_secrets"]
+
+
+def test_configured_is_checked_with_the_task_secrets_from_core(monkeypatch, tmp_path):
+    """#538 AC1: a disposable Publisher Node has no DATABASE_URL or env tokens; the channel
+    is configured only by the per-task secrets CORE hands out."""
+    from publishers.runner import run_publication
+    from publishers.task_secrets import InMemoryTaskSecrets, task_secrets
+    from publishers.tiktok import TikTokPublisher
+    for name in ("PUBLISHER_MOCK", "DATABASE_URL", "TIKTOK_ACCESS_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("JOB_ROOT", str(tmp_path))
+    monkeypatch.setattr("core.first_run.ensure_secret_store", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
+    publisher = TikTokPublisher()
+    monkeypatch.setattr("publishers.LIVE_PUBLISHERS", {"tiktok": publisher})
+    uploaded = []
+    source = InMemoryTaskSecrets({"secrets": {"tiktok_access_token": "token"}})
+    result = receipt(run_publication(
+        {"job_id": "job-3", "channel": "tiktok", "video_path": ""},
+        **{**hooks([]), "secret_source": lambda task: source, "use_task_secrets": task_secrets,
+           "upload": lambda *args: uploaded.append(args) or {"status": "PUBLISHED", "id": "v1"}}))
+    assert result["status"] == "PUBLISHED" and uploaded

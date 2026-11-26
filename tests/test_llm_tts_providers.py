@@ -10,6 +10,7 @@ import struct
 from pathlib import Path
 
 import httpx
+import pytest
 
 from adapters.providers import get_providers
 from adapters.providers.tts_backends import KokoroProvider, PiperProvider
@@ -129,19 +130,23 @@ def test_piper_provider_cli_writes_real_wav(tmp_path, monkeypatch):
 def test_piper_provider_http(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_post(url, json=None, timeout=None):
         captured["url"] = url
-        captured["params"] = params
+        captured["json"] = json
         return _Resp(content=_make_wav(1.0))
 
-    monkeypatch.setattr(httpx, "get", fake_get)
+    # #538 AC9: the standard Piper HTTP contract is POST / with JSON, not GET /synthesize.
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: pytest.fail("GET is not the Piper API"))
+    monkeypatch.setattr(httpx, "post", fake_post)
     provider = PiperProvider(url="http://localhost:5000", voice_id="42")
     output = tmp_path / "voice.wav"
     result = provider.synthesize("текст", output)
     assert result["provider"] == "piper"
-    assert captured["url"] == "http://localhost:5000/synthesize"
-    assert captured["params"]["speaker_id"] == "42"
+    assert captured["url"] == "http://localhost:5000/"
+    assert captured["json"] == {"text": "текст", "speaker_id": 42}
     assert output.stat().st_size > 100
+    PiperProvider(url="http://localhost:5000", voice_id="uk_UA-ukrainian_tts-medium").synthesize("т", output)
+    assert captured["json"] == {"text": "т", "speaker": "uk_UA-ukrainian_tts-medium"}
 
 
 def test_piper_provider_configured_http_without_binary():

@@ -308,3 +308,25 @@ def test_worker_rejects_signature_only_media_for_runtime_inventory():
     # Truncated video
     with pytest.raises(RuntimeError, match="media signature"):
         verify_media(b"\x00\x00\x00", ".mp4")
+
+
+def test_amd_dockerfile_has_runtime_parity_with_nvidia():
+    """#538 AC8: the AMD image ships VHS (VHS_VideoCombine), records VHS and IPAdapter in
+    runtime-inventory.json and publishes it to /data/runtime-report, like NVIDIA."""
+    from pathlib import Path
+
+    docker = Path(__file__).parents[1] / "docker"
+    amd = (docker / "comfyui-amd" / "Dockerfile").read_text(encoding="utf-8")
+    nvidia = (docker / "comfyui-nvidia" / "Dockerfile").read_text(encoding="utf-8")
+    for argument in ("COMFYUI_COMMIT", "VHS_COMMIT", "IPADAPTER_COMMIT"):
+        pin = re.search(rf"^ARG {argument}=([0-9a-f]{{40}})$", nvidia, re.MULTILINE)
+        assert pin and f"ARG {argument}={pin.group(1)}" in amd, argument
+        assert f'fetch --depth 1 origin "${argument}"' in amd
+    assert "ComfyUI-VideoHelperSuite/requirements.txt" in amd
+    assert '"ComfyUI-VideoHelperSuite": {"version": vhs_pin' in amd
+    assert '"ComfyUI_IPAdapter_plus": {"version": ipadapter_pin' in amd
+    assert "runtime build pin mismatch" in amd
+    assert "COPY docker/comfyui-nvidia/entrypoint.sh /usr/local/bin/vertep-comfyui-entrypoint.sh" in amd
+    assert 'ENTRYPOINT ["/usr/local/bin/vertep-comfyui-entrypoint.sh"]' in amd
+    entrypoint = (docker / "comfyui-nvidia" / "entrypoint.sh").read_text(encoding="utf-8")
+    assert "/data/runtime-report" in entrypoint

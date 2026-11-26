@@ -236,6 +236,44 @@ def test_tiktok_three_step(monkeypatch, tmp_path):
     assert result["status_info"]["status"] == "SEND_TO_USER_FEED"
 
 
+def _tiktok_flow(*statuses):
+    return FakeTransport([
+        httpx.Response(200, json={"data": {"upload_url": "https://upload.tiktok.example/seg",
+                                           "publish_id": "pub-2"}}),
+        httpx.Response(200, json={"status_code": 0}),
+        *[httpx.Response(200, json={"data": status}) for status in statuses],
+    ])
+
+
+def test_tiktok_polls_status_until_terminal(monkeypatch, tmp_path):
+    """#538 AC2: PROCESSING_UPLOAD is not a publication; poll until PUBLISH_COMPLETE."""
+    monkeypatch.setenv("TIKTOK_ACCESS_TOKEN", "tk-token")
+    monkeypatch.setattr("publishers.tiktok.time.sleep", lambda seconds: None)
+    fake = _tiktok_flow({"status": "PROCESSING_UPLOAD"}, {"status": "PUBLISH_COMPLETE"})
+    result = TikTokPublisher(transport=fake).publish(_mp4(tmp_path), {"title": "t"})
+    assert result["status"] == "PUBLISHED"
+    assert [m for m, *_ in fake.requests] == ["POST", "PUT", "POST", "POST"]
+
+
+def test_tiktok_failed_processing_is_not_published(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIKTOK_ACCESS_TOKEN", "tk-token")
+    monkeypatch.setattr("publishers.tiktok.time.sleep", lambda seconds: None)
+    fake = _tiktok_flow({"status": "PROCESSING_UPLOAD"}, {"status": "FAILED", "fail_reason": "file_format_check_failed"})
+    result = TikTokPublisher(transport=fake).publish(_mp4(tmp_path), {"title": "t"})
+    assert result["status"] == "FAILED" and result["retryable"] is False
+    assert "file_format_check_failed" in result["error"]
+
+
+def test_tiktok_status_timeout_is_an_unknown_outcome(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIKTOK_ACCESS_TOKEN", "tk-token")
+    monkeypatch.setattr("publishers.tiktok.time.sleep", lambda seconds: None)
+    publisher = TikTokPublisher(transport=_tiktok_flow({"status": "PROCESSING_UPLOAD"}))
+    publisher.status_timeout_seconds = 0
+    result = publisher.publish(_mp4(tmp_path), {"title": "t"})
+    assert result["status"] == "FAILED" and result["outcome_unknown"] is True
+    assert result["remote_id"] == "pub-2"
+
+
 def test_tiktok_requires_local_file(monkeypatch, tmp_path):
     monkeypatch.setenv("TIKTOK_ACCESS_TOKEN", "tk-token")
     result = TikTokPublisher(transport=FakeTransport([])).publish(

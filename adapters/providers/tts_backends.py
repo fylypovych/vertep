@@ -69,7 +69,7 @@ class PiperProvider(TTSProvider):
 
     Configuration:
 
-    * HTTP: ``PIPER_URL`` (e.g. ``http://localhost:5000``) — ``/synthesize``.
+    * HTTP: ``PIPER_URL`` (e.g. ``http://localhost:5000``) — ``POST /`` JSON.
     * CLI:  ``PIPER_BIN`` (default ``piper``) + ``PIPER_MODEL`` (.onnx).
     """
 
@@ -95,11 +95,12 @@ class PiperProvider(TTSProvider):
         return bool(self._model) and shutil.which(self._binary) is not None
 
     def _synthesize_http(self, text: str, output: Path) -> float:
-        url = f"{self._url}/synthesize"
-        params = {"text": text}
+        # Piper HTTP server (``python -m piper.http_server``): POST / with JSON, WAV back.
+        payload: dict = {"text": text}
         if self._voice_id:
-            params["speaker_id"] = self._voice_id
-        response = httpx.get(url, params=params, timeout=120)
+            voice = str(self._voice_id)
+            payload["speaker_id" if voice.isdigit() else "speaker"] = int(voice) if voice.isdigit() else voice
+        response = httpx.post(f"{self._url}/", json=payload, timeout=120)
         response.raise_for_status()
         output.write_bytes(response.content)
         return _wav_duration(output)

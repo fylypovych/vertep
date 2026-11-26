@@ -32,6 +32,8 @@ def test_release_builds_module_images_before_core_and_pins_them():
     for name in modules["strategy"]["matrix"]["name"]:
         assert (ROOT / "modules" / name / "Dockerfile").is_file()
     assert "build-module-images" in jobs["build-images"]["needs"]
+    pin = next(step["run"] for step in jobs["build-images"]["steps"] if step.get("name") == "Pin module images into the CORE build context")
+    assert f"-eq {len(modules['strategy']['matrix']['name'])}" in pin  # the pin check counts every matrix module
     steps = [step.get("name", "") for step in jobs["build-images"]["steps"]]
     assert steps.index("Pin module images into the CORE build context") < steps.index("Build and publish ${{ matrix.name }}")
     assert "COPY modules modules" in (ROOT / "Dockerfile").read_text()  # the CORE image carries bundled modules

@@ -11,6 +11,7 @@ upload URL and publish id, the raw bytes are PUT to that URL, then
 from __future__ import annotations
 
 import os
+import time
 from publishers.oauth import TikTokTokenProvider
 # duplicate import removed
 
@@ -18,12 +19,15 @@ from publishers.base import Publisher, check_response
 
 _INIT = "https://open.tiktokapis.com/v2/post/publish/video/init/"
 _STATUS = "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
+_PUBLISHED = {"PUBLISH_COMPLETE", "SEND_TO_USER_FEED"}
 
 
 class TikTokPublisher(Publisher):
     channel = "tiktok"
     credential_env = "TIKTOK_ACCESS_TOKEN"
     required_scopes = ["video.list", "video.publish", "video.upload"]
+    status_poll_seconds = 5.0
+    status_timeout_seconds = 300.0
 
     def _publish_live(self, video_path: str, metadata: dict) -> dict:
         token = TikTokTokenProvider().access_token()
@@ -79,11 +83,27 @@ class TikTokPublisher(Publisher):
         }
         if os.getenv("TIKTOK_X_TT_POST"):
             status_headers["X-Tt-Post"] = os.getenv("TIKTOK_X_TT_POST")
-        status = self.transport.post(
-            _STATUS, headers=status_headers, json={"publish_id": publish_id}
-        )
-        check_response(status)
-        status_info = status.json().get("data", {})
+        deadline = time.monotonic() + self.status_timeout_seconds
+        while True:
+            status = self.transport.post(
+                _STATUS, headers=status_headers, json={"publish_id": publish_id}
+            )
+            check_response(status)
+            status_info = status.json().get("data", {})
+            state = str(status_info.get("status") or "").upper()
+            if state in _PUBLISHED:
+                break
+            if state == "FAILED":
+                return {"channel": self.channel, "status": "FAILED", "retryable": False,
+                        "id": publish_id, "remote_id": publish_id, "status_info": status_info,
+                        "error": f"TikTok processing failed: {status_info.get('fail_reason') or 'unknown'}"}
+            if time.monotonic() >= deadline:
+                # The bytes are uploaded; a blind retry could post the video twice.
+                return {"channel": self.channel, "status": "FAILED", "retryable": False,
+                        "outcome_unknown": True, "id": publish_id, "remote_id": publish_id,
+                        "status_info": status_info,
+                        "error": f"TikTok processing did not finish in time (last status: {state or 'unknown'})"}
+            time.sleep(self.status_poll_seconds)
 
         return {
             "channel": self.channel,

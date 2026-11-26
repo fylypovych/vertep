@@ -11,8 +11,9 @@ to loopback, which is host-local and not reachable from other hosts.
 """
 
 import os
-import re
 from pathlib import Path
+
+import yaml
 
 from .node_registry import node_roles
 
@@ -27,8 +28,7 @@ WORKER_ROLE_SERVICES = {
 COMPOSE_FILES = ("docker-compose.yml", "deploy/docker-compose.yml",
                  "docker-compose.nvidia.yml", "docker-compose.amd.yml")
 
-_PORTS_BLOCK = re.compile(r"^(\s+)ports:\s*\[(?P<ports>[^\]]*)\]\s*$", re.MULTILINE)
-_SERVICE_KEY = re.compile(r"^  (?P<name>[A-Za-z0-9_.-]+):\s*$")
+_LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
 
 
 def non_core_role_services() -> set[str]:
@@ -50,26 +50,26 @@ def inbound_port_violations(compose_path: Path) -> list[dict]:
     except OSError:
         return []
     forbidden = non_core_role_services() | WORKER_ROLE_SERVICES
+    services = (yaml.safe_load(text) or {}).get("services") or {}
     violations: list[dict] = []
-    lines = text.splitlines()
-    current = None
-    for index, line in enumerate(lines):
-        match = _SERVICE_KEY.match(line)
-        if match:
-            current = match.group("name")
+    for name, service in services.items():
+        if name not in forbidden or not isinstance(service, dict):
             continue
-        port_match = _PORTS_BLOCK.match(line)
-        if not port_match or current is None or current not in forbidden:
-            continue
-        for raw in port_match.group("ports").split(","):
-            port = raw.strip().strip("\"'")
+        # Short ("8188:8188", inline or block list) and long (``published:``) syntax.
+        for entry in service.get("ports") or []:
+            if isinstance(entry, dict):
+                if entry.get("published") in (None, ""):
+                    continue
+                host_ip = str(entry.get("host_ip") or "")
+                port = f"{host_ip + ':' if host_ip else ''}{entry['published']}:{entry.get('target', '')}"
+            else:
+                port = str(entry).strip()
             if not port:
                 continue
             # Loopback-bound publications are host-local, not fleet-reachable.
-            if port.startswith("127.0.0.1:") or port.startswith("localhost:"):
+            if port.startswith(tuple(f"{address}:" for address in _LOOPBACK)):
                 continue
-            violations.append({"file": str(compose_path), "service": current,
-                               "port": port, "line": index + 1})
+            violations.append({"file": str(compose_path), "service": name, "port": port})
     return violations
 
 

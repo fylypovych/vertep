@@ -103,6 +103,7 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "post_restore_health_checks_failed": { uk: "Перевірки після відновлення не пройшли", en: "Post-restore health checks failed" },
   "publish_input_is_no_longer_owned_by_this_worker": { uk: "Дані для публікації вже не належать цьому вузлу", en: "Publish input is no longer owned by this worker" },
   "publish_result_does_not_match_the_active_task_lease": { uk: "Результат публікації не відповідає активній задачі", en: "Publish result does not match the active task lease" },
+  "image_storyboard_result_does_not_match_the_active_task_lease": { uk: "Результат розкадровки не відповідає активній задачі", en: "Image storyboard result does not match the active task lease" },
   "published_input_version_is_no_longer_approved": { uk: "Версію для публікації більше не затверджено", en: "Published input version is no longer approved" },
   "quarantined_worker_must_be_explicitly_unquarantined": { uk: "Вузол у карантині треба вивести з нього явно", en: "Quarantined worker must be explicitly unquarantined" },
   "reference_not_found": { uk: "Референс не знайдено", en: "Reference not found" },

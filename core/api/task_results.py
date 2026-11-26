@@ -68,6 +68,12 @@ def _text_task_lease(
 def image_storyboard_result(job, result: TaskResult):
     """Result of an image-storyboard task."""
     from ..image_storyboard import handle_image_result
+    # #538: fence before freeing the worker or changing the storyboard.
+    owned, reason = _text_task_lease(job, result.task_id, result.node_name)
+    if not owned:
+        store.event(job, f"IMAGE STORYBOARD RESULT {result.task_id} REJECTED: "
+                         f"{reason} (node={result.node_name})")
+        raise HTTPException(409, "Image storyboard result does not match the active task lease")
     worker = store.workers.get(result.node_name)
     if worker:
         desired_status = worker.get("desired_state")

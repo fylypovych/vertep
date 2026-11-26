@@ -513,8 +513,11 @@ def gpu_info() -> dict:
         if rows:
             profile = gpu_profile(rows[0][0], int(rows[0][1]), rows[0][6])
             info.update({"gpu_name": rows[0][0], "gpu_count": len(rows),
-                         "vram_mb": sum(int(row[1]) for row in rows),
-                         "free_vram_mb": sum(int(row[2]) for row in rows),
+                         # One task runs on one GPU: capacity is the largest single card (#538).
+                         "vram_mb": max(int(row[1]) for row in rows),
+                         "free_vram_mb": max(int(row[2]) for row in rows),
+                         "gpus": [{"index": index, "name": row[0], "vram_mb": int(row[1]),
+                                   "free_vram_mb": int(row[2])} for index, row in enumerate(rows)],
                          "temperature": max(float(row[3]) for row in rows),
                          "gpu_load": max(float(row[4]) for row in rows), "driver_version": rows[0][5],
                          "compute_capability": rows[0][6], "gpu_architecture": profile["architecture"],

@@ -90,3 +90,17 @@ def test_check_tolerates_a_missing_compose_file(tmp_path, monkeypatch):
     report = outbound_only.check_outbound_only(tmp_path)
     assert report["outbound_only"] is True
     assert report["violations"] == []
+
+
+def test_block_and_long_syntax_port_publication_is_detected(tmp_path, monkeypatch):
+    """#538 AC6: the standard multi-line ``ports:`` block and ``published:`` long syntax."""
+    path = _compose(tmp_path,
+                    "services:\n  comfyui:\n    ports:\n      - \"8188:8188\"\n"
+                    "      - \"127.0.0.1:9000:9000\"\n"
+                    "  tts:\n    ports:\n      - target: 5000\n        published: 5000\n"
+                    "      - target: 5001\n        published: 5001\n        host_ip: 127.0.0.1\n"
+                    "  core:\n    ports:\n      - \"8080:8080\"\n")
+    monkeypatch.setenv("NODE_ROLES_FILE", str(path / "node_roles.json"))
+    violations = outbound_only.inbound_port_violations(path / "docker-compose.yml")
+    assert [(item["service"], item["port"]) for item in violations] == [
+        ("comfyui", "8188:8188"), ("tts", "5000:5000")]

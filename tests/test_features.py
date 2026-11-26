@@ -314,6 +314,29 @@ def test_publish_partial_failure_mixed_channels(monkeypatch):
     assert job["status"] in ("FAILED", "PUBLISHING")
 
 
+def test_publish_retry_skips_channels_already_published(monkeypatch):
+    """#538 AC3: a retry after partial success re-queues only the channels that failed."""
+    monkeypatch.setenv("PUBLISHER_MOCK", "true")
+    monkeypatch.setenv("NODE_API_TOKEN", "worker-token")
+    client = TestClient(app)
+    job_id = client.post("/api/jobs", json={"topic": "Retry partial publish"}).json()["job_id"]
+    approve_script(client, job_id)
+    assert wait_for(client, job_id)["status"] == "READY"
+    _heartbeat_publisher(client)
+    job = store.jobs[job_id]
+    job.publication_results = {
+        "youtube": {"channel": "youtube", "status": "PUBLISHED", "video_version": job.active_video_version},
+        "tiktok": {"channel": "tiktok", "status": "FAILED", "error": "TikTok API error"}}
+    job.status = JobStatus.FAILED
+    queued = []
+    monkeypatch.setattr("core.api.job_helpers._enqueue_publish_task",
+                        lambda job_store, job, channel, *args, **kwargs:
+                        queued.append(channel) or {"task_id": f"task-{channel}"})
+    response = client.post(f"/api/jobs/{job_id}/publish", json=["youtube", "tiktok"])
+    assert response.status_code == 200, response.text
+    assert queued == ["tiktok"]
+
+
 def test_publish_retry_on_worker_failure(monkeypatch):
     """Publish task failure triggers retry; succeeds on second attempt."""
     monkeypatch.setenv("PUBLISHER_MOCK", "true")

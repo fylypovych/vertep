@@ -92,7 +92,11 @@ def run_publication(task: dict, *, artifact: Callable[[str, str, bytes], dict],
         return receiptartifact(receipt)
     from publishers import LIVE_PUBLISHERS
     publisher = LIVE_PUBLISHERS.get(channel)
-    if publisher is None or not publisher.configured():
+    # The node may have no DATABASE_URL/env tokens: credentials come from CORE per task.
+    secrets = secret_source(task)
+    with use_task_secrets(secrets):
+        configured = publisher is not None and publisher.configured()
+    if not configured:
         receipt = {"channel": channel, "status": "NOT_CONFIGURED",
                    "error": f"{publisher.credential_env if publisher else 'unknown'} is missing",
                    "timestamp": _time.time()}
@@ -143,7 +147,7 @@ def run_publication(task: dict, *, artifact: Callable[[str, str, bytes], dict],
         return receiptartifact(receipt)
     try:
         save_ledger("UPLOADING")
-        with use_task_secrets(secret_source(task)):
+        with use_task_secrets(secrets):
             # Stage 3 (#510/#511): the upload may run in the Publisher module container.
             result = (upload(publisher, channel, video_path, metadata) if upload is not None
                       else publisher.publish(video_path, metadata))

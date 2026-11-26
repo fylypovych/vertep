@@ -70,6 +70,11 @@ def test_image_storyboard_e2e(monkeypatch):
         time.sleep(0.01)
     assert tasks
     ppm=b"P6\n2 2\n255\n"+bytes((10,20,30))*4
+    # #538 AC4: a node that does not own the lease cannot complete the task or free the owner.
+    client.post("/api/workers/heartbeat", json={"node_name":"other-gpu","vram_mb":8192,"capabilities":["image_generation"],"supported_tasks":["image"]})
+    foreign=client.post("/api/tasks/result", json={"job_id":job_id,"task_id":tasks[-1]["task_id"],"node_name":"other-gpu","success":True,"artifacts":[{"filename":"preview.ppm","data_base64":base64.b64encode(ppm).decode()}]})
+    assert foreign.status_code==409, foreign.text
+    assert store.workers["gpu-worker"]["current_task"]==tasks[-1]["task_id"]
     for t in tasks:
         r=client.post("/api/tasks/result", json={"job_id":job_id,"task_id":t["task_id"],"node_name":"gpu-worker","success":True,"artifacts":[{"filename":"preview.ppm","data_base64":base64.b64encode(ppm).decode()}]})
         print("RESULT", r.status_code, r.text)
