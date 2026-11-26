@@ -566,6 +566,19 @@ def regenerate_job(job_id: str):
     ) or job.status == JobStatus.PUBLISHING
     if mid_render:
         raise HTTPException(409, "Cannot regenerate while render in progress")
+    if job.knowledge_snapshot:
+        from ..knowledge_context import (
+            KnowledgeRightsBlocked,
+            KnowledgeVerificationUnavailable,
+            verify_job_rerun_rights,
+        )
+        try:
+            verify_job_rerun_rights(job)
+        except KnowledgeVerificationUnavailable as error:
+            raise HTTPException(503, "Character knowledge rights verification is unavailable") from error
+        except KnowledgeRightsBlocked as error:
+            raise HTTPException(409, "Character knowledge rights were revoked for rerun") from error
+        job.knowledge_snapshot = None
     for task_id, scene_id in list(job.active_task_ids.items()):
         scene = next((item for item in job.scenes if item.scene_id == scene_id), None)
         if scene and scene.assigned_worker:
@@ -709,8 +722,13 @@ def regenerate_script_endpoint(job_id: str, body: ScriptRevision):
     job = store.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    from ..knowledge_context import KnowledgeRightsBlocked, KnowledgeVerificationUnavailable
     try:
         job = regenerate_script(store, job, body.revision)
+    except KnowledgeVerificationUnavailable as error:
+        raise HTTPException(503, "Character knowledge rights verification is unavailable") from error
+    except KnowledgeRightsBlocked as error:
+        raise HTTPException(409, "Character knowledge rights were revoked for rerun") from error
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
     executor.submit(_prepare_and_dispatch, job)
@@ -900,6 +918,18 @@ def publish_job(job_id: str, channels: list[str] | None = None):
         allowed, reason = publication_allowed(job, store.root)
     if not allowed:
         raise HTTPException(409, reason)
+    if job.knowledge_snapshot:
+        from ..knowledge_context import (
+            KnowledgeRightsBlocked,
+            KnowledgeVerificationUnavailable,
+            verify_job_publish_rights,
+        )
+        try:
+            verify_job_publish_rights(job)
+        except KnowledgeVerificationUnavailable as error:
+            raise HTTPException(503, "Character knowledge rights verification is unavailable") from error
+        except KnowledgeRightsBlocked as error:
+            raise HTTPException(409, "Publication is blocked by character knowledge legal or critical hold") from error
     targets = channels or ["youtube"]
     from ..channel_secrets import mock_publishing, mode
     from ..publishing_targets import brand_channel

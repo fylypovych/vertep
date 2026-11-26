@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .characters_logic import CharactersModule, InvalidCharacterId, health_check
+from .knowledge_logic import CharacterKnowledgeStore, KnowledgeError
 
 CORE = os.environ["VERTEP_CORE_URL"].rstrip("/")
 TOKEN = os.environ["VERTEP_MODULE_TOKEN"]
@@ -67,6 +68,41 @@ def _may_change(request_headers: dict, brand_id: str | None) -> bool:
     return brand_id in brands
 
 
+def _caller_role(request_headers: dict) -> str:
+    if request_headers.get("x-vertep-caller") == "core":
+        return "core"
+    return (request_headers.get("x-vertep-role") or "").strip()
+
+
+def _caller_actor(request_headers: dict) -> str:
+    if request_headers.get("x-vertep-caller") == "core":
+        return (request_headers.get("x-vertep-user") or "core").strip()
+    return (request_headers.get("x-vertep-user") or "api").strip()
+
+
+def _brand_in_caller_scope(request_headers: dict, brand_id: str | None) -> bool:
+    """2-level auth: moderator cannot query or act as a brand outside x-vertep-brands."""
+    role = _caller_role(request_headers)
+    if role in ("admin", "core"):
+        return True
+    if role != "moderator":
+        return False
+    raw = (request_headers.get("x-vertep-brands") or "").strip()
+    if raw == "*":
+        return True
+    brands = {item.strip() for item in raw.split(",") if item.strip()}
+    if not brand_id:
+        return bool(brands)
+    return brand_id in brands
+
+
+def _query_params(path: str) -> dict[str, str]:
+    from urllib.parse import parse_qs
+    query = path.split("?", 1)[1] if "?" in path else ""
+    parsed = parse_qs(query)
+    return {k: v[0] for k, v in parsed.items() if v}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: dict | bytes, kind: str = "application/json") -> None:
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -92,6 +128,201 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode())
 
+    def _handle_knowledge_get(self, parts: list[str], brand_id: str | None, qs: dict[str, str]) -> None:
+        if not _brand_in_caller_scope(self.headers, brand_id):
+            return self._send(403, {"error": "brand access required"})
+        char_id = parts[1]
+        role = _caller_role(self.headers)
+        try:
+            module = CharactersModule()
+            kstore = CharacterKnowledgeStore(module.characters_root)
+            section = parts[2]
+            if section == "knowledge":
+                if len(parts) == 4 and parts[3] == "sources":
+                    return self._send(200, kstore.list_sources(char_id, actor_brand=brand_id, actor_role=role))
+                if len(parts) == 5 and parts[3] == "sources":
+                    return self._send(200, kstore.get_source(char_id, parts[4], actor_brand=brand_id, actor_role=role))
+                if len(parts) == 6 and parts[3] == "sources" and parts[5] == "chunks":
+                    return self._send(200, kstore.list_chunks(char_id, parts[4], actor_brand=brand_id, actor_role=role))
+                if len(parts) == 4 and parts[3] == "items":
+                    return self._send(
+                        200,
+                        kstore.list_items(
+                            char_id,
+                            actor_brand=brand_id,
+                            actor_role=role,
+                            layer=qs.get("layer"),
+                            status=qs.get("status"),
+                            timeline_id=qs.get("timeline_id"),
+                        ),
+                    )
+                if len(parts) == 5 and parts[3] == "items":
+                    return self._send(200, kstore.get_item(char_id, parts[4], actor_brand=brand_id, actor_role=role))
+                if len(parts) == 4 and parts[3] == "policies":
+                    kstore._require_read_access(char_id, brand_id, role)
+                    return self._send(200, kstore.get_policy(char_id))
+                if len(parts) == 4 and parts[3] == "incidents":
+                    return self._send(200, kstore.list_incidents(char_id, actor_brand=brand_id, actor_role=role))
+                if len(parts) == 5 and parts[3] == "snapshots":
+                    return self._send(200, kstore.get_snapshot(char_id, parts[4], actor_brand=brand_id, actor_role=role))
+            elif section == "timelines" and len(parts) == 3:
+                return self._send(200, kstore.list_timelines(char_id, actor_brand=brand_id, actor_role=role))
+            elif section == "canon" and len(parts) == 4 and parts[3] == "versions":
+                return self._send(
+                    200,
+                    kstore.list_canon_versions(
+                        char_id,
+                        timeline_id=qs.get("timeline_id") or "main",
+                        actor_brand=brand_id,
+                        actor_role=role,
+                    ),
+                )
+            return self._send(404, {"error": "not available"})
+        except KnowledgeError as error:
+            return self._send(error.status, {"error": str(error)})
+        except Exception as error:
+            return self._send(503, {"error": str(error)})
+
+    def _handle_knowledge_post(self, parts: list[str], brand_id: str | None, body: dict) -> None:
+        char_id = parts[1]
+        role = _caller_role(self.headers)
+        actor = _caller_actor(self.headers)
+        try:
+            module = CharactersModule()
+            kstore = CharacterKnowledgeStore(module.characters_root)
+            section = parts[2]
+            if section == "context" and len(parts) == 3:
+                return self._send(
+                    200,
+                    kstore.query_context(char_id, body, actor=actor, actor_brand=brand_id, actor_role=role),
+                )
+            if section == "knowledge":
+                if len(parts) == 4 and parts[3] == "verify-rights":
+                    return self._send(
+                        200,
+                        kstore.verify_rights(char_id, body, actor_brand=brand_id, actor_role=role),
+                    )
+                if len(parts) == 4 and parts[3] == "incidents":
+                    return self._send(
+                        201,
+                        kstore.create_incident(
+                            char_id,
+                            job_id=str(body.get("job_id") or ""),
+                            revocation_id=body.get("revocation_id"),
+                            severity=str(body.get("severity") or "critical"),
+                            reason=str(body.get("reason") or ""),
+                            actor=str(body.get("actor") or actor),
+                        ),
+                    )
+                if len(parts) == 4 and parts[3] == "sources":
+                    return self._send(
+                        201,
+                        kstore.register_source(char_id, body, actor=actor, actor_brand=brand_id, actor_role=role),
+                    )
+                if len(parts) == 6 and parts[3] == "sources" and parts[5] == "chunks":
+                    return self._send(
+                        201,
+                        kstore.ingest_chunks(char_id, parts[4], body, actor=actor, actor_brand=brand_id, actor_role=role),
+                    )
+                if len(parts) == 6 and parts[3] == "sources" and parts[5] == "rights":
+                    return self._send(
+                        200,
+                        kstore.update_source_rights(
+                            char_id,
+                            parts[4],
+                            str(body.get("rights_status") or ""),
+                            license_info=body.get("license_info"),
+                            reason=body.get("reason"),
+                            actor=actor,
+                            actor_brand=brand_id,
+                            actor_role=role,
+                        ),
+                    )
+                if len(parts) == 4 and parts[3] == "items":
+                    return self._send(
+                        201,
+                        kstore.create_item(char_id, body, actor=actor, actor_brand=brand_id, actor_role=role),
+                    )
+                if len(parts) == 6 and parts[3] == "items" and parts[5] == "approve":
+                    return self._send(
+                        200,
+                        kstore.approve_item(
+                            char_id,
+                            parts[4],
+                            actor=actor,
+                            actor_brand=brand_id,
+                            actor_role=role,
+                            approver_level=str(body.get("approver_level") or "editor"),
+                        ),
+                    )
+                if len(parts) == 6 and parts[3] == "items" and parts[5] == "reject":
+                    return self._send(
+                        200,
+                        kstore.reject_item(
+                            char_id,
+                            parts[4],
+                            reason=str(body.get("reason") or ""),
+                            actor=actor,
+                            actor_brand=brand_id,
+                            actor_role=role,
+                        ),
+                    )
+                if len(parts) == 4 and parts[3] == "revocations":
+                    return self._send(
+                        201,
+                        kstore.apply_revocation(char_id, body, actor=actor, actor_brand=brand_id, actor_role=role),
+                    )
+            elif section == "timelines":
+                if len(parts) == 3:
+                    return self._send(
+                        201,
+                        kstore.create_timeline(char_id, body, actor=actor, actor_brand=brand_id, actor_role=role),
+                    )
+                if len(parts) == 4 and parts[3] == "transfer":
+                    return self._send(
+                        200,
+                        kstore.transfer_event(
+                            char_id,
+                            item_id=str(body.get("item_id") or ""),
+                            target_timeline_id=str(body.get("target_timeline_id") or ""),
+                            allow_conflict=bool(body.get("allow_conflict", False)),
+                            actor=actor,
+                            actor_brand=brand_id,
+                            actor_role=role,
+                        ),
+                    )
+            elif section == "canon":
+                if len(parts) == 4 and parts[3] == "publish":
+                    return self._send(
+                        201,
+                        kstore.publish_canon_version(
+                            char_id,
+                            timeline_id=str(body.get("timeline_id") or "main"),
+                            note=str(body.get("note") or ""),
+                            actor=actor,
+                            actor_brand=brand_id,
+                            actor_role=role,
+                        ),
+                    )
+                if len(parts) == 4 and parts[3] == "migrate":
+                    return self._send(
+                        200,
+                        kstore.check_and_migrate_canon(
+                            char_id,
+                            timeline_id=str(body.get("timeline_id") or "main"),
+                            from_version=int(body.get("from_version") or 0),
+                            to_version=int(body.get("to_version") or 0),
+                            actor=actor,
+                            actor_brand=brand_id,
+                            actor_role=role,
+                        ),
+                    )
+            return self._send(404, {"error": "not available"})
+        except KnowledgeError as error:
+            return self._send(error.status, {"error": str(error)})
+        except Exception as error:
+            return self._send(503, {"error": str(error)})
+
     def do_GET(self) -> None:
         path_ = self._route()
         if path_ == "/health":
@@ -103,6 +334,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path_ == "/ui/index.html":
             return self._send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+
+        parts = [p for p in path_.split("/") if p]
+        if len(parts) >= 3 and parts[0] == "characters" and parts[2] in ("knowledge", "timelines", "canon"):
+            return self._handle_knowledge_get(parts, brand_id, _query_params(self.path))
 
         # List characters
         if path_ == "/characters":
@@ -187,11 +422,31 @@ class Handler(BaseHTTPRequestHandler):
         path_ = self._route()
         if not self._from_core():
             return self._send(403, {"error": "only through the CORE gateway"})
-        if not _may_change(self.headers, self._get_brand()):
-            return self._send(403, {"error": "administrator or moderator of this brand required"})
 
         brand_id = self._get_brand()
+        parts = [p for p in path_.split("/") if p]
+
+        # Read/verify/incident POST routes callable by CORE or authorized brand readers (#506)
+        if len(parts) >= 3 and parts[0] == "characters":
+            is_context = len(parts) == 3 and parts[2] == "context"
+            is_verify = len(parts) == 4 and parts[2] == "knowledge" and parts[3] == "verify-rights"
+            is_incident = len(parts) == 4 and parts[2] == "knowledge" and parts[3] == "incidents"
+            if is_context or is_verify:
+                if not _brand_in_caller_scope(self.headers, brand_id):
+                    return self._send(403, {"error": "brand access required"})
+                return self._handle_knowledge_post(parts, brand_id, self._read_body())
+            if is_incident:
+                if _caller_role(self.headers) != "core" and not _may_change(self.headers, brand_id):
+                    return self._send(403, {"error": "administrator or moderator of this brand required"})
+                return self._handle_knowledge_post(parts, brand_id, self._read_body())
+
+        if not _may_change(self.headers, brand_id):
+            return self._send(403, {"error": "administrator or moderator of this brand required"})
+
         body = self._read_body()
+
+        if len(parts) >= 3 and parts[0] == "characters" and parts[2] in ("knowledge", "timelines", "canon"):
+            return self._handle_knowledge_post(parts, brand_id, body)
 
         if path_ == "/migrate":
             if self.headers.get("x-vertep-role") != "admin":
@@ -292,9 +547,28 @@ class Handler(BaseHTTPRequestHandler):
 
         brand_id = self._get_brand()
         body = self._read_body()
+        parts = [p for p in path_.split("/") if p]
+
+        # Update character knowledge policy (#506)
+        if len(parts) == 4 and parts[0] == "characters" and parts[2] == "knowledge" and parts[3] == "policies":
+            try:
+                module = CharactersModule()
+                kstore = CharacterKnowledgeStore(module.characters_root)
+                result = kstore.update_policy(
+                    parts[1],
+                    body,
+                    actor=_caller_actor(self.headers),
+                    actor_brand=brand_id,
+                    actor_role=_caller_role(self.headers),
+                )
+                return self._send(200, result)
+            except KnowledgeError as error:
+                return self._send(error.status, {"error": str(error)})
+            except Exception as error:
+                return self._send(503, {"error": str(error)})
 
         # Update character
-        if path_.startswith("/characters/"):
+        if path_.startswith("/characters/") and path_.count("/") == 2:
             char_id = path_.split("/")[2]
             try:
                 if not brand_id:

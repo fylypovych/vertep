@@ -215,4 +215,7 @@ export const API_ERRORS: Record<string, { uk: string; en: string }> = {
   "request_body_must_be_json_object": { uk: "Тіло запиту має бути JSON-об'єктом", en: "Request body must be a JSON object" },
   "scenario_job_fields_required": { uk: "Потрібні поля scenario_id, version та brand_id", en: "scenario_id, version and brand_id are required" },
   "version_must_be_an_integer": { uk: "Версія має бути цілим числом", en: "version must be an integer" },
+  "character_knowledge_rights_verification_unavailable": { uk: "Перевірка прав знань персонажа недоступна", en: "Character knowledge rights verification is unavailable" },
+  "character_knowledge_rights_revoked_for_rerun": { uk: "Права на знання персонажа відкликано; повторний запуск заблоковано", en: "Character knowledge rights were revoked for rerun" },
+  "publication_blocked_by_character_knowledge_hold": { uk: "Публікацію заблоковано через юридичне або критичне блокування знань персонажа", en: "Publication is blocked by character knowledge legal or critical hold" },
 };

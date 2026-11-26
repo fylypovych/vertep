@@ -51,12 +51,26 @@ def health_selection(role: str, backend: str | None = None,
     if not roles <= REQUIRED_HEALTH_CHECKS.keys():
         raise ValueError("Unsupported health role")
     saved = installation.get("ai_backend") or {}
-    backend = backend if backend is not None else saved.get("type", selection.get("ai_backend", "skip"))
+    explicit_backend = backend is not None
+    backend = backend if explicit_backend else saved.get("type", selection.get("ai_backend", "skip"))
     if backend not in {"skip", "ollama", "external", "openai"}:
         raise ValueError("Unsupported AI backend")
     required = set().union(*(REQUIRED_HEALTH_CHECKS[item] for item in roles))
     if role == "core" and backend == "ollama":
-        required.add("ollama")
+        # A completed installation with local managed Ollama (no external URL)
+        # only runs the Ollama container when the applied deployment plan
+        # actually includes the ollama service (for example, not after a
+        # deployment rollback or after disabling the local Text role).
+        plan_services = plan.get("services") if isinstance(plan.get("services"), list) else None
+        local_managed_absent = (
+            not explicit_backend
+            and bool(installation.get("completed_at"))
+            and not saved.get("url")
+            and plan_services is not None
+            and "ollama" not in plan_services
+        )
+        if not local_managed_absent:
+            required.add("ollama")
     return roles, required
 
 

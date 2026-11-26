@@ -1,7 +1,7 @@
 schema_version: "2.0"
 name: characters
 module_id: characters
-version: "0.0.4.17"
+version: "0.0.4.18"
 kind: application
 core_compatibility: {min: "0.0.3.91", max: "0.0.9.99"}
 dependencies: []
@@ -31,6 +31,25 @@ api:
     - "/characters/{id}/activate"
     - "/characters/{id}/deactivate"
     - "/characters/{id}/can-generate"
+    - "/characters/{id}/knowledge/sources"
+    - "/characters/{id}/knowledge/sources/{source_id}"
+    - "/characters/{id}/knowledge/sources/{source_id}/chunks"
+    - "/characters/{id}/knowledge/sources/{source_id}/rights"
+    - "/characters/{id}/knowledge/items"
+    - "/characters/{id}/knowledge/items/{item_id}"
+    - "/characters/{id}/knowledge/items/{item_id}/approve"
+    - "/characters/{id}/knowledge/items/{item_id}/reject"
+    - "/characters/{id}/knowledge/revocations"
+    - "/characters/{id}/knowledge/policies"
+    - "/characters/{id}/knowledge/verify-rights"
+    - "/characters/{id}/knowledge/incidents"
+    - "/characters/{id}/knowledge/snapshots/{snapshot_id}"
+    - "/characters/{id}/context"
+    - "/characters/{id}/timelines"
+    - "/characters/{id}/timelines/transfer"
+    - "/characters/{id}/canon/publish"
+    - "/characters/{id}/canon/versions"
+    - "/characters/{id}/canon/migrate"
 ui:
   entry: index.html
   navigation:
@@ -44,6 +63,7 @@ permissions:
 secret_refs: []
 migrations:
   - {id: m001_initial, version: "1.0.0"}
+  - {id: m002_knowledge_memory, version: "0.0.4.18"}
 services:
   - {name: api}
 health:

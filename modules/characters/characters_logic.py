@@ -216,6 +216,17 @@ class CharactersModule:
                     at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
             """)
+            # Knowledge & Memory tables (#506 m002_knowledge_memory)
+            m002_path = Path(__file__).resolve().parent / "migrations" / "m002_knowledge_memory.sql"
+            if m002_path.is_file():
+                sql_text = m002_path.read_text(encoding="utf-8")
+                for stmt in sql_text.split(";"):
+                    cleaned = "\n".join(
+                        line for line in stmt.splitlines()
+                        if line.strip() and not line.strip().startswith("--")
+                    ).strip()
+                    if cleaned:
+                        cursor.execute(cleaned)
 
     def _audit(self, character_id: str, action: str, actor_brand_id: str | None, details: dict | None = None) -> None:
         execute(

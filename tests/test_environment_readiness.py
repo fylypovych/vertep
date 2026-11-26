@@ -174,6 +174,28 @@ def test_applied_plan_supersedes_stale_environment_and_pending_selection(client,
     assert report['ready'] and 'cuda' not in report['required'] and 'ollama' not in report['required']
 
 
+@pytest.mark.parametrize('plan_doc,ai_backend,ollama_required', [
+    ({'schema': 1, 'role': 'unassigned', 'services': ['core', 'postgres', 'redis', 'proxy']},
+     {'type': 'ollama', 'url': None, 'model': 'llama3.2'}, False),
+    ({'schema': 1, 'role': 'core', 'additional_roles': [], 'services': ['core', 'postgres', 'redis', 'proxy']},
+     {'type': 'ollama', 'url': None, 'model': 'llama3.2'}, False),
+    ({'schema': 1, 'role': 'core', 'additional_roles': ['text'], 'services': ['core', 'postgres', 'redis', 'ollama']},
+     {'type': 'ollama', 'url': None, 'model': 'llama3.2'}, True),
+    ({'schema': 1, 'role': 'core', 'additional_roles': [], 'services': ['core', 'postgres', 'redis', 'proxy']},
+     {'type': 'ollama', 'url': 'http://ollama-remote:11434', 'model': 'llama3.2'}, True),
+])
+def test_completed_core_managed_ollama_follows_applied_plan(client, plan_doc, ai_backend, ollama_required):
+    api, root, _ = client
+    (root / 'deployment-plan.json').write_text(json.dumps(plan_doc), encoding='utf-8')
+    (root / 'installation.json').write_text(
+        json.dumps({'completed_at': 'now', 'node_role': 'core', 'ai_backend': ai_backend}),
+        encoding='utf-8',
+    )
+    ready = api.get('/api/health/ready')
+    assert ready.status_code == (503 if ollama_required else 200)
+    assert ('ollama' in ready.json()['checks']['required']) is ollama_required
+
+
 def test_selection_refuses_the_gpu_module_on_a_host_without_gpu(client):
     """A failed ComfyUI start rolls back every other selected service, so the wizard
     must not stage the GPU module where bootstrap detected no GPU."""

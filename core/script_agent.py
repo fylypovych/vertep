@@ -97,12 +97,13 @@ class ScriptAgent:
         self._checkpoint = checkpoint
 
     def generate_script(self, topic: str, system_prompt: str = "", character: dict | None = None,
-                        revision: str | None = None, brief: str | None = None) -> dict:
+                        revision: str | None = None, brief: str | None = None,
+                        knowledge_context: str | None = None) -> dict:
         if os.getenv("DEMO_MODE", "false").lower() == "true":
             return {"title": topic, "description": f"Коротке відео: {topic}", "hashtags": ["#vertep"],
                     "voiceover": topic, "scenes": [{"prompt": topic, "video_prompt": topic, "duration": 1}]}
         context = {"topic": topic, "system_prompt": system_prompt, "character": character,
-                   "revision": revision, "brief": brief}
+                   "revision": revision, "brief": brief, "knowledge_context": knowledge_context}
         structure = self._generate_structure(context)
         scenes = [self._generate_scene(context, structure, number, entry)
                   for number, entry in enumerate(structure["scenes_plan"], 1)]
@@ -260,6 +261,9 @@ class ScriptAgent:
                 parts.append(f"Workflow: {generation['workflow']}")
         if context.get("brief"):
             parts.append(f"Завдання: {context['brief'].strip()}")
+        knowledge_ctx = context.get("knowledge_context") or (character.get("knowledge_context") if isinstance(character, dict) else None)
+        if isinstance(knowledge_ctx, str) and knowledge_ctx.strip():
+            parts.append(knowledge_ctx.strip())
         parts.append(user_prompt.strip())
         if context.get("revision"):
             parts.append(f"REVISION INSTRUCTION: {context['revision']}\n"

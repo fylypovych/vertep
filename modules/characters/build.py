@@ -18,7 +18,10 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-MIGRATIONS = {"1.0.0": ["m001_initial"]}
+MIGRATIONS = {
+    "1.0.0": ["m001_initial"],
+    "0.0.4.18": ["m001_initial", "m002_knowledge_memory"],
+}
 
 
 def image(version: str, registry: str) -> str:
@@ -60,7 +63,26 @@ def package(version: str, pinned_image: str, private_key, signer: str, publisher
             "/characters/{id}/collaborations/{brand_id}",
             "/characters/{id}/activate",
             "/characters/{id}/deactivate",
-            "/characters/{id}/can-generate"
+            "/characters/{id}/can-generate",
+            "/characters/{id}/knowledge/sources",
+            "/characters/{id}/knowledge/sources/{source_id}",
+            "/characters/{id}/knowledge/sources/{source_id}/chunks",
+            "/characters/{id}/knowledge/sources/{source_id}/rights",
+            "/characters/{id}/knowledge/items",
+            "/characters/{id}/knowledge/items/{item_id}",
+            "/characters/{id}/knowledge/items/{item_id}/approve",
+            "/characters/{id}/knowledge/items/{item_id}/reject",
+            "/characters/{id}/knowledge/revocations",
+            "/characters/{id}/knowledge/policies",
+            "/characters/{id}/knowledge/verify-rights",
+            "/characters/{id}/knowledge/incidents",
+            "/characters/{id}/knowledge/snapshots/{snapshot_id}",
+            "/characters/{id}/context",
+            "/characters/{id}/timelines",
+            "/characters/{id}/timelines/transfer",
+            "/characters/{id}/canon/publish",
+            "/characters/{id}/canon/versions",
+            "/characters/{id}/canon/migrate",
         ]},
         "ui": {"entry": "index.html", "navigation": [{"id": "characters", "label": "Персонажі"}],
                "files": {"index.html": hashlib.sha256(ui).hexdigest()}},

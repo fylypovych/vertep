@@ -19,6 +19,12 @@ def build_storyboard_prompt(job: Job, character: dict, brand: dict | None = None
         "target_duration_seconds": target_duration,
         "revision_request": revision,
     }
+    snap = getattr(job, "knowledge_snapshot", None)
+    knowledge_block = ""
+    if isinstance(snap, dict) and isinstance(snap.get("formatted_context"), str) and snap["formatted_context"].strip():
+        knowledge_block = "\n" + snap["formatted_context"].strip()
+    elif isinstance(character, dict) and isinstance(character.get("knowledge_context"), str) and character["knowledge_context"].strip():
+        knowledge_block = "\n" + character["knowledge_context"].strip()
     return (
         "Ти створюєш розкадровку короткого українськомовного відео. "
         "Поверни лише JSON object без Markdown: title, description, hashtags та scenes. "
@@ -26,4 +32,5 @@ def build_storyboard_prompt(job: Job, character: dict, brand: dict | None = None
         "duration має бути додатним числом; сумарна тривалість має бути близькою до target_duration_seconds. "
         "Дотримуйся характеру персонажа, стилю бренду та глобальних правил безпеки.\n"
         f"CONTEXT={json.dumps(context, ensure_ascii=False)}"
+        f"{knowledge_block}"
     )

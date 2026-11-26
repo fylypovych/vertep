@@ -483,6 +483,9 @@ def test_scenario_library_ui_rbac_and_flow_in_browser(core, browser, monkeypatch
         expect(frame.get_by_test_id("scenario-status")).to_contain_text("Створено Job")
 
         # Switch browser session to moderator of brand-b.
+        # Unmount the active panel first so background polls do not fire unauthenticated 401s
+        # during the window between DELETE /api/session and POST /api/session.
+        page.goto("about:blank")
         import base64
         auth = "Basic " + base64.b64encode(f"mod-b:{mod_pass}".encode()).decode()
         logout = page.request.delete(f"{browser['url']}/api/session")

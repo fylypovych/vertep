@@ -100,7 +100,10 @@ def _rows(installed, sql):
 def test_installed_package_has_its_schema_files_api_and_ui(installed):
     tables = {row[0] for row in _rows(installed, "SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")}
     assert {"characters", "character_profiles", "character_references", "character_audit", "_vertep_migrations"} <= tables
-    assert _rows(installed, "SELECT id FROM _vertep_migrations") == [["m001_initial"]]
+    assert _rows(installed, "SELECT id FROM _vertep_migrations ORDER BY id") == [
+        ["m001_initial"],
+        ["m002_knowledge_memory"],
+    ]
     assert installed["lifecycle"].data_dir("characters").is_dir()
     status, ui = _call(installed, "GET", "/ui/index.html")
     assert status == 200 and b"/api/modules/characters/v1" in ui

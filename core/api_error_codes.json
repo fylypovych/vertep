@@ -213,5 +213,8 @@
  "Storyboard module returned an unexpected response": "storyboard_module_unexpected_response",
  "Request body must be a JSON object": "request_body_must_be_json_object",
  "scenario_id, version and brand_id are required": "scenario_job_fields_required",
- "version must be an integer": "version_must_be_an_integer"
+ "version must be an integer": "version_must_be_an_integer",
+ "Character knowledge rights verification is unavailable": "character_knowledge_rights_verification_unavailable",
+ "Character knowledge rights were revoked for rerun": "character_knowledge_rights_revoked_for_rerun",
+ "Publication is blocked by character knowledge legal or critical hold": "publication_blocked_by_character_knowledge_hold"
 }

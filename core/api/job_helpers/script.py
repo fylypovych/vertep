@@ -15,9 +15,14 @@ def _script_task_for(
         system_prompt: str,
         character: dict | None,
         revision: str | None = None) -> dict:
+    char_payload = dict(character or {})
+    snap = getattr(job, "knowledge_snapshot", None)
+    if (isinstance(snap, dict) and isinstance(snap.get("formatted_context"), str)
+            and snap["formatted_context"].strip() and "knowledge_context" not in char_payload):
+        char_payload["knowledge_context"] = snap["formatted_context"]
     return {"job_id": job.job_id, "task": "script", "priority": job.priority,
             "topic": job.topic, "task_id": None,
-            "system_prompt": system_prompt, "character": character or {},
+            "system_prompt": system_prompt, "character": char_payload,
             "task_type": "text", "revision": revision}
 
 

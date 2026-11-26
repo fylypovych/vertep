@@ -242,6 +242,22 @@ def generate_script(store: JobStore, job: Job) -> Job:
             _progress(job, "SCRIPT_PENDING_APPROVAL")
         return job
     from .api.job_helpers import _enqueue_script_task
+    from .knowledge_context import (
+        KnowledgeRightsBlocked,
+        KnowledgeVerificationUnavailable,
+        pin_job_knowledge_snapshot,
+    )
+    if job.knowledge_snapshot is None:
+        try:
+            snap = pin_job_knowledge_snapshot(job, profile="script_agent", query=job.topic)
+        except (KnowledgeVerificationUnavailable, KnowledgeRightsBlocked) as error:
+            job.script_error = str(error)
+            store.update(job, JobStatus.SCRIPT_FAILED, f"SCRIPT BLOCKED BY KNOWLEDGE RIGHTS: {error}")
+            raise
+        if snap is not None:
+            store.event(job, f"KNOWLEDGE SNAPSHOT PINNED: {snap.get('snapshot_id') or 'none'}")
+    if isinstance(job.knowledge_snapshot, dict) and job.knowledge_snapshot.get("formatted_context"):
+        character = {**(character or {}), "knowledge_context": job.knowledge_snapshot["formatted_context"]}
     revision = getattr(job, 'revision', None)
     queued = _enqueue_script_task(store, job, system_prompt, character, revision)
     if queued is not None:
@@ -271,6 +287,10 @@ def request_script_revision(store: JobStore, job: Job, revision: str, actor: str
 def regenerate_script(store: JobStore, job: Job, revision: str | None = None) -> Job:
     if job.status != JobStatus.SCRIPT_REVISION_REQUESTED:
         raise ValueError(f"Cannot regenerate script in status {job.status.value}")
+    if job.knowledge_snapshot:
+        from .knowledge_context import verify_job_rerun_rights
+        verify_job_rerun_rights(job)
+        job.knowledge_snapshot = None
     # Issue #64 T3: carry the revision request forward.  Without this the
     # regenerated script is produced without the feedback that triggered the
     # revision, so the worker re-reads a stale prompt and the loop repeats.

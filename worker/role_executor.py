@@ -764,12 +764,21 @@ def _deliver_inputs(task: dict, snapshot: dict, job_id: str, root: Path) -> None
         logger.info("Assembly inputs delivered from CORE for %s", job_id)
 
 
+def execute_knowledge_extract(task: dict) -> list[dict]:
+    """Deterministic document extraction, sanitization, and optional OCR on CPU Worker (#506 K2)."""
+    from worker.knowledge_extractor import extract_from_task
+    result = extract_from_task(task)
+    payload = json.dumps(result, ensure_ascii=False).encode("utf-8")
+    return [_artifact("knowledge_extract.json", "knowledge_extract", payload)]
+
+
 EXECUTORS = {"text": execute_text, "script": execute_script, "voice": execute_voice,
              "publish": execute_publisher, "backup": execute_backup,
              "image": execute_image, "video": execute_video,
              "assembly": execute_assembly,
-             "storyboard": execute_storyboard}
-ROLE_TASKS = {"text": {"text", "script", "storyboard", "assembly"},
+             "storyboard": execute_storyboard,
+             "knowledge_extract": execute_knowledge_extract}
+ROLE_TASKS = {"text": {"text", "script", "storyboard", "assembly", "knowledge_extract"},
               "voice": {"voice"}, "publisher": {"publish"},
               "backup": {"backup"}, "gpu": {"image", "video", "assembly"},
               }
