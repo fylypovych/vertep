@@ -173,6 +173,64 @@ def lab_login(request: Request, return_to: str = ""):
     return RedirectResponse(f"{return_to}#vertep_identity={issue(identity[0], identity[1])}", status_code=302)
 
 
+def _admin(request: Request) -> str:
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        raise HTTPException(403, "Administrator role required")
+    return identity[0]
+
+
+@router.post("/api/lab/connection-token")
+def lab_connection_token(request: Request):
+    """#491: a one-time token (1 h) the LAB bootstrap uses to connect itself to this CORE."""
+    from core.lab_connection import issue_token
+    from core.module.gateway import audit
+    actor = _admin(request)
+    result = issue_token()
+    audit("lab.connection", "token_issued", actor=actor)
+    return result
+
+
+@router.get("/api/lab/connection")
+def lab_connection(request: Request):
+    from core.lab_connection import status
+    _admin(request)
+    return status()
+
+
+@router.delete("/api/lab/connection")
+def lab_disconnect(request: Request):
+    """Revokes the LAB's GPU-lease credential; the panel address is cleared too."""
+    from core.lab_connection import disconnect
+    from core.lab_identity import set_panel_url
+    from core.module.gateway import audit
+    actor = _admin(request)
+    disconnect()
+    set_panel_url("")
+    audit("lab.connection", "disconnected", actor=actor)
+    return {"connected": False}
+
+
+@router.post("/api/lab/connect")
+async def lab_connect(request: Request):
+    """Called by the LAB bootstrap with the one-time token (no Vertep session)."""
+    from core.lab_connection import LabConnectionError, connect
+    from core.module.gateway import audit
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "Invalid LAB connection request")
+    try:
+        result = connect(payload.get("token"), str(payload.get("csr") or ""), str(payload.get("panel_url") or ""))
+    except PermissionError as error:
+        audit("lab.connection", "denied", reason=str(error))
+        raise HTTPException(401, str(error)) from error
+    except LabConnectionError as error:
+        audit("lab.connection", "denied", reason=str(error))
+        raise HTTPException(422, str(error)) from error
+    audit("lab.connection", "connected", panel=payload.get("panel_url"))
+    return result
+
+
 @router.get("/api/lab/panel")
 def lab_panel(request: Request):
     """#491 L3: the configured LAB panel address for the administrator's «Лабораторія» entry."""

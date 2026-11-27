@@ -81,8 +81,14 @@ def test_storyboard_http_otio_endpoint_enforces_rbac_and_brand_isolation(monkeyp
         "brand_id": "brand-a",
         "character_owner_brands": [],
         "title": "Brand A Storyboard",
-        "scenes": [
-            {"scene_id": "s1", "index": 1, "prompt": "Intro", "duration": 3.0, "video_url": "/media/s1.mp4"},
+        "active_version": 1,
+        "storyboards": [
+            {"version": 1, "scenes": [
+                {"scene_id": "s1", "index": 1, "prompt": "Intro", "duration": 3.0,
+                 "media": {"image_url": "/api/jobs/job-42/artifacts/art-photo/download",
+                           "audio_url": "/api/jobs/job-42/artifacts/art-speech/download"}},
+            ]},
+            {"version": 2, "scenes": [{"scene_id": "draft", "duration": 20.0}]},
         ],
     }
     monkeypatch.setattr(storyboard_module, "TOKEN", "test-module-token")
@@ -129,6 +135,8 @@ def test_storyboard_http_otio_endpoint_enforces_rbac_and_brand_isolation(monkeyp
         parsed = otio.adapters.read_from_string(body.decode("utf-8"), adapter_name="otio_json")
         assert parsed.global_start_time.rate == 30.0
         assert parsed.duration().to_seconds() == pytest.approx(3.0)
+        assert parsed.tracks[0][0].media_reference.target_url.endswith("/art-photo/download")
+        assert parsed.tracks[1][0].media_reference.target_url.endswith("/art-speech/download")
 
         # Invalid fps -> 422
         status, _, _ = get(
@@ -139,3 +147,39 @@ def test_storyboard_http_otio_endpoint_enforces_rbac_and_brand_isolation(monkeyp
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_export_uses_media_links_from_core_storyboard_gateway(monkeypatch):
+    from types import SimpleNamespace
+
+    from core.artifacts import register_artifact
+    from core.models import StoryboardScene, StoryboardVersion
+    from core.module import gateway
+    from core.state import store
+
+    job = store.create("Storyboard media", "did_samogon", 5)
+    image_path = store.root / job.job_id / "images" / "frame.png"
+    image_path.write_bytes(b"reference image")
+    image = register_artifact(job, store.root, image_path, "storyboard_image")
+    audio_path = store.root / job.job_id / "audio" / "speech.wav"
+    audio_path.write_bytes(b"reference speech")
+    audio = register_artifact(job, store.root, audio_path, "audio", scene_id="active-scene")
+    job.storyboards = [
+        StoryboardVersion(version=version, title="Title", status="approved", scenes=[scene])
+        for version, scene in [
+            (1, StoryboardScene(index=1, scene_id="active-scene", prompt="Active",
+                                video_prompt="Active", duration=3, image_artifact_id=image.artifact_id)),
+            (2, StoryboardScene(index=1, scene_id="draft", prompt="Draft",
+                                video_prompt="Draft", duration=20)),
+        ]
+    ]
+    job.active_storyboard_version = 1
+    monkeypatch.setenv("PUBLIC_URL", "https://vertep.example")
+    monkeypatch.setattr(gateway, "_require_storyboard_module", lambda _: SimpleNamespace(module_id="storyboard"))
+    document = gateway.module_storyboard(job.job_id, None)
+    timeline = otio.adapters.read_from_string(export_storyboard_otio(document), adapter_name="otio_json")
+    assert timeline.duration().to_seconds() == pytest.approx(3)
+    for track, artifact in zip(timeline.tracks, (image, audio), strict=True):
+        assert track[0].media_reference.target_url == (
+            f"https://vertep.example/api/jobs/{job.job_id}/artifacts/{artifact.artifact_id}/download"
+        )

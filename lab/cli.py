@@ -23,6 +23,14 @@ from .orchestrator import Orchestrator
 from .policy import Action, PolicyDenied, PolicyGate
 from .reports import ReportBuilder, ReportError
 from .settings import LabSettings, SettingsError, apply_environment
+from .task_contract import (
+    FIELD_LABELS_UK,
+    REQUIRED_FIELDS,
+    TASK_CONTRACT_FORMAT,
+    TaskContractError,
+    load_task_contract_file,
+    load_task_contract_template,
+)
 from .workspace import Workspace
 
 
@@ -174,11 +182,47 @@ def command_run(context) -> int:
 
 
 def command_enqueue(context) -> int:
-    task = context["orchestrator"].enqueue(context["args"].kind,
-                                           role=context["args"].role,
-                                           payload={"detail": context["args"].detail or ""})
+    args = context["args"]
+    contract_arg = str(getattr(args, "contract", "") or "").strip()
+    try:
+        contract = load_task_contract_file(contract_arg) if contract_arg else None
+        task = context["orchestrator"].enqueue(
+            args.kind,
+            role=args.role,
+            payload={"detail": args.detail or ""},
+            task_contract=contract,
+            require_contract=True,
+        )
+    except ValueError as error:
+        _print({"enqueued": False, "reason": str(error)})
+        return 1
     _print(task.as_dict())
     return 0
+
+
+def command_contract(context) -> int:
+    """Display the canonical Task Contract template or validate a filled contract."""
+    args = context["args"]
+    if args.contract_action == "template":
+        _print({
+            "format": TASK_CONTRACT_FORMAT,
+            "required_fields": list(REQUIRED_FIELDS),
+            "labels_uk": dict(FIELD_LABELS_UK),
+            "template_markdown": load_task_contract_template(),
+        })
+        return 0
+    if args.contract_action == "validate":
+        if not args.file:
+            _print({"valid": False, "reason": "expected path to contract .md or .json file"})
+            return 1
+        try:
+            contract = load_task_contract_file(args.file)
+        except TaskContractError as error:
+            _print({"valid": False, "reason": str(error)})
+            return 1
+        _print({"valid": True, "contract": contract.as_dict()})
+        return 0
+    return 2
 
 
 def command_gpu(context) -> int:
@@ -369,7 +413,15 @@ def build_parser() -> argparse.ArgumentParser:
     enqueue.add_argument("kind")
     enqueue.add_argument("--role", default="reviewer")
     enqueue.add_argument("--detail", default="")
+    enqueue.add_argument("--contract", default="",
+                         help="шлях до заповненого Task Contract (.md або .json; обов'язково для задач зміни коду)")
     enqueue.set_defaults(handler=command_enqueue)
+
+    contract_cmd = sub.add_parser("contract",
+                                  help="шаблон та валідація Task Contract (4 обов'язкові пункти перед кодом)")
+    contract_cmd.add_argument("contract_action", choices=["template", "validate"])
+    contract_cmd.add_argument("file", nargs="?", default="", help="шлях до файлу контракту (.md або .json)")
+    contract_cmd.set_defaults(handler=command_contract)
 
     gpu = sub.add_parser("gpu")
     gpu.add_argument("gpu_command", choices=["status", "request", "heartbeat", "release"])

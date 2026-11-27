@@ -169,6 +169,11 @@ services:
       # same delivery works on another host with a different root.
       JOB_ROOT: /data/storage/jobs
       MODELS_ROOT: /data/models
+      STT_URL: ${STT_URL:-http://stt:8099}
+      LORA_TRAINER_URL: ${LORA_TRAINER_URL:-http://lora-trainer:8101}
+      MUSETALK_URL: ${MUSETALK_URL:-http://musetalk:8102}
+      LORA_MODELS_ROOT: /data/models/loras
+      COMFYUI_LORA_MODEL: ${COMFYUI_LORA_MODEL:-}
       COMFYUI_URL: http://comfyui:8188
       COMFYUI_HEALTH_URL: http://comfyui:8188/system_stats
       # Issue #120: the pinned expected inventory is delivered through ./config;
@@ -200,7 +205,8 @@ services:
     # build and its custom nodes against the workflow/model checksums it serves.
     # Issue #120: ./config/comfyui-runtime is the shared report volume the
     # entrypoint writes and the Worker observes (COMFYUI_ROOT).
-    volumes: ["./models:/data/models", "./storage:/data/output", "./storage:/data/workflows:ro",
+    volumes: ["./models:/data/models", "./models/loras:/opt/comfyui/models/loras:ro",
+              "./storage:/data/output", "./storage:/data/workflows:ro",
               "./config:/data/config:ro", "./config/comfyui-runtime:/data/runtime-report"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8188/system_stats"]
@@ -263,7 +269,10 @@ services:
     # Internal-only (no published host ports); enable with `--profile musetalk`.
     image: ${VERTEP_MUSETALK_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/musetalk:${VERTEP_VERSION}}
     profiles: ["musetalk"]
-    volumes: ["./models:/data/models", "./storage:/data/storage"]
+    volumes: ["./models/musetalk:/opt/musetalk/models:ro"]
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
     expose: ["8102"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8102/health"]

@@ -13,6 +13,8 @@ ENV VERTEP_LAB_HOME=/srv/vertep-lab
 WORKDIR $VERTEP_LAB_HOME
 
 # Only the standard library plus FastAPI is required for the control image.
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap libseccomp2 \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

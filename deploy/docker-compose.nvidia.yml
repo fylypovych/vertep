@@ -9,3 +9,14 @@ services:
       resources:
         reservations:
           devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+
+  lora-trainer:
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+  musetalk:
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]

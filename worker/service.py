@@ -163,6 +163,23 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
             path.unlink()
         else:
             raise RuntimeError(f"No self-test is implemented for role {role}")
+        optional_runtimes = {
+            "speech_recognition": ("STT_URL", "http://stt:8099"),
+            "lora_training": ("LORA_TRAINER_URL", "http://lora-trainer:8101"),
+            "avatar_lipsync": ("MUSETALK_URL", "http://musetalk:8102"),
+        }
+        tested_media = []
+        for capability in set(node_capabilities()) & optional_runtimes.keys():
+            variable, default = optional_runtimes[capability]
+            try:
+                probe = httpx.get(os.getenv(variable, default).rstrip("/") + "/health", timeout=15)
+                probe.raise_for_status()
+                if probe.json().get("status") == "HEALTHY":
+                    tested_media.append(capability)
+            except (httpx.HTTPError, ValueError):
+                continue
+        if tested_media:
+            evidence["media_capabilities"] = sorted(tested_media)
         return {"status": "PASSED", "role": role, "checked_at": datetime.now(timezone.utc).isoformat(),
                 "duration_ms": int((time.monotonic() - started) * 1000), "evidence": evidence}
     except Exception as error:

@@ -54,6 +54,18 @@ import { ErrorStateComponent } from '../../shared/error-state.component';
       <input id="lab-panel-url" type="url" class="grow px-2 py-1 border border-slate-200 rounded text-sm" placeholder="https://" [(ngModel)]="labPanelUrl" [disabled]="!canSaveTurnTimeout()" data-testid="lab-panel-url">
       <button type="button" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" [disabled]="!canSaveTurnTimeout()" (click)="saveLabPanel()" data-testid="lab-panel-save">{{ 'Зберегти' | t }}</button>
     </div>
+    <div class="mt-3 pt-3 border-t border-slate-100 space-y-2 text-sm" data-testid="lab-connection">
+      @if (labConnected()) {
+        <p class="text-emerald-700" data-testid="lab-connected">✓ {{ 'Лабораторію підключено' | t }} · {{ labPanelUrl }}</p>
+        <button type="button" class="px-3 py-1 border border-red-300 text-red-700 rounded text-sm disabled:opacity-50" [disabled]="!canSaveTurnTimeout()" (click)="disconnectLab()" data-testid="lab-disconnect">{{ 'Відключити лабораторію' | t }}</button>
+      } @else {
+        <p class="text-xs text-slate-500">{{ 'Лабораторія на окремій VM підключається сама: виконайте на ній показану команду. Vertep видасть сертифікат панелі, доступ до вільного GPU й вхід через Vertep — нічого не треба копіювати вручну. Команда діє одну годину й лише один раз.' | t }}</p>
+        <button type="button" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" [disabled]="!canSaveTurnTimeout()" (click)="connectLab()" data-testid="lab-connect">{{ 'Підключити лабораторію' | t }}</button>
+        @if (labCommand()) {
+          <pre class="whitespace-pre-wrap break-all bg-slate-50 border border-slate-200 rounded p-2 text-xs select-all" data-testid="lab-connect-command">{{ labCommand() }}</pre>
+        }
+      }
+    </div>
   </div>
   <div *ngIf="switchError()" class="text-red-600 text-sm mt-2" data-testid="backend-switch-error">{{ (switchError()) | t }}</div>
 </div>`,
@@ -67,6 +79,8 @@ export class SystemInfoSectionComponent implements OnInit {
   selected: Record<string, string> = {};
   turnTimeout = 45;
   labPanelUrl = '';
+  labConnected = signal(false);
+  labCommand = signal('');
   private policy = inject(PolicyService);
 
   canSaveTurnTimeout(): boolean { return this.policy.can('update_settings').allowed; }
@@ -81,6 +95,24 @@ export class SystemInfoSectionComponent implements OnInit {
   saveLabPanel(): void {
     this.settingsApi.saveLabPanel(this.labPanelUrl.trim()).subscribe({
       next: (saved) => { this.labPanelUrl = saved.url || ''; this.toast.show('Збережено', 'success'); },
+      error: (err) => this.toast.show(err.message, 'error'),
+    });
+  }
+
+  /** #491: a one-time command the LAB VM runs to connect itself (token + pinned CORE certificate). */
+  connectLab(): void {
+    this.settingsApi.labConnectionToken().subscribe({
+      next: (issued) => this.labCommand.set(
+        'curl -fL https://raw.githubusercontent.com/fylypovych/vertep/main/bootstrap-lab.sh -o vertep-bootstrap-lab.sh && '
+        + `sudo VERTEP_CORE_URL=${window.location.origin} VERTEP_LAB_TOKEN=${issued.token} `
+        + `VERTEP_CORE_PIN=${issued.core_certificate_sha256} bash ./vertep-bootstrap-lab.sh`),
+      error: (err) => this.toast.show(err.message, 'error'),
+    });
+  }
+
+  disconnectLab(): void {
+    this.settingsApi.labDisconnect().subscribe({
+      next: () => { this.labConnected.set(false); this.labPanelUrl = ''; this.toast.show('Збережено', 'success'); },
       error: (err) => this.toast.show(err.message, 'error'),
     });
   }
@@ -153,6 +185,7 @@ export class SystemInfoSectionComponent implements OnInit {
   ngOnInit(): void {
     this.settingsApi.dispatchSettings().subscribe({ next: (value) => { this.turnTimeout = value.worker_turn_timeout_seconds; }, error: () => {} });
     this.settingsApi.labPanel().subscribe({ next: (value) => { this.labPanelUrl = value.url || ''; }, error: () => {} });
+    this.settingsApi.labConnection().subscribe({ next: (value) => this.labConnected.set(value.connected), error: () => {} });
     this.error.set(null);
     this.loading.set(true);
     this.systemApi.status().subscribe({

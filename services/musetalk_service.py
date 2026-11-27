@@ -42,6 +42,38 @@ def _musetalk_entry() -> Path | None:
     return entry if entry.is_file() else None
 
 
+REQUIRED_WEIGHTS = (
+    "musetalkV15/musetalk.json",
+    "musetalkV15/unet.pth",
+    "dwpose/dw-ll_ucoco_384.pth",
+    "face-parse-bisent/79999_iter.pth",
+    "face-parse-bisent/resnet18-5c106cde.pth",
+    "sd-vae/config.json",
+    "sd-vae/diffusion_pytorch_model.bin",
+    "whisper/config.json",
+    "whisper/pytorch_model.bin",
+    "whisper/preprocessor_config.json",
+)
+
+
+def _missing_weights() -> list[str]:
+    root = Path(os.getenv("MUSETALK_ROOT", "/opt/musetalk")) / "models"
+    return [name for name in REQUIRED_WEIGHTS
+            if not (root / name).is_file() or not (root / name).stat().st_size]
+
+
+def _require_runtime() -> None:
+    missing = _missing_weights()
+    if missing:
+        raise HTTPException(503, "Відсутні файли MuseTalk: " + ", ".join(missing))
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA недоступна")
+    except (ImportError, OSError, RuntimeError) as error:
+        raise HTTPException(503, "GPU runtime MuseTalk недоступний") from error
+
+
 def _insightface_absent() -> bool:
     return importlib.util.find_spec("insightface") is None
 
@@ -62,6 +94,7 @@ def health() -> dict:
         raise HTTPException(503, "Виявлено заборонену некомерційну залежність insightface")
     if _musetalk_entry() is None:
         raise HTTPException(503, "MuseTalk runtime недоступний")
+    _require_runtime()
     return {
         "status": "HEALTHY",
         "engine": "musetalk",
@@ -110,6 +143,7 @@ def lipsync(request: LipSyncRequest) -> dict:
     if entry is None:
         raise HTTPException(503, "MuseTalk runtime недоступний")
 
+    _require_runtime()
     portrait_sha256 = hashlib.sha256(portrait_bytes).hexdigest()
     audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
 
@@ -134,9 +168,12 @@ def lipsync(request: LipSyncRequest) -> dict:
         cfg_path.write_text(yaml.safe_dump(inference_cfg, sort_keys=True), encoding="utf-8")
 
         python_bin = os.getenv("MUSETALK_PYTHON", "python3")
+        root = Path(os.getenv("MUSETALK_ROOT", "/opt/musetalk"))
+        entry_args = ([str(entry)] if os.getenv("MUSETALK_INFERENCE_SCRIPT")
+                      else ["-m", "scripts.inference", "--version", "v15", "--use_float16"])
         cmd = [
             python_bin,
-            str(entry),
+            *entry_args,
             "--inference_config",
             str(cfg_path),
             "--result_dir",
@@ -152,6 +189,7 @@ def lipsync(request: LipSyncRequest) -> dict:
                 check=True,
                 capture_output=True,
                 text=True,
+                cwd=root,
                 timeout=int(os.getenv("MUSETALK_TIMEOUT_SECONDS", "600")),
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:

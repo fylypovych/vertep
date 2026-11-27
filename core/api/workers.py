@@ -43,22 +43,14 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     data = payload.model_dump()
     if data["status"] in {"ONLINE", "FREE"}:
         data["status"] = "READY"
-    role = node_roles().get(data["role"], {})
-    allowed = set(role.get("capabilities", []))
-    if data["role"] == "core":
-        try:
-            deployed = json.loads((config_root() / "deployment-plan.json").read_text(encoding="utf-8"))
-            for additional in deployed.get("additional_roles", []):
-                allowed.update(node_roles().get(additional, {}).get("capabilities", []))
-            from ..deployment_plan import ENGINE_RUNTIMES
-            for runtime in deployed.get("engine_runtimes", []):
-                allowed.update(ENGINE_RUNTIMES.get(runtime, {}).get("capabilities", ()))
-        except (OSError, ValueError):
-            pass
-    declared = set(data.get("capabilities", [])) & allowed
+    from ..node_registry import OPTIONAL_MEDIA_CAPABILITIES, registration_capabilities
+    declared = set(data.get("capabilities", [])) & registration_capabilities(data["role"])
     self_test = data.get("self_test") or {}
     data["capabilities"] = sorted(declared)
-    data["tested_capabilities"] = (sorted(declared) if self_test.get("status") == "PASSED"
+    evidence = self_test.get("evidence") or {}
+    optional_ready = set(evidence.get("media_capabilities") or []) if isinstance(evidence, dict) else set()
+    tested = (declared - OPTIONAL_MEDIA_CAPABILITIES) | (declared & optional_ready)
+    data["tested_capabilities"] = (sorted(tested) if self_test.get("status") == "PASSED"
                                     and self_test.get("role") == data["role"] else [])
     data["runtime_status"] = ("ONLINE" if self_test.get("status") == "PASSED"
                               and self_test.get("role") == data["role"] else "PENDING_SELF_TEST")

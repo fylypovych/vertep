@@ -712,11 +712,25 @@ def apply_modules(root: Path, runner=subprocess.run) -> dict:
     try:
         request = json.loads(original)
         trust = TrustStore.from_root(root / "runtime/module-trust")
+        try:  # manifests (with pinned images) of the modules shipped inside this signed release
+            release_manifests = json.loads((root / "runtime/module-manifests.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            release_manifests = {}
         desired = {}
         for item in request.get("modules", []) if isinstance(request, dict) else []:
             module_id = str(item.get("module_id", "")) if isinstance(item, dict) else ""
             try:
-                manifest = verify_package(item["package"], trust)
+                package = item["package"]
+                if "bundled" in package:
+                    # No package signature: the manifest and image come only from this signed
+                    # release; the copy in the (Worker-written) request is ignored.
+                    from core.module.manifest import ModuleManifest
+                    shipped = release_manifests.get(module_id) if isinstance(release_manifests, dict) else None
+                    if package["bundled"] != module_id or not isinstance(shipped, dict):
+                        raise ValueError("Модуль не входить до цього релізу")
+                    manifest = ModuleManifest.from_dict(shipped)
+                else:
+                    manifest = verify_package(package, trust)
                 if manifest.kind != "application" or manifest.module_id != module_id or not manifest.container:
                     raise ValueError("Пакет не є application-модулем із цим ідентифікатором")
                 desired[module_id] = (manifest, env_value(item.get("token"), "module token"))

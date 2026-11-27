@@ -291,12 +291,28 @@ def module_storyboard(job_id: str, request: Request):
     if job is None or not job.storyboards:
         raise HTTPException(404, "Storyboard not found")
     artifacts = {item.artifact_id: item for item in job.artifacts}
+    scene_audio = {item.scene_id: item for item in job.artifacts
+                   if item.scene_id and item.kind == "audio"}
+    public_url = os.getenv("PUBLIC_URL", "").rstrip("/")
     versions = []
     for version in job.storyboards:
         scenes = []
         for scene in sorted(version.scenes, key=lambda item: item.index):
             image = artifacts.get(scene.image_artifact_id) if scene.image_artifact_id else None
-            scenes.append({"index": scene.index, "duration": scene.duration, "prompt": scene.prompt,
+            rendered = artifacts.get(scene.artifact_id) if scene.artifact_id else None
+            audio = scene_audio.get(scene.scene_id)
+            media = {}
+            for media_type, artifact in (("image", image), ("video", rendered), ("audio", audio)):
+                if artifact is None:
+                    continue
+                if media_type == "video" and not artifact.mime_type.startswith("video/"):
+                    media_type = "image"
+                media[f"{media_type}_url"] = (
+                    f"{public_url}/api/jobs/{job.job_id}/artifacts/{artifact.artifact_id}/download"
+                )
+            scenes.append({"index": scene.index, "scene_id": scene.scene_id,
+                           "duration": scene.duration, "prompt": scene.prompt,
+                           "video_prompt": scene.video_prompt, "media": media,
                            "voiceover": scene.voiceover, "image_version": scene.image_version,
                            "image": {"artifact_id": image.artifact_id, "sha256": image.sha256} if image else None})
         versions.append({"version": version.version, "title": version.title, "status": version.status,
@@ -561,6 +577,11 @@ async def node_assignments(request: Request):
         if not gates.allowed(module_id, node_name) and record.get("previous"):
             # #512 sequential rollout: this node keeps the previous version until released.
             package, version = record["previous"]["package"], record["previous"]["version"]
+        if "bundled" in package:
+            # Shipped inside the signed release (no package signature): the manifest of the
+            # running release with its pinned image; the node checks it against its own release.
+            from core.module.lifecycle import bundled_manifest
+            package = {"bundled": package["bundled"], "manifest": bundled_manifest(package["bundled"])}
         result.append({"module_id": module_id, "version": version, "package": package})
     audit("module.assignments", "allowed", node=node_name, modules=[item["module_id"] for item in result])
     return {"modules": result}

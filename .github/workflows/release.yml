@@ -281,6 +281,17 @@ jobs:
           pattern: image-*
           path: ${{ runner.temp }}/image-metadata
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: module-image-*
+          path: ${{ runner.temp }}/module-images
+          merge-multiple: true
+      - name: Pin module images into the runtime bundle
+        # The host executor starts a module shipped inside the release only with these images.
+        shell: bash
+        run: |
+          jq -s 'add' "${{ runner.temp }}"/module-images/*.json > config/module-images.json
+          test "$(jq 'length' config/module-images.json)" -eq 4
       - name: Create signed runtime release
         shell: bash
         env:

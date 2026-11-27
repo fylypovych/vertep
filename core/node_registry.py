@@ -78,13 +78,21 @@ def _enrollment_id(value: object) -> str | None:
     return text if re.fullmatch(r"[a-z0-9][a-z0-9-]{7,63}", text) else None
 
 
+OPTIONAL_ROLE_CAPABILITIES = {
+    "voice": {"speech_recognition"},
+    "gpu": {"lora_training", "avatar_lipsync"},
+}
+OPTIONAL_MEDIA_CAPABILITIES = set().union(*OPTIONAL_ROLE_CAPABILITIES.values())
+
+
 def registration_capabilities(role: str) -> set[str]:
     """Capabilities a node of this role may hold.
 
     The CORE host's own Worker runs the roles of its deployment plan next to CORE
     (heartbeat applies the same rule), so its registration allows those too.
     """
-    allowed = set(node_roles()[role]["capabilities"])
+    allowed = set(node_roles().get(role, {}).get("capabilities", []))
+    allowed.update(OPTIONAL_ROLE_CAPABILITIES.get(role, ()))
     if role == "core":
         from .first_run import config_root
         try:
@@ -93,6 +101,7 @@ def registration_capabilities(role: str) -> set[str]:
             plan = {}
         for additional in plan.get("additional_roles", []):
             allowed.update(node_roles().get(additional, {}).get("capabilities", []))
+            allowed.update(OPTIONAL_ROLE_CAPABILITIES.get(additional, ()))
         from .deployment_plan import ENGINE_RUNTIMES
         for runtime in plan.get("engine_runtimes", []):
             allowed.update(ENGINE_RUNTIMES.get(runtime, {}).get("capabilities", ()))

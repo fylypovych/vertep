@@ -14,10 +14,27 @@ import os
 import subprocess
 from pathlib import Path
 
+import logging
+
 import httpx
 
 from core.module.packages import verify_package
 from worker import application_container as containers
+
+logger = logging.getLogger(__name__)
+
+
+def _verified(item: dict, trust):
+    """A signed package, or a module shipped inside this node's own signed release: then
+    the manifest (and pinned image) is this release's, never the copy CORE sent."""
+    package = item["package"]
+    if "bundled" in package:
+        from core.module.lifecycle import bundled_manifest
+        from core.module.manifest import ModuleManifest
+        if package["bundled"] != item["module_id"]:
+            raise ValueError("bundled package names another module")
+        return ModuleManifest.from_dict(bundled_manifest(package["bundled"]))
+    return verify_package(package, trust)  # the node verifies, it does not trust CORE blindly
 
 
 def enabled() -> bool:
@@ -128,8 +145,10 @@ def reconcile(client: httpx.Client, core_url: str, node_name: str) -> list[dict]
     desired, packages = {}, {}
     for item in response.json().get("modules", []):
         try:
-            manifest = verify_package(item["package"], trust)  # the node verifies, it does not trust CORE blindly
-        except Exception:
+            manifest = _verified(item, trust)
+        except Exception as error:
+            logger.warning("Application module package refused", extra={"module": item.get("module_id"),
+                                                                       "error": str(error)})
             continue
         if manifest.kind == "application" and manifest.module_id == item["module_id"]:
             desired[manifest.module_id] = manifest

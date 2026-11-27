@@ -237,3 +237,48 @@ def test_dispatcher_routes_stt_tasks_only_to_speech_recognition_workers():
     }
     assert available_worker([voice_only], job, task_type="stt") is None
     assert available_worker([voice_only, voice_with_stt], job, task_type="stt")["node_name"] == "voice-stt"
+
+
+def test_core_dispatches_and_persists_transcription(monkeypatch):
+    from core.app import app
+    from core.artifacts import register_artifact
+    from core.state import store
+
+    monkeypatch.setenv("NODE_API_TOKEN", "stt-integration-token")
+    monkeypatch.setenv("REQUIRE_WORKER_SELF_TEST", "false")
+    client = TestClient(app, headers={"x-vertep-token": "stt-integration-token"})
+    job = store.create("Transcribe this job's audio", "did_samogon", 5)
+    audio_path = store.root / job.job_id / "audio" / "input.wav"
+    audio_path.write_bytes(b"RIFF\x10\x00\x00\x00WAVEfmt " + b"\x01" * 16)
+    audio = register_artifact(job, store.root, audio_path, "audio")
+
+    response = client.post(f"/api/jobs/{job.job_id}/transcriptions",
+                           json={"artifact_id": audio.artifact_id, "language": "uk"})
+    assert response.status_code == 202, response.text
+    task_id = response.json()["task_id"]
+    worker = {"node_name": "test-stt", "role": "voice", "vram_mb": 0,
+              "capabilities": ["speech_recognition"], "supported_tasks": ["stt"]}
+    assert client.post("/api/workers/heartbeat", json=worker).status_code == 200
+    response = client.post("/api/tasks/claim", json=worker)
+    assert response.status_code == 200, response.text
+    task = response.json()["task"]
+    assert task["task_id"] == task_id
+    assert base64.b64decode(task["audio_base64"]) == audio_path.read_bytes()
+
+    assert client.post("/api/tasks/renew", json={
+        "node_name": "test-stt", "task_id": task_id,
+    }).json() == {"renewed": True}
+    stt_service._model_cache.clear()
+    monkeypatch.setattr(stt_service, "_whisper_model_class", lambda: _FakeWhisperModel)
+    runtime = TestClient(stt_service.app)
+    monkeypatch.setattr(httpx, "post", lambda url, json, timeout: runtime.post("/transcribe", json=json))
+    artifacts = execute_role_task("voice", task, _migration=True)
+    body = {"job_id": job.job_id, "task_id": task_id, "success": True, "artifacts": artifacts}
+    rejected = client.post("/api/tasks/result", json={**body, "node_name": "other-node"})
+    assert rejected.status_code == 409
+    response = client.post("/api/tasks/result", json={**body, "node_name": "test-stt"})
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "COMPLETED"
+    artifact_id = response.json()["artifact_id"]
+    transcript = client.get(f"/api/jobs/{job.job_id}/artifacts/{artifact_id}/download")
+    assert transcript.json()["text"] == "Привіт, Україно! Тест розпізнавання."

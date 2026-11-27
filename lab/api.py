@@ -22,6 +22,14 @@ from .orchestrator import Orchestrator
 from .policy import Action, PolicyDenied, PolicyGate
 from .reports import ReportBuilder, ReportError
 from .settings import LabSettings, SettingsError as LabSettingsError, apply_environment
+from .task_contract import (
+    FIELD_LABELS_UK,
+    REQUIRED_FIELDS,
+    TASK_CONTRACT_FORMAT,
+    TaskContractError,
+    load_task_contract_template,
+    validate_task_contract,
+)
 from .workspace import Workspace
 
 
@@ -45,6 +53,11 @@ class TaskRequest(BaseModel):
     kind: str
     role: str = "reviewer"
     payload: dict = {}
+    task_contract: dict | str | None = None
+
+
+class TaskContractValidateRequest(BaseModel):
+    contract: dict | str
 
 
 class FindingRequest(BaseModel):
@@ -234,11 +247,33 @@ def create_app(state_dir=None, workspace_root=None, *, provider=None,
         owner_identity = _require_owner(raw_request)
         return {"revoked": gate.revoke_grant(grant_id, actor=owner_identity)}
 
+    @app.get("/api/lab/task-contract/template")
+    def task_contract_template() -> dict:
+        return {
+            "format": TASK_CONTRACT_FORMAT,
+            "required_fields": list(REQUIRED_FIELDS),
+            "labels_uk": dict(FIELD_LABELS_UK),
+            "template_markdown": load_task_contract_template(),
+        }
+
+    @app.post("/api/lab/task-contract/validate")
+    def task_contract_validate(request: TaskContractValidateRequest) -> dict:
+        try:
+            contract = validate_task_contract(request.contract)
+        except TaskContractError as error:
+            raise HTTPException(422, str(error)) from error
+        return {"valid": True, "contract": contract.as_dict()}
+
     @app.post("/api/lab/tasks")
     def enqueue(request: TaskRequest) -> dict:
         try:
-            task = orchestrator.enqueue(request.kind, role=request.role,
-                                        payload=request.payload)
+            task = orchestrator.enqueue(
+                request.kind,
+                role=request.role,
+                payload=request.payload,
+                task_contract=request.task_contract,
+                require_contract=True,
+            )
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         return {"task": task.as_dict(), "approval_scope": task.approval_scope}

@@ -264,10 +264,12 @@ fi
 if [[ $gpu_vendor == nvidia ]] && ! { nvidia-smi >/dev/null 2>&1 && docker info --format '{{json .Runtimes}}' | grep -q nvidia; }; then
   progress "Installing NVIDIA Container Toolkit"
   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    | gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
   curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
     | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
     > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  # umask 077 above: apt verifies signatures as the unprivileged _apt user, which must read the key.
+  chmod 0644 /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg /etc/apt/sources.list.d/nvidia-container-toolkit.list
   apt-get update -qq
   apt-get install -y -qq nvidia-container-toolkit
   nvidia-ctk runtime configure --runtime=docker
@@ -291,7 +293,8 @@ elif [[ $gpu_vendor == amd && $existing_runtime == false ]]; then
     progress "Installing AMD ROCm container runtime"
     rocm_version=${VERTEP_ROCM_VERSION:-6.4.1}
     curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key \
-      | gpg --dearmor -o /usr/share/keyrings/rocm.gpg
+      | gpg --batch --yes --dearmor -o /usr/share/keyrings/rocm.gpg
+    chmod 0644 /usr/share/keyrings/rocm.gpg  # readable by apt's _apt user despite umask 077
     printf 'deb [arch=amd64 signed-by=/usr/share/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/%s noble main\n' "$rocm_version" \
       > /etc/apt/sources.list.d/rocm.list
     apt-get update -qq

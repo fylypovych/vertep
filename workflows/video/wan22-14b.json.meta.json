@@ -12,12 +12,13 @@
     "CLIPTextEncode",
     "ModelSamplingSD3",
     "EmptyHunyuanLatentVideo",
-    "KSampler",
+    "KSamplerAdvanced",
     "VAEDecode",
     "VHS_VideoCombine"
   ],
   "required_models": [
     "{{WAN_14B_MODEL}}",
+    "{{WAN_14B_LOW_NOISE_MODEL}}",
     "{{WAN_CLIP_MODEL}}",
     "{{WAN_14B_VAE_MODEL}}"
   ]

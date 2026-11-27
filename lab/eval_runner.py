@@ -20,7 +20,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -30,6 +29,7 @@ from urllib.parse import urlsplit
 
 from .budget import BudgetLedger, PAID_PROVIDERS, PaidModelDenied
 from .policy import Action, PolicyGate
+from .eval_network import isolated_endpoint, run_isolated
 from .state_store import append_jsonl, read_jsonl, write_json
 
 EVAL_FORMAT = "lab_eval/v1"
@@ -77,7 +77,7 @@ def isolated_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in STRIPPED_API_KEYS
+        if key in {"PATH", "HOME", "LANG", "LC_ALL", "HF_HOME", "XDG_CACHE_HOME"}
     }
     env.update({
         "PROMPTFOO_DISABLE_TELEMETRY": "1",
@@ -262,7 +262,7 @@ class LabEvalRunner:
         state_dir: Path,
         gate: PolicyGate,
         budget: BudgetLedger,
-        runner: Callable = subprocess.run,
+        runner: Callable | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.evals_dir = self.state_dir / "evals"
@@ -270,6 +270,19 @@ class LabEvalRunner:
         self.gate = gate
         self.budget = budget
         self._runner = runner
+
+    def _execute(self, make_command, endpoint, writable, env, timeout):
+        kwargs = dict(check=True, capture_output=True, text=True, timeout=timeout)
+        if self._runner is not None:
+            command = make_command(endpoint)
+            self._runner(command, env=env, **kwargs)
+            return command
+        with isolated_endpoint(endpoint) as (local_endpoint, prefix, socket_path):
+            command = make_command(local_endpoint)
+            env["OLLAMA_BASE_URL"] = local_endpoint
+            env["TMPDIR"] = str(writable)
+            run_isolated(prefix, socket_path, writable, command, env=env, **kwargs)
+            return command
 
     def list_runs(self) -> list[dict]:
         return read_jsonl(self.evals_dir / "history.jsonl")
@@ -346,8 +359,8 @@ class LabEvalRunner:
         env = isolated_env({"OLLAMA_BASE_URL": resolved_endpoint, "LAB_EVAL_MODEL": mod})
         with tempfile.TemporaryDirectory(prefix="lab-promptfoo-") as tmp_dir:
             out_file = Path(tmp_dir) / "promptfoo-results.json"
-            cmd = build_promptfoo_command(config_path, out_file)
-            self._runner(cmd, check=True, capture_output=True, text=True, timeout=timeout, env=env)
+            cmd = self._execute(lambda _: build_promptfoo_command(config_path, out_file),
+                                resolved_endpoint, Path(tmp_dir), env, timeout)
             raw = json.loads(out_file.read_text(encoding="utf-8"))
         normalized = parse_promptfoo_output(raw)
         return self._record_report(
@@ -384,8 +397,9 @@ class LabEvalRunner:
         env = isolated_env({"OLLAMA_BASE_URL": resolved_endpoint})
         with tempfile.TemporaryDirectory(prefix="lab-lmeval-") as tmp_dir:
             out_dir = Path(tmp_dir)
-            cmd = build_lm_eval_command(tasks, mod, resolved_endpoint, out_dir, limit=limit)
-            self._runner(cmd, check=True, capture_output=True, text=True, timeout=timeout, env=env)
+            cmd = self._execute(
+                lambda local: build_lm_eval_command(tasks, mod, local, out_dir, limit=limit),
+                resolved_endpoint, out_dir, env, timeout)
             candidates = sorted(out_dir.rglob("results*.json"))
             if not candidates:
                 candidates = sorted(out_dir.rglob("*.json"))

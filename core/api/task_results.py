@@ -609,7 +609,7 @@ def tts_result(job, result: TaskResult):
                 scene_id=scene.scene_id,
                 task_id=result.task_id,
                 node_name=result.node_name,
-                workflow=job.workflow))
+                workflow=job.workflow, metadata=contract))
         try:
             saved_artifacts.extend(
                 _persist_tts_contract(

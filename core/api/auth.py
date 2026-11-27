@@ -227,7 +227,9 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         worker_exact = ((request.method, request.url.path) in {
             ("GET", "/api/tasks/publisher-readiness"),
             ("POST", "/api/workers/model-progress"),
-            ("POST", "/api/watchdog/report")}
+            ("POST", "/api/watchdog/report"),
+            # The LAB bootstrap's one-time connection token is checked in core/lab_connection.py.
+            ("POST", "/api/lab/connect")}
             or (request.method == "POST"
                 and re.fullmatch(r"/api/nodes/[a-z0-9-]+/self-test", request.url.path)))
         # Module-token calls and the Worker token issue validate themselves in

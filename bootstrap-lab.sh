@@ -157,10 +157,89 @@ set_default LAB_TLS_DIR "$LAB_ROOT/tls"
 set_default LAB_WEB_BIND 0.0.0.0
 chmod 600 "$env_file"
 
-# HTTPS panel (#491 L2/L8): the operator's lab.crt/lab.key in $LAB_ROOT/tls are kept;
-# otherwise a self-signed pair for this VM's name and addresses is made once.
 tls_dir=$(sed -n 's/^LAB_TLS_DIR=//p' "$env_file")
 install -d -m 0755 "$tls_dir"
+web_port=$(sed -n 's/^LAB_WEB_PORT=//p' "$env_file"); web_port=${web_port:-8444}
+vm_address=$(hostname -I 2>/dev/null | awk '{print $1}'); vm_address=${vm_address:-<адреса VM>}
+
+# Connecting to Vertep (#491): the command from «Налаштування → Лабораторія» passes CORE's
+# address, a one-time token and CORE's certificate fingerprint. The fingerprint is checked on
+# the same TLS connection that carries the token; the panel key is made here and never leaves
+# the VM. CORE answers with the panel certificate (signed by its CA) and the GPU-lease
+# credential; the Vertep address, the lease address and CORE's certificate are set from them.
+connected=0
+if [[ -n ${VERTEP_CORE_URL:-}${VERTEP_LAB_TOKEN:-} ]]; then
+  [[ -n ${VERTEP_CORE_URL:-} && -n ${VERTEP_LAB_TOKEN:-} && -n ${VERTEP_CORE_PIN:-} ]] \
+    || fail "VERTEP_CORE_URL, VERTEP_LAB_TOKEN and VERTEP_CORE_PIN are required to connect to Vertep"
+  progress "Connecting the laboratory to Vertep"
+  core_url=${VERTEP_CORE_URL%/}
+  ca_dir=$(sed -n 's/^LAB_CA_DIR=//p' "$env_file")
+  # shellcheck disable=SC2046
+  resource_token=$(VERTEP_LAB_TOKEN=$VERTEP_LAB_TOKEN python3 -I - "$core_url" "$VERTEP_CORE_PIN" \
+      "https://$vm_address:$web_port" "$tls_dir" "$ca_dir/vertep-core.pem" \
+      "$(hostname -f 2>/dev/null || hostname)" $(hostname -I 2>/dev/null) <<'PY'
+import hashlib, http.client, ipaddress, json, os, ssl, sys
+from urllib.parse import urlsplit
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+
+core, pin, panel_url, tls_dir, ca_file, *hosts = sys.argv[1:]
+parts = urlsplit(core)
+if parts.scheme != "https" or not parts.hostname:
+    sys.exit("VERTEP_CORE_URL must be https://host[:port]")
+context = ssl.create_default_context()
+context.check_hostname, context.verify_mode = False, ssl.CERT_NONE  # trust comes from the pin below
+connection = http.client.HTTPSConnection(parts.hostname, parts.port or 443, context=context, timeout=60)
+connection.connect()
+der = connection.sock.getpeercert(binary_form=True)
+if hashlib.sha256(der).hexdigest() != pin.lower().replace(":", ""):
+    sys.exit("CORE certificate fingerprint does not match VERTEP_CORE_PIN; nothing was sent")
+names = []
+for host in dict.fromkeys(hosts):
+    try:
+        names.append(x509.IPAddress(ipaddress.ip_address(host)))
+    except ValueError:
+        names.append(x509.DNSName(host))
+key = ec.generate_private_key(ec.SECP256R1())
+csr = (x509.CertificateSigningRequestBuilder()
+       .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Vertep LAB")]))
+       .add_extension(x509.SubjectAlternativeName(names), critical=False).sign(key, hashes.SHA256()))
+body = json.dumps({"token": os.environ["VERTEP_LAB_TOKEN"], "panel_url": panel_url,
+                   "csr": csr.public_bytes(serialization.Encoding.PEM).decode()})
+connection.request("POST", "/api/lab/connect", body, {"Content-Type": "application/json"})
+response = connection.getresponse()
+answer = response.read().decode("utf-8", "replace")
+if response.status != 200:
+    sys.exit(f"Vertep refused the connection ({response.status}): {answer[:300]}")
+answer = json.loads(answer)
+
+def write(path, data, mode):
+    temporary = f"{path}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(descriptor, "w", encoding="ascii") as handle:
+        handle.write(data)
+    os.replace(temporary, path)
+
+write(os.path.join(tls_dir, "lab.key"), key.private_bytes(serialization.Encoding.PEM,
+      serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode(), 0o600)
+write(os.path.join(tls_dir, "lab.crt"), answer["panel_certificate"] + answer["panel_ca"], 0o644)
+write(ca_file, ssl.DER_cert_to_PEM_cert(der), 0o644)
+print(answer["resource_token"])
+PY
+) || fail "could not connect the laboratory to Vertep"
+  set_value(){ sed -i "/^$1=/d" "$env_file"; printf '%s=%s\n' "$1" "$2" >> "$env_file"; }
+  set_value LAB_VERTEP_URL "$core_url"
+  set_value LAB_RESOURCE_URL "$core_url/lab-lease/v1"
+  set_value LAB_RESOURCE_TOKEN "$resource_token"
+  set_value LAB_RESOURCE_CA_FILE /run/lab-ca/vertep-core.pem
+  chmod 600 "$env_file"
+  connected=1
+fi
+
+# HTTPS panel (#491 L2/L8): a certificate from Vertep (above) or the operator's own pair is
+# kept; otherwise a self-signed pair for this VM's name and addresses is made once.
 if [[ ! -s $tls_dir/lab.crt || ! -s $tls_dir/lab.key ]]; then
   progress "Creating a self-signed TLS certificate for the panel"
   san="DNS:$(hostname -f 2>/dev/null || hostname),DNS:localhost"
@@ -174,13 +253,15 @@ chown 101:101 "$tls_dir/lab.key" && chmod 0400 "$tls_dir/lab.key" && chmod 0644 
 
 if [[ $BUILD_FROM_SOURCE == 1 ]]; then build_from_source; else install_from_release; fi
 
-owner_token=$(sed -n 's/^LAB_OWNER_TOKEN=//p' "$env_file")
 printf '\nЛабораторію встановлено (%s).\n' "$release_label"
-web_port=$(sed -n 's/^LAB_WEB_PORT=//p' "$env_file"); web_port=${web_port:-8444}
-vm_address=$(hostname -I 2>/dev/null | awk '{print $1}'); vm_address=${vm_address:-<адреса VM>}
 printf 'Панель (HTTPS): https://%s:%s\n' "$vm_address" "$web_port"
-printf 'Вхід: «Увійти через Vertep» (адміністратор Vertep) або службовий токен власника: %s\n' "$owner_token"
-printf 'Налаштування: у панелі (розділ «Налаштування LAB») або lab.env %s.\n' "$env_file"
-printf 'Сертифікат панелі: %s/lab.crt (замініть lab.crt/lab.key своїми й перезапустіть).\n' "$tls_dir"
+if [[ $connected == 1 ]]; then
+  printf 'Підключено до Vertep: %s — вхід «Увійти через Vertep»; сертифікат панелі видав Vertep.\n' "$core_url"
+elif grep -q '^LAB_RESOURCE_TOKEN=.' "$env_file"; then
+  printf 'Вхід: «Увійти через Vertep».\n'
+else
+  printf 'Не підключено до Vertep: у Vertep відкрийте «Налаштування → Лабораторія» → «Підключити лабораторію» і виконайте показану команду на цій VM.\n'
+fi
+printf 'Службовий токен власника — у %s (LAB_OWNER_TOKEN).\n' "$env_file"
 exit 0
 }

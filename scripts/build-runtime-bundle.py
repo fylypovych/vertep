@@ -108,6 +108,15 @@ def build(root: Path, output: Path, version: str, sequence: int,
     for name in MONITORING:
         _copy(root / name, output / name)
     _copy(root / "installer/update-public.pem", output / "installer/update-public.pem")
+    # Manifests of the application modules shipped inside the release, with the images the
+    # release built (config/module-images.json, written by the release workflow): the host
+    # executor takes a bundled module's manifest only from here, never from the request.
+    if (root / "config/module-images.json").is_file():
+        from core.module.lifecycle import BUNDLED, bundled_manifest
+        manifests = {name: bundled_manifest(name) for name in BUNDLED}
+        manifests = {name: data for name, data in manifests.items() if data.get("kind") == "application"}
+        (output / "runtime/module-manifests.json").write_text(
+            json.dumps(manifests, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     # The immutable ComfyUI component pins travel with the bundle: the host has
     # no source checkout, so the deployment needs them to write the expected
     # runtime inventory the GPU node verifies itself against (Issue #120/#178.1).

@@ -29,6 +29,7 @@ from .gpu_lease import (LeaseDenied, LeaseLost, LeaseManager, ResourceRequiremen
                         ResourceUnavailable)
 from .policy import ROLE_PROFILES, Action, PolicyDenied, PolicyGate
 from .state_store import append_jsonl, read_json, read_jsonl, write_json, exclusive
+from .task_contract import TaskContractError, requires_task_contract, validate_task_contract
 from functools import wraps
 
 
@@ -176,12 +177,23 @@ class Orchestrator:
 
     @serialized_queue
     def enqueue(self, kind: str, role: str = "reviewer", payload: dict | None = None,
-                task_id: str = "") -> Task:
+                task_id: str = "", *, task_contract=None,
+                require_contract: bool = False) -> Task:
         if role not in ROLES:
             raise ValueError(f"unknown role {role}; expected one of {ROLES}")
         self.gate.require(Action.READ_STATE, actor=self.actor)
+        normalized_payload = dict(payload or {})
+        raw_contract = (
+            task_contract
+            if task_contract is not None
+            else normalized_payload.get("task_contract")
+        )
+        if raw_contract is not None:
+            normalized_payload["task_contract"] = validate_task_contract(raw_contract).as_dict()
+        elif require_contract and requires_task_contract(kind):
+            validate_task_contract(None)
         task = Task(task_id=task_id or f"t-{len(self.queue) + 1:04d}", kind=kind, role=role,
-                    payload=payload or {},
+                    payload=normalized_payload,
                     created_at=datetime.now(timezone.utc).isoformat())
         for existing in self.queue:
             if existing.task_id == task.task_id:
@@ -313,6 +325,19 @@ class Orchestrator:
                                 Action.RUN_TESTS if task.kind in {"test", "verify"} else Action.LOCAL_FIX)
             self.gate.require(execution_action, actor=task.role, subject=task.task_id)
             if execution_action == Action.LOCAL_FIX:
+                try:
+                    contract = validate_task_contract(task.payload.get("task_contract"))
+                except TaskContractError as error:
+                    self.trail.append(
+                        actor=task.role,
+                        action="task_contract",
+                        subject=task.task_id,
+                        decision="DENIED",
+                        rule="task_contract_required",
+                        reason=str(error),
+                    )
+                    raise
+                task.payload["task_contract"] = contract.as_dict()
                 self.gate.require(Action.EXECUTE_APPROVED_TASK, actor=self.actor,
                                   subject=task.task_id, scope=task.approval_scope)
             if hasattr(active_executor, "timeout"):
@@ -345,7 +370,7 @@ class Orchestrator:
                            "reason": f"task {task.task_id} executed by role "
                                      f"{task.role} through the role executor",
                            "result": task_result})
-        except PolicyDenied as error:
+        except (PolicyDenied, TaskContractError) as error:
             task.state = RunState.BLOCKED.value
             self.budget.record_run(status="blocked", detail=str(error))
             self._record_result(task, RunState.BLOCKED.value, reason=str(error))

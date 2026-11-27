@@ -30,6 +30,8 @@ from .policy import (Action, Decision, Grant, PolicyDenied, PolicyGate,
 from .qualification import (CRITERIA, CRITERION_IDS, STATUS_BLOCKED, STATUS_FAIL,
                             STATUS_PASS, build_row, overall_status, validate_evidence,
                             validate_row)
+from .task_contract import (TaskContract, TaskContractError, load_task_contract_template,
+                            requires_task_contract, validate_task_contract)
 from .workspace import IsolationViolation, Workspace
 
 __all__ = [
@@ -38,6 +40,8 @@ __all__ = [
     "LeaseDenied", "LeaseLost", "LeaseManager", "PaidModelDenied", "PolicyDenied",
     "PolicyGate", "QuotaExceeded", "ResourceRequirement", "ResourceUnavailable",
     "STANDING_PERMISSIONS", "STATUS_BLOCKED", "STATUS_FAIL", "STATUS_PASS",
-    "VertepResourceClient", "Workspace", "build_row", "overall_status",
-    "validate_evidence", "validate_row",
+    "TaskContract", "TaskContractError",
+    "VertepResourceClient", "Workspace", "build_row", "load_task_contract_template",
+    "overall_status", "requires_task_contract", "validate_evidence", "validate_row",
+    "validate_task_contract",
 ]

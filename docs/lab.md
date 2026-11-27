@@ -22,6 +22,7 @@ LAB працює окремо від production CORE: policy gate, audit trail, 
 ## Документи
 
 - [Операції та діагностика](lab/operations.md) — поточні точки входу без активації прав за замовчуванням.
+- [Шаблон задачі (Task Contract)](../lab/task_contract.md) — обов’язкові 4 пункти перед стартом будь-якої нової задачі зміни коду в LAB (файли → інваріанти → перевірка без GPU → артефакт-доказ); валідується fail-closed в `lab/orchestrator.py`, CLI (`contract`, `enqueue --contract`) і API (`/api/lab/task-contract/*`, `POST /api/lab/tasks`).
 - [GPU-контракт](lab/lab-gpu-contract.md) — production-priority lease та його межі.
 - [Кваліфікація R1–R6](lab/lab-qualification.md) — реальні докази; процедура не є PASS.
 - [Погоджений наскрізний цикл](lab/lab-issue-cycle.md) — контракт; виконання доводиться окремо.

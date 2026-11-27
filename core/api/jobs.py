@@ -1181,3 +1181,78 @@ def job_file(job_id: str, folder: str, filename: str):
     if not artifact:
         raise HTTPException(404, "Asset not found")
     return download_artifact(job_id, artifact.artifact_id)
+
+
+class TranscriptionRequest(BaseModel):
+    artifact_id: str
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")
+
+
+@router.post("/api/jobs/{job_id}/transcriptions", status_code=202)
+def transcribe_job_audio(job_id: str, request: TranscriptionRequest):
+    from .media_operations import enqueue_operation, input_artifact
+
+    job = store.jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    audio = input_artifact(job, request.artifact_id, {".wav", ".mp3", ".ogg", ".m4a", ".flac", ".webm"})
+    return enqueue_operation(job, "stt", {"language": request.language, "min_vram_mb": 0}, audio=audio)
+
+
+class LoraTrainingRequest(BaseModel):
+    base_model: str
+    steps: int = Field(default=1000, ge=50, le=10000)
+    rank: int = Field(default=16, ge=4, le=128)
+
+
+@router.post("/api/jobs/{job_id}/lora-training", status_code=202)
+def train_job_character_lora(job_id: str, request: LoraTrainingRequest):
+    from adapters.lora_training import validate_base_model
+    from ..character_references import list_references
+    from .media_operations import enqueue_operation
+
+    job = store.jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    try:
+        model = validate_base_model(request.base_model)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    refs = list_references(job.character_id)
+    if not refs or len(refs) > 32:
+        raise HTTPException(422, "LoRA requires between 1 and 32 character references")
+    return enqueue_operation(job, "lora_train", {
+        **request.model_dump(),
+        "min_vram_mb": model["min_vram_mb"],
+        "character_references": [{"filename": ref["filename"], "sha256": ref["sha256"]}
+                                 for ref in refs],
+    })
+
+
+class LipSyncRequest(BaseModel):
+    audio_artifact_id: str
+    portrait_filename: str | None = None
+    fps: int = Field(default=25, ge=12, le=60)
+
+
+@router.post("/api/jobs/{job_id}/lip-sync", status_code=202)
+def lipsync_job_audio(job_id: str, request: LipSyncRequest):
+    from adapters.providers.lipsync_backends import PORTRAIT_SUFFIXES
+    from ..character_references import list_references
+    from .media_operations import enqueue_operation, input_artifact, verified_voice_contract
+
+    job = store.jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    audio = input_artifact(job, request.audio_artifact_id, {".wav"})
+    contract = verified_voice_contract(job, audio)
+    portrait = next((ref for ref in list_references(job.character_id)
+                     if Path(ref["filename"]).suffix.lower() in PORTRAIT_SUFFIXES
+                     and request.portrait_filename in {None, ref["filename"]}), None)
+    if portrait is None:
+        raise HTTPException(422, "Character reference portrait is unavailable")
+    return enqueue_operation(job, "lipsync", {
+        "fps": request.fps, "min_vram_mb": 8192,
+        "audio_contract": contract,
+        "character_references": [{"filename": portrait["filename"], "sha256": portrait["sha256"]}],
+    }, audio=audio)

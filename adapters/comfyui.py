@@ -15,6 +15,7 @@ TEXT_PLACEHOLDERS = frozenset({
     "CLIP_VISION_MODEL",
     "WAN_UNET_MODEL",
     "WAN_14B_MODEL",
+    "WAN_14B_LOW_NOISE_MODEL",
     "WAN_CLIP_MODEL",
     "WAN_VAE_MODEL",
     "WAN_14B_VAE_MODEL",
@@ -35,6 +36,9 @@ def placeholder_values(topic: str) -> dict[str, str]:
         "CLIP_VISION_MODEL": os.getenv("COMFYUI_CLIP_VISION_MODEL", "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"),
         "WAN_UNET_MODEL": os.getenv("COMFYUI_WAN_UNET_MODEL", "wan2.2_ti2v_5B_fp16.safetensors"),
         "WAN_14B_MODEL": os.getenv("COMFYUI_WAN_14B_MODEL", "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"),
+        "WAN_14B_LOW_NOISE_MODEL": os.getenv(
+            "COMFYUI_WAN_14B_LOW_NOISE_MODEL", "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+        ),
         "WAN_CLIP_MODEL": os.getenv("COMFYUI_WAN_CLIP_MODEL", "umt5_xxl_fp8_e4m3fn_scaled.safetensors"),
         "WAN_VAE_MODEL": os.getenv("COMFYUI_WAN_VAE_MODEL", "wan2.2_vae.safetensors"),
         "WAN_14B_VAE_MODEL": os.getenv("COMFYUI_WAN_14B_VAE_MODEL", "wan_2.1_vae.safetensors"),

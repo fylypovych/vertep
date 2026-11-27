@@ -184,3 +184,42 @@ def test_lora_dispatcher_capability_and_outbound_only_compose():
     assert "ostris/ai-toolkit" in dockerfile
     assert "services.lora_trainer_service:app" in dockerfile
     assert inbound_port_violations(ROOT / "deploy" / "docker-compose.yml") == []
+
+
+def test_core_queues_lora_and_imports_model_metadata(monkeypatch):
+    from core.app import app
+    from core import character_references
+    from core.state import store
+
+    monkeypatch.setenv("NODE_API_TOKEN", "lora-integration-token")
+    monkeypatch.setenv("REQUIRE_WORKER_SELF_TEST", "false")
+    client = TestClient(app, headers={"x-vertep-token": "lora-integration-token"})
+    job = store.create("Train LoRA", "did_samogon", 5)
+    monkeypatch.setattr(character_references, "list_references", lambda _: [
+        {"filename": "portrait.png", "sha256": "b" * 64},
+    ])
+    route = f"/api/jobs/{job.job_id}/lora-training"
+    assert client.post(route, json={"base_model": "black-forest-labs/FLUX.1-dev"}).status_code == 422
+    name = "stabilityai/stable-diffusion-xl-base-1.0"
+    queued = client.post(route, json={"base_model": name, "steps": 50})
+    assert queued.status_code == 202, queued.text
+    worker = {"node_name": "test-lora", "role": "gpu", "vram_mb": 24576,
+              "capabilities": ["lora_training"], "supported_tasks": ["lora_train"]}
+    assert client.post("/api/workers/heartbeat", json=worker).status_code == 200
+    task = client.post("/api/tasks/claim", json=worker).json()["task"]
+    assert task["task_id"] == queued.json()["task_id"]
+    assert task["character_references"][0]["filename"] == "portrait.png"
+    header = b'{"lora":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}'
+    data = len(header).to_bytes(8, "little") + header + bytes(4)
+    contract = {"format": LORA_CONTRACT_FORMAT, "character_id": job.character_id,
+                "base_model": name, "base_model_license": validate_base_model(name)["license"],
+                "comfyui_lora_name": "did_samogon/model.safetensors", "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest()}
+    result = client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": task["task_id"], "node_name": "test-lora", "success": True,
+        "artifacts": [{"contract": contract, "data_base64": base64.b64encode(data).decode()}],
+    })
+    assert result.status_code == 200, result.text
+    loaded = next(item for item in job.artifacts if item.artifact_id == result.json()["artifact_id"])
+    assert loaded.metadata == contract
+    assert (store.root / job.job_id / loaded.path).read_bytes() == data

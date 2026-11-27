@@ -300,6 +300,26 @@ export class SettingsApiService {
       .pipe(catchError(this.handleError));
   }
 
+  labConnection(): Observable<{ connected: boolean; connected_at: string | null; panel_url: string | null }> {
+    return this.http
+      .get<{ connected: boolean; connected_at: string | null; panel_url: string | null }>(`${this.baseUrl}/lab/connection`,
+        { headers: this.getHeaders(), context: new HttpContext().set(BACKGROUND_REQUEST, true) })
+      .pipe(catchError(this.handleError));
+  }
+
+  labConnectionToken(): Observable<{ token: string; expires_at: string; core_certificate_sha256: string }> {
+    return this.http
+      .post<{ token: string; expires_at: string; core_certificate_sha256: string }>(`${this.baseUrl}/lab/connection-token`, {},
+        { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
+  labDisconnect(): Observable<{ connected: boolean }> {
+    return this.http
+      .delete<{ connected: boolean }>(`${this.baseUrl}/lab/connection`, { headers: this.getHeaders() })
+      .pipe(catchError(this.handleError));
+  }
+
   saveLabPanel(url: string): Observable<{ url: string | null }> {
     return this.http
       .put<{ url: string | null }>(`${this.baseUrl}/settings/lab-panel`, { url }, { headers: this.getHeaders() })

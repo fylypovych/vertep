@@ -129,3 +129,18 @@ def test_comfyui_nvidia_and_amd_dockerfiles_declare_wan22_node_parity():
     ):
         assert f'"{node}"' in nvidia, f"Missing {node} in NVIDIA Dockerfile"
         assert f'"{node}"' in amd, f"Missing {node} in AMD Dockerfile"
+
+
+def test_wan22_14b_runs_both_experts_before_decoding():
+    graph = json.loads((ROOT / "workflows/video/wan22-14b.json").read_text())
+    low = graph[graph["9"]["inputs"]["samples"][0]]["inputs"]
+    high = graph[low["latent_image"][0]]["inputs"]
+    assert high["end_at_step"] == low["start_at_step"]
+    assert high["return_with_leftover_noise"] == "enable"
+    assert low["add_noise"] == "disable"
+    assert low["end_at_step"] == low["steps"]
+    models = [
+        graph[graph[inputs["model"][0]]["inputs"]["model"][0]]["inputs"]["unet_name"]
+        for inputs in (high, low)
+    ]
+    assert models == ["{{WAN_14B_MODEL}}", "{{WAN_14B_LOW_NOISE_MODEL}}"]

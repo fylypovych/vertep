@@ -60,6 +60,7 @@ report = {
         "ModelSamplingSD3",
         "Wan22ImageToVideoLatent",
         "EmptyHunyuanLatentVideo",
+        "KSamplerAdvanced",
         "KSampler",
         "VAEDecode",
         "VHS_VideoCombine",

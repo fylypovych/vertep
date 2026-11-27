@@ -92,6 +92,13 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["POST", "/api/brands/migrate-to-module"],
         ["GET", "/api/lab/login"],  # #491 L3 shared administrator identity for the LAB panel.
         ["GET", "/api/lab/panel"],
+        ["POST", "/api/lab/connection-token"],  # #491 the LAB connects itself with a one-time token.
+        ["POST", "/api/lab/connect"],
+        ["GET", "/api/lab/connection"],
+        ["DELETE", "/api/lab/connection"],
+        ["POST", "/api/jobs/{job_id}/lip-sync"],  # #544/#548/#551 supplemental media operations on a Job.
+        ["POST", "/api/jobs/{job_id}/lora-training"],
+        ["POST", "/api/jobs/{job_id}/transcriptions"],
         ["GET", "/api/settings/lab-panel"],  # #491 L2: the LAB panel address set in Settings.
         ["GET", "/api/system/backups/available"],  # «Бекапи» only while the backup service answers.
         ["PUT", "/api/settings/lab-panel"],

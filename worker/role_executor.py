@@ -836,7 +836,14 @@ def execute_lora_train(task: dict) -> list[dict]:
     resolution = int(task.get("resolution") or spec["default_resolution"])
 
     images_payload: list[dict] = []
-    if isinstance(task.get("images"), list) and task["images"]:
+    if task.get("character_references"):
+        images_payload = [{"filename": name, "content_base64": base64.b64encode(data).decode("ascii"),
+                           "caption": f"portrait of {trigger_word}"}
+                          for name, data in _fetch_character_references(task)]
+        ds_sha = hashlib.sha256(
+            json.dumps(images_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    elif isinstance(task.get("images"), list) and task["images"]:
         images_payload = list(task["images"])
         ds_sha = hashlib.sha256(
             json.dumps(images_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -904,6 +911,8 @@ def execute_lora_train(task: dict) -> list[dict]:
         "base_model": spec["model"],
         "base_model_license": spec["license"],
         "trigger_word": trigger_word,
+        "steps": steps,
+        "rank": rank,
         "comfyui_lora_name": saved["comfyui_lora_name"],
         "dataset_sha256": saved["dataset_sha256"],
         "sha256": actual_sha,

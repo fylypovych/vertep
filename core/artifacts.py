@@ -32,7 +32,8 @@ def write_manifest(job: Job, job_root: Path) -> Path:
 
 def register_artifact(job: Job, job_root: Path, path: Path, kind: str, *,
                       scene_id: str | None = None, task_id: str | None = None,
-                      node_name: str | None = None, workflow: str | None = None) -> ArtifactRecord:
+                      node_name: str | None = None, workflow: str | None = None,
+                      metadata: dict | None = None) -> ArtifactRecord:
     with _manifest_locks[job.job_id]:
         path = path.resolve()
         base = (job_root / job.job_id).resolve()
@@ -48,7 +49,7 @@ def register_artifact(job: Job, job_root: Path, path: Path, kind: str, *,
             path=relative.as_posix(), filename=path.name, mime_type=mime_type,
             size=path.stat().st_size, sha256=_digest(path), scene_id=scene_id,
             task_id=task_id, node_name=node_name, workflow=workflow,
-            created_at=utc_now(),
+            created_at=utc_now(), metadata=metadata or {},
         )
         job.artifacts.append(record)
         job.version += 1

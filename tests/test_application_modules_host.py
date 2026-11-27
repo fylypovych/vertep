@@ -142,3 +142,52 @@ def test_host_executor_never_follows_a_link_the_worker_planted(tmp_path):
     apply._private_json(state, {"ok": True})
     assert outside.read_text() == "keep" and not state.is_symlink()
     assert stat.S_IMODE(state.stat().st_mode) == 0o600
+
+
+def _bundled(image="ghcr.io/fylypovych/vertep-module-brands@sha256:" + "1" * 64):
+    from core.module.lifecycle import bundled_manifest
+    manifest = bundled_manifest("brands")
+    return {"bundled": "brands", "manifest": {**manifest, "container": {**manifest["container"], "image": image}}}
+
+
+def test_host_takes_a_bundled_module_manifest_only_from_the_signed_bundle(monkeypatch, tmp_path):
+    from worker import application_container as containers
+    apply = executor()
+    pinned = "ghcr.io/fylypovych/vertep-module-brands@sha256:" + "1" * 64
+    shipped = _bundled(pinned)["manifest"]
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime/module-manifests.json").write_text(json.dumps({"brands": shipped}))
+    (tmp_path / "config/application-modules").mkdir(parents=True)
+    started = []
+    monkeypatch.setattr(containers, "start", lambda m, **options: started.append(m.container))
+    monkeypatch.setattr(containers, "stop", lambda module_id: None)
+    runner = lambda command, **_: SimpleNamespace(stdout="", returncode=0)  # noqa: E731
+    tampered = _bundled("ghcr.io/evil/brands@sha256:" + "2" * 64)
+    tampered["manifest"]["container"]["port"] = 22
+    for module_id, package, expected in (("brands", tampered, [shipped["container"]]),
+                                         ("characters", _bundled(pinned), [])):
+        started.clear()
+        (tmp_path / apply.MODULE_REQUEST).write_text(json.dumps({"modules": [
+            {"module_id": module_id, "package": package, "token": "t"}]}))
+        state = apply.apply_modules(tmp_path, runner)
+        assert started == expected  # the request's image and port are ignored
+    assert "не входить" in state["errors"]["characters"]
+
+
+def test_runtime_bundle_carries_the_application_module_manifests():
+    text = (Path(__file__).parents[1] / "scripts/build-runtime-bundle.py").read_text()
+    assert "runtime/module-manifests.json" in text and 'data.get("kind") == "application"' in text
+
+
+def test_worker_trusts_its_own_release_manifest_for_a_bundled_module(monkeypatch):
+    from core.module.lifecycle import bundled_manifest
+    from worker import application_supervisor as supervisor
+    monkeypatch.setattr("core.module.lifecycle.release_module_images",
+                        lambda: {"brands": "ghcr.io/fylypovych/vertep-module-brands@sha256:" + "3" * 64})
+    sent = _bundled("ghcr.io/evil/brands@sha256:" + "4" * 64)  # CORE's copy is ignored
+    manifest = supervisor._verified({"module_id": "brands", "package": sent}, None)
+    assert manifest.kind == "application" and manifest.container["image"].endswith("3" * 64)
+    assert manifest.container["image"] == bundled_manifest("brands")["container"]["image"]
+    import pytest
+    with pytest.raises(ValueError):
+        supervisor._verified({"module_id": "characters", "package": sent}, None)

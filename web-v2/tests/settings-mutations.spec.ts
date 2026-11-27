@@ -63,6 +63,29 @@ test.describe('Settings — LAB panel', () => {
     await page.reload();
     await expect(page.getByTestId('lab-panel-url')).toHaveValue('https://10.10.10.20:8444');
   });
+
+  test('«Підключити лабораторію» дає одноразову команду з адресою CORE, токеном і відбитком сертифіката', async ({ page }) => {
+    let connected = false;
+    await mockApi(page);
+    await page.route('**/api/lab/connection', (route: any) => {
+      if (route.request().method() === 'DELETE') connected = false;
+      return route.fulfill({ json: { connected, connected_at: null, panel_url: connected ? 'https://10.10.10.50:8444' : null } });
+    });
+    await page.route('**/api/lab/connection-token', (route: any) =>
+      route.fulfill({ json: { token: 'a'.repeat(64), expires_at: '2026-11-27T15:00:00+00:00', core_certificate_sha256: 'b'.repeat(64) } }));
+    await page.goto('/settings?tab=system');
+    await page.getByTestId('lab-connect').click();
+    const command = page.getByTestId('lab-connect-command');
+    await expect(command).toContainText('bootstrap-lab.sh');
+    await expect(command).toContainText(`VERTEP_LAB_TOKEN=${'a'.repeat(64)}`);
+    await expect(command).toContainText(`VERTEP_CORE_PIN=${'b'.repeat(64)}`);
+    await expect(command).toContainText('VERTEP_CORE_URL=http');
+    connected = true;
+    await page.reload();
+    await expect(page.getByTestId('lab-connected')).toBeVisible();
+    await page.getByTestId('lab-disconnect').click();
+    await expect(page.getByTestId('lab-connect')).toBeVisible();
+  });
 });
 
 test.describe('Settings — side reads', () => {

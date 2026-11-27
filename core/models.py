@@ -214,6 +214,7 @@ class SceneRecord(BaseModel):
     attempts: list[AttemptRecord] = Field(default_factory=list)
 
 class ArtifactRecord(BaseModel):
+    metadata: dict[str, Any] = Field(default_factory=dict)
     owner: str | None = None
     project: str | None = None
     acl: list[str] = Field(default_factory=list)
@@ -381,6 +382,7 @@ class Job(BaseModel):
     shared_publications: list[dict[str, Any]] = Field(default_factory=list)
     workflow: str | None = None
     active_task_id: str | None = None
+    media_operations: dict[str, dict[str, Any]] = Field(default_factory=dict)
     active_task_ids: dict[str, str] = Field(default_factory=dict)
     tts_active_task_ids: dict[str, str] = Field(default_factory=dict)
     completed_task_ids: list[str] = Field(default_factory=list)

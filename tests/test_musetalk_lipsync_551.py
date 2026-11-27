@@ -187,6 +187,8 @@ def test_musetalk_service_health_and_lipsync(monkeypatch, tmp_path):
     fake_script.write_text("# stub\n", encoding="utf-8")
     monkeypatch.setattr(musetalk_service, "_musetalk_entry", lambda: fake_script)
 
+    assert client.get("/health").status_code == 503
+    monkeypatch.setattr(musetalk_service, "_require_runtime", lambda: None)
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["engine"] == "musetalk"
@@ -399,3 +401,47 @@ def test_musetalk_dockerfile_and_compose_outbound_only():
     assert "ports" not in svc
     assert "8102" in [str(p) for p in svc.get("expose", [])]
     assert inbound_port_violations(compose_path) == []
+
+
+def test_core_queues_lipsync_with_verified_audio_and_imports_video(monkeypatch):
+    from core.app import app
+    from core.artifacts import register_artifact
+    from core import character_references
+    from core.state import store
+
+    monkeypatch.setenv("NODE_API_TOKEN", "lipsync-integration-token")
+    monkeypatch.setenv("REQUIRE_WORKER_SELF_TEST", "false")
+    client = TestClient(app, headers={"x-vertep-token": "lipsync-integration-token"})
+    job = store.create("Animate portrait", "did_samogon", 5)
+    portrait_digest = hashlib.sha256(_make_valid_png()).hexdigest()
+    monkeypatch.setattr(character_references, "list_references", lambda _: [
+        {"filename": "portrait.png", "sha256": portrait_digest},
+    ])
+    data = _make_valid_wav()
+    audio_path = store.root / job.job_id / "audio" / "speech.wav"
+    audio_path.write_bytes(data)
+    audio_contract = {"format": "audio_contract/v1", "sha256": hashlib.sha256(data).hexdigest()}
+    audio = register_artifact(job, store.root, audio_path, "audio", metadata=audio_contract)
+    response = client.post(f"/api/jobs/{job.job_id}/lip-sync",
+                           json={"audio_artifact_id": audio.artifact_id})
+    assert response.status_code == 202, response.text
+    worker = {"node_name": "test-lipsync", "role": "gpu", "vram_mb": 8192,
+              "capabilities": ["avatar_lipsync"], "supported_tasks": ["lipsync"]}
+    assert client.post("/api/workers/heartbeat", json=worker).status_code == 200
+    task = client.post("/api/tasks/claim", json=worker).json()["task"]
+    assert task["task_id"] == response.json()["task_id"]
+    assert task["audio_contract"] == audio_contract
+    assert base64.b64decode(task["audio_artifact"]["data_base64"]) == data
+    video = _make_valid_mp4()
+    contract = {"format": LIPSYNC_CONTRACT_FORMAT, "character_id": job.character_id,
+                "audio_sha256": audio.sha256, "audio_contract_format": "audio_contract/v1",
+                "portrait_sha256": portrait_digest, "size": len(video),
+                "sha256": hashlib.sha256(video).hexdigest()}
+    result = client.post("/api/tasks/result", json={
+        "job_id": job.job_id, "task_id": task["task_id"], "node_name": "test-lipsync", "success": True,
+        "artifacts": [{"contract": contract, "data_base64": base64.b64encode(video).decode()}],
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "COMPLETED"
+    artifact_id = result.json()["artifact_id"]
+    assert client.get(f"/api/jobs/{job.job_id}/artifacts/{artifact_id}/download").content == video

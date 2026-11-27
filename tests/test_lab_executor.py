@@ -218,7 +218,18 @@ def test_returned_usage_exceeding_limit_fails_and_blocks_more_calls(env, gate, l
 
 def test_exact_scope_approval_drives_one_task_and_retry(env, tmp_path, gate, ledger, endpoint):
     orchestrator = Orchestrator(env, gate, ledger, executor=_executor(endpoint.url))
-    task = orchestrator.enqueue("fix", role="backend", task_id="approved-task", payload={"path": "lab/example.py"})
+    contract = {
+        "files_to_change": ["lab/example.py"],
+        "invariants": ["Policy gate and isolation remain intact"],
+        "no_gpu_verification": ["pytest -q tests/test_lab_executor.py"],
+        "proof_artifact": "state/results.jsonl record with pytest exit code 0",
+    }
+    task = orchestrator.enqueue(
+        "fix",
+        role="backend",
+        task_id="approved-task",
+        payload={"path": "lab/example.py", "task_contract": contract},
+    )
     assert orchestrator.run_once()["state"] == "BLOCKED"
     assert endpoint.requests == []
     gate.register_grant(actor="lab", action="execute_approved_task", subject=task.task_id,
@@ -231,7 +242,12 @@ def test_exact_scope_approval_drives_one_task_and_retry(env, tmp_path, gate, led
     same = restarted.enqueue("fix", role="backend", task_id=task.task_id, payload=task.payload)
     assert same.state == "COMPLETED"
     with pytest.raises(ValueError, match="different scope"):
-        restarted.enqueue("fix", role="backend", task_id=task.task_id, payload={"path": "other.py"})
+        restarted.enqueue(
+            "fix",
+            role="backend",
+            task_id=task.task_id,
+            payload={"path": "other.py", "task_contract": contract},
+        )
 
 
 def test_disabled_executor_never_calls_the_endpoint(env, tmp_path, endpoint, gate,

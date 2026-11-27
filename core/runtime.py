@@ -246,6 +246,26 @@ async def _watchdog() -> None:
                     voice_dispatch.release_worker(node_name, task["task_id"])
                 continue
             voice_job = store.jobs.get(task.get("job_id"))
+            if voice_job and task["task_id"] in voice_job.media_operations:
+                operation = voice_job.media_operations[task["task_id"]]
+                if voice_job.status == JobStatus.CANCELLED or operation["status"] in {
+                        "COMPLETED", "FAILED", "CANCELLED"}:
+                    task_queue.discard(task["task_id"])
+                    if voice_job.status == JobStatus.CANCELLED and operation["status"] == "CLAIMED":
+                        operation["status"] = "CANCELLED"
+                elif operation["kind"] == "lora_train":
+                    task_queue.discard(task["task_id"])
+                    operation.update(status="FAILED", error="Training task lease expired")
+                    store.repository.record_task(task, "FAILED", error=operation["error"])
+                else:
+                    operation["status"] = "QUEUED"
+                for worker in store.workers.values():
+                    if worker.get("current_task") == task["task_id"]:
+                        worker.update(current_task=None, current_job=None,
+                                      status=worker.get("desired_state") or "READY")
+                        store.save_worker(worker)
+                store.event(voice_job, f"MEDIA OPERATION {task['task_id']} LEASE EXPIRED")
+                continue
             if task.get("task") == "publish" and voice_job and task["task_id"] in voice_job.publish_task_ids:
                 from .api.job_helpers import _handle_publish_result
                 task_queue.discard(task["task_id"])

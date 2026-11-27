@@ -79,8 +79,11 @@ def _now() -> datetime:
 
 
 def _enabled() -> bool:
-    return (os.getenv("LAB_IDLE_SHARING_ENABLED", "false").lower() == "true"
-            and bool(os.getenv("LAB_LEASE_TOKEN")))
+    # A LAB connected by the administrator (#491) counts as consent on the CORE side;
+    # the LAB still lends nothing until its own idle-sharing setting is on.
+    from ..lab_connection import connected
+    return ((os.getenv("LAB_IDLE_SHARING_ENABLED", "false").lower() == "true"
+             and bool(os.getenv("LAB_LEASE_TOKEN"))) or connected())
 
 
 def _grace_seconds() -> int:
@@ -88,9 +91,10 @@ def _grace_seconds() -> int:
 
 
 def _authorize(request: Request) -> None:
+    from ..lab_connection import lease_token_valid
     token = os.getenv("LAB_LEASE_TOKEN", "")
-    if not token or not secrets.compare_digest(
-            request.headers.get("x-vertep-lab-token", ""), token):
+    supplied = request.headers.get("x-vertep-lab-token", "")
+    if not ((token and secrets.compare_digest(supplied, token)) or lease_token_valid(supplied)):
         raise HTTPException(401, "Invalid laboratory token")
 
 

@@ -35,6 +35,7 @@ from .job_helpers import (
     _serialize_job_result,
     assembly_worker_mismatch,
     engine_release_hold)
+from .media_operations import RESULT_TYPES, operation_delivery, operation_result
 from .task_results import (
     _text_task_lease,
     assembly_result,
@@ -154,6 +155,43 @@ def _claim_task(payload: TaskClaim):
             # The Job was deleted: its task can never run and must not block the queue.
             task_queue.ack(task["task_id"])
             continue
+        if task.get("task") in RESULT_TYPES:
+            task_id = task["task_id"]
+            operation = job.media_operations.get(task_id)
+            if operation is None or operation["kind"] != task["task"] \
+                    or operation["status"] not in {"QUEUED", "CLAIMED"}:
+                task_queue.ack(task_id)
+                continue
+            if job.status == JobStatus.CANCELLED:
+                operation["status"] = "CANCELLED"
+                store.event(job, f"MEDIA OPERATION {task_id} CANCELLED")
+                task_queue.ack(task_id)
+                continue
+            if job.status == JobStatus.PAUSED or not _select_worker(
+                    [worker_data], job, task_type=task["task"], min_vram_mb=task.get("min_vram_mb")):
+                held_tasks.append(task_id)
+                continue
+            try:
+                delivery = operation_delivery(job, task, operation)
+            except (OSError, ValueError, StopIteration) as error:
+                operation.update(status="FAILED", error=str(error))
+                store.event(job, f"MEDIA OPERATION {task_id} INPUT UNAVAILABLE")
+                task_queue.ack(task_id)
+                continue
+            for held_task_id in held_tasks:
+                task_queue.release(held_task_id)
+            for previous in store.workers.values():
+                if previous.get("node_name") != payload.node_name and previous.get("current_task") == task_id:
+                    previous.update(status=previous.get("desired_state") or "READY",
+                                    current_job=None, current_task=None)
+                    store.save_worker(previous)
+            worker_data.update(status="BUSY", current_job=job.job_id, current_task=task_id)
+            store.workers[payload.node_name] = worker_data
+            store.save_worker(worker_data)
+            operation["status"] = "CLAIMED"
+            store.event(job, f"MEDIA OPERATION {task_id} CLAIMED")
+            store.repository.record_task(task, "CLAIMED", payload.node_name)
+            return {"task": delivery}
         if task.get("kind") == "image_storyboard":
             sb_version = task.get("storyboard_version")
             if job.status not in {JobStatus.STORYBOARD_PENDING_APPROVAL,
@@ -439,7 +477,8 @@ def renew_task(payload: TaskRenew, request: Request):
             raise HTTPException(
                 409, "Task is no longer assigned to this worker")
         return {"renewed": task_queue.renew(payload.task_id)}
-    text_job = next((job for job in store.jobs.values() if payload.task_id in {
+    text_job = next((job for job in store.jobs.values() if payload.task_id in job.media_operations
+                     or payload.task_id in {
                     job.script_task_id, job.storyboard_task_id}), None)
     if text_job is not None:
         owned, _ = _text_task_lease(
@@ -586,6 +625,11 @@ def task_character_reference(task_id: str, filename: str, request: Request):
     job = store.jobs.get(worker.get("current_job") or "")
     if worker.get("current_task") != task_id or job is None:
         raise HTTPException(409, "Task is no longer owned by this worker")
+    operation = job.media_operations.get(task_id)
+    if operation is not None and (
+            not task_queue.inflight_active(task_id)
+            or not any(ref["filename"] == filename for ref in operation["references"])):
+        raise HTTPException(403, "Reference is not approved for this attempt")
     path = reference_path(job.character_id, filename)
     if path is None:
         raise HTTPException(404, "Reference not found")
@@ -815,6 +859,8 @@ def task_result(result: TaskResult, request: Request):
     job = store.jobs.get(result.job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    if result.task_id in job.media_operations:
+        return operation_result(job, result)
     _report_gpu_outcome(job, result)
     if result.task_id in job.image_storyboard_task_ids:
         return image_storyboard_result(job, result)

@@ -19,18 +19,24 @@ OTIO_MEDIA_TYPE = "application/vnd.opentimelineio+json; charset=utf-8"
 
 
 def _extract_scenes(document: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract ordered scene dicts from either a Job Storyboard or Scenario snapshot."""
-    if isinstance(document.get("scenes"), list):
-        return [s for s in document["scenes"] if isinstance(s, dict)]
+    """Extract the selected Storyboard version or the supplied Scenario scenes."""
+    sources = [document]
     for key in ("storyboards", "versions"):
         versions = document.get(key)
-        if isinstance(versions, list) and versions:
-            latest = versions[-1]
-            if isinstance(latest, dict) and isinstance(latest.get("scenes"), list):
-                return [s for s in latest["scenes"] if isinstance(s, dict)]
-    script = document.get("script")
-    if isinstance(script, dict) and isinstance(script.get("scenes"), list):
-        return [s for s in script["scenes"] if isinstance(s, dict)]
+        if not isinstance(versions, list) or not versions:
+            continue
+        active = document.get("active_version")
+        selected = (versions[-1] if active is None else
+                    next((item for item in versions
+                          if isinstance(item, dict) and item.get("version") == active), None))
+        if selected is None:
+            raise ValueError("Active storyboard version is unavailable")
+        sources.insert(0, selected)
+        break
+    sources.append(document.get("script"))
+    for source in sources:
+        if isinstance(source, dict) and isinstance(source.get("scenes"), list):
+            return [scene for scene in source["scenes"] if isinstance(scene, dict)]
     return []
 
 
@@ -253,7 +259,7 @@ def export_storyboard_otio(
         "source_kind": source_kind,
         "job_id": document.get("job_id"),
         "scenario_id": document.get("scenario_id") or document.get("id"),
-        "version": document.get("version"),
+        "version": document.get("active_version", document.get("version")),
         "brand_id": document.get("brand_id") or document.get("owner_brand_id"),
         "fps": rate,
         "scene_count": len(scenes),
