@@ -1,6 +1,6 @@
 schema_version: "2.0"
 name: publisher
-version: "0.0.3.95"
+version: "0.0.3.96"
 label: Публікація
 role: publisher
 capabilities:

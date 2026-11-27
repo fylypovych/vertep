@@ -1,6 +1,6 @@
 module:
   name: "web-ui"
-  version: "0.0.4.34"
+  version: "0.0.4.35"
   schema_version: "2.0"
   kind: "application"
   namespace: "web-ui"
