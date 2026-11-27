@@ -2,9 +2,10 @@
 
 The administrator creates a short-lived one-time token in Vertep. The LAB
 bootstrap pins CORE's web certificate (fingerprint shown with the token), sends
-the token and a CSR for its panel; CORE signs the panel certificate with the
-installation CA (the LAB key never leaves the LAB), creates the GPU-lease
-credential, remembers the panel address and answers once. The LAB never gets a
+the token and a CSR for its panel; CORE signs the panel certificate with its own
+LAB-panel CA — never the node CA that nodes trust for CORE — (the LAB key never
+leaves the LAB), creates the GPU-lease credential, remembers the panel address
+and answers once. The LAB never gets a
 production node role, module or other secret through this exchange.
 """
 
@@ -124,6 +125,38 @@ def _panel_name(panel: str):
     return name
 
 
+def _lab_panel_ca() -> tuple[Path, Path]:
+    """A CA only for LAB panels. Nodes are given the installation (node) CA to trust CORE,
+    so a panel certificate signed by it could impersonate CORE to them; this one they never get."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    from .first_run import config_root
+    key_path, cert_path = config_root() / "pki/lab-panel-ca.key", config_root() / "pki/lab-panel-ca.crt"
+    if key_path.is_file() and cert_path.is_file():
+        return key_path, cert_path
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Vertep LAB Panel CA")])
+    now = _now()
+    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                   .public_key(key.public_key()).serial_number(secrets.randbits(159) or 1)
+                   .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=3650))
+                   .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+                   .add_extension(x509.KeyUsage(digital_signature=False, key_encipherment=False,
+                                                content_commitment=False, data_encipherment=False,
+                                                key_agreement=False, key_cert_sign=True, crl_sign=True,
+                                                encipher_only=False, decipher_only=False), critical=True)
+                   .sign(key, hashes.SHA256()))
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                       serialization.NoEncryption()))
+    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    return key_path, cert_path
+
+
 def _sign_panel(csr_pem: str, panel: str) -> tuple[str, str]:
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -136,8 +169,7 @@ def _sign_panel(csr_pem: str, panel: str) -> tuple[str, str]:
     if not csr.is_signature_valid:
         raise LabConnectionError("The panel certificate request signature is invalid")
     name = _panel_name(panel)
-    ca_key_path = Path(os.getenv("NODE_CA_KEY_PATH", str(config_root() / "pki/ca.key")))
-    ca_cert_path = Path(os.getenv("NODE_CA_CERT_PATH", str(config_root() / "pki/ca.crt")))
+    ca_key_path, ca_cert_path = _lab_panel_ca()
     ca_key = serialization.load_pem_private_key(ca_key_path.read_bytes(), password=None)
     ca_certificate = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
     now = _now()

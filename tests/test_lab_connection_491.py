@@ -77,6 +77,9 @@ def test_one_time_token_signs_a_server_only_panel_certificate_and_grants_the_lea
     certificate = x509.load_pem_x509_certificate(answer["panel_certificate"].encode())
     ca = x509.load_pem_x509_certificate(answer["panel_ca"].encode())
     assert certificate.issuer == ca.subject
+    node_ca = x509.load_pem_x509_certificate((config / "pki/ca.crt").read_bytes())
+    assert certificate.issuer != node_ca.subject  # nodes trust the node CA for CORE: never sign panels with it
+    certificate.verify_directly_issued_by(ca)
     assert certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "Vertep LAB"  # not the CSR's
     assert certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value == x509.ExtendedKeyUsage(
         [ExtendedKeyUsageOID.SERVER_AUTH])
