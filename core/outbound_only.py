@@ -21,7 +21,7 @@ from .node_registry import node_roles
 # publish a host port.  ``core``/``proxy``/``postgres``/``redis`` are the Core
 # role surface and are intentionally excluded.
 WORKER_ROLE_SERVICES = {
-    "worker", "comfyui", "tts", "ollama", "publisher-worker", "backup-service",
+    "worker", "comfyui", "tts", "stt", "lora-trainer", "musetalk", "ollama", "publisher-worker", "backup-service",
     "monitoring", "log-store", "log-collector", "grafana", "update-agent",
 }
 

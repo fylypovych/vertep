@@ -95,14 +95,32 @@ class PiperProvider(TTSProvider):
         return bool(self._model) and shutil.which(self._binary) is not None
 
     def _synthesize_http(self, text: str, output: Path) -> float:
-        # Piper HTTP server (``python -m piper.http_server``): POST / with JSON, WAV back.
+        # Supports both standalone Piper HTTP server (POST / returning raw WAV)
+        # and Vertep's hybrid tts container (POST /synthesize returning JSON audio_base64).
+        import base64
         payload: dict = {"text": text}
-        if self._voice_id:
-            voice = str(self._voice_id)
-            payload["speaker_id" if voice.isdigit() else "speaker"] = int(voice) if voice.isdigit() else voice
-        response = httpx.post(f"{self._url}/", json=payload, timeout=120)
+        if self._url.endswith("/synthesize"):
+            payload["provider"] = "piper"
+            if self._voice_id:
+                payload["voice"] = str(self._voice_id)
+            target_url = self._url
+        else:
+            if self._voice_id:
+                voice = str(self._voice_id)
+                payload["speaker_id" if voice.isdigit() else "speaker"] = int(voice) if voice.isdigit() else voice
+            target_url = f"{self._url}/"
+        response = httpx.post(target_url, json=payload, timeout=120)
         response.raise_for_status()
-        output.write_bytes(response.content)
+        content_type = ""
+        if hasattr(response, "headers") and isinstance(response.headers, dict):
+            content_type = str(response.headers.get("content-type", ""))
+        elif hasattr(response, "headers"):
+            content_type = str(response.headers.get("content-type", ""))
+        if "json" in content_type:
+            body = response.json()
+            output.write_bytes(base64.b64decode(body["audio_base64"], validate=True))
+        else:
+            output.write_bytes(response.content)
         return _wav_duration(output)
 
     def _synthesize_cli(self, text: str, output: Path) -> float:

@@ -17,6 +17,7 @@ const HEALTH_NAMES: Record<string, string> = {
   comfyui: 'ComfyUI', gpu_worker: 'GPU Worker', tts: 'Синтез мовлення',
   publisher: 'Публікація', backup: 'Резервні копії',
 };
+const HOST_CHECKS = new Set(['docker', 'postgres', 'redis', 'core_api']);
 const HEALTH_MESSAGES: Record<string, string> = {
   health_observation_expired: 'Результат host-перевірки застарів або має некоректний час.',
   health_observation_unavailable: 'Немає коректного результату host-перевірки. Перевірте host probe.',
@@ -29,6 +30,15 @@ const HEALTH_MESSAGES: Record<string, string> = {
   health_gpu_runtime_failed: 'Обчислення GPU завершилося помилкою.',
   health_worker_not_ready: 'GPU Worker не має актуальної реєстрації та успішного self-test.',
 };
+/** Host deployment phases (scripts/apply-deployment.py) as one service's visible progress. */
+const DEPLOYMENT_PHASES: Record<string, { label: string; percent: number }> = {
+  PENDING: { label: 'Очікує розгортання', percent: 10 },
+  PREPARING: { label: 'Підготовка', percent: 20 },
+  PULLING: { label: 'Завантаження образів', percent: 40 },
+  STARTING: { label: 'Запуск служби', percent: 70 },
+  VERIFYING: { label: 'Перевірка готовності', percent: 90 },
+};
+type HealthRow = { name: string; status: string; required: boolean; code: string; stage: string; percent: number | null };
 
 @Component({
   selector: 'app-setup',
@@ -79,7 +89,7 @@ export class SetupComponent implements OnInit, OnDestroy {
   });
   healthText = signal('Core … OK\nAPI … OK\nWeb UI … OK\nPostgreSQL … перевіряється\nRedis … перевіряється\nWorker/GPU … згідно з конфігурацією');
   healthReady = signal(false);
-  healthRows = signal<{ name: string; status: string; required: boolean; code: string }[]>([]);
+  healthRows = signal<HealthRow[]>([]);
   private healthTimer?: ReturnType<typeof setInterval>;
   private preparingHealth = false;
   private loadingHealth = false;
@@ -271,17 +281,26 @@ export class SetupComponent implements OnInit, OnDestroy {
       const health = await response.json();
       if (this.step() !== HEALTH_STEP || selection.get('role') !== this.role() || selection.get('backend') !== this.form.backend
         || extras !== (this.role() === 'core' ? this.additionalRoles().join(',') : '')) return;
-      this.healthRows.set(Object.entries(health.checks as Record<string, string>).map(([name, status]) => ({
-        name: HEALTH_NAMES[name] || name, status: status === 'OK' ? 'Готово' : status === 'OPTIONAL' ? 'Не застосовується' : 'Помилка',
-        required: (health.required || []).includes(name),
-        code: HEALTH_MESSAGES[health.details?.[name]?.code] || 'Перевірка залежності завершилася помилкою.',
-      })));
+      const deployment = health.deployment as { state?: string; phase?: string; error?: string } | null;
+      // While the host still deploys the selected services, a service that is not up yet is
+      // in progress, not failed: its card shows the deployment phase instead of an error.
+      const deploying = deployment?.state === 'PENDING' || deployment?.state === 'APPLYING';
+      const phase = DEPLOYMENT_PHASES[deployment?.phase || deployment?.state || ''] || DEPLOYMENT_PHASES['PENDING'];
+      this.healthRows.set(Object.entries(health.checks as Record<string, string>).map(([name, status]): HealthRow => {
+        const required = (health.required || []).includes(name);
+        const code = HEALTH_MESSAGES[health.details?.[name]?.code] || 'Перевірка залежності завершилася помилкою.';
+        if (status === 'OK') return { name: HEALTH_NAMES[name] || name, status: 'Готово', required, code, stage: 'Працює', percent: 100 };
+        if (status === 'OPTIONAL') return { name: HEALTH_NAMES[name] || name, status: 'Не застосовується', required, code, stage: '', percent: null };
+        // Only the services the wizard deploys are "in progress"; Docker, PostgreSQL, Redis and CORE are not.
+        if (deploying && !HOST_CHECKS.has(name)) return { name: HEALTH_NAMES[name] || name, status: 'Розгортається', required, code, stage: phase.label, percent: phase.percent };
+        return { name: HEALTH_NAMES[name] || name, status: 'Помилка', required, code,
+          stage: deployment?.state === 'FAILED' ? 'Розгортання не вдалося' : 'Не відповідає', percent: 100 };
+      }));
       this.healthText.set(Object.entries(health.checks).map(([name, value]) => `${name} … ${value}`).join('\n'));
       this.healthReady.set(!!health.ready);
-      const deployment = health.deployment as { state?: string; phase?: string; error?: string } | null;
       this.deploymentText.set(!deployment || health.ready || deployment.state === 'SUCCEEDED' ? ''
         : deployment.state === 'FAILED' ? `Розгортання вибраних служб не вдалося: ${deployment.error || 'невідома помилка'}`
-        : `Розгортання вибраних служб триває (${deployment.phase || deployment.state}). Перевірка оновлюється автоматично.`);
+        : `Розгортання вибраних служб триває (${phase.label.toLowerCase()}). Перевірка оновлюється автоматично.`);
     } catch (error) {
       this.healthReady.set(false);
       this.healthRows.set([]);

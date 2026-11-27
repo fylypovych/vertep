@@ -1,0 +1,32 @@
+# Isolated Promptfoo evaluation suite for Ukrainian LLM/RAG quality (#546).
+# Run strictly with PROMPTFOO_DISABLE_TELEMETRY=1 and local LAB Ollama endpoint.
+description: "Vertep LAB — Ukrainian Script & Character Memory RAG Eval"
+
+prompts:
+  - "Ти сценарист Vertep. Відповідай лише українською мовою. Контекст персонажа: {{context}}\nЗавдання: {{topic}}"
+
+providers:
+  - id: "ollama:chat:{{env.LAB_EVAL_MODEL || 'llama3.2'}}"
+    config:
+      temperature: 0.2
+
+tests:
+  - description: "Українська мова та дотримання канону персонажа"
+    vars:
+      context: "Ім'я: Тарас. Роль: історик. Заборонені теми: політика."
+      topic: "Напиши короткий вступ (2 речення) про Карпати."
+    assert:
+      - type: is-valid-openai-chat-completion
+        threshold: 0
+      - type: regex
+        value: "[А-Яа-яІіЇїЄєҐґ]"
+      - type: not-icontains
+        value: "політика"
+
+  - description: "Відмова від вигадування фактів поза RAG-контекстом"
+    vars:
+      context: "Факт: засновник студії — Іван, рік заснування — 2024."
+      topic: "У якому році засновано студію?"
+    assert:
+      - type: contains
+        value: "2024"

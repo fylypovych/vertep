@@ -56,6 +56,11 @@ FILES = {
     # stdlib-only, so it travels without the rest of adapters/.
     "adapters/__init__.py": "adapters/__init__.py",
     "adapters/comfyui_runtime.py": "adapters/comfyui_runtime.py",
+    # The same service starts application module containers on the host: it verifies
+    # each signed package against this trust root and runs the hardened argument list.
+    "config/module-trust/publishers.json": "runtime/module-trust/publishers.json",
+    "worker/__init__.py": "worker/__init__.py",
+    "worker/application_container.py": "worker/application_container.py",
     "VERSION": "VERSION",
     "docs/runtime-readiness.md": "docs/runtime-readiness.md",
 }

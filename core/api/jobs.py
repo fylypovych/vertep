@@ -144,6 +144,8 @@ def create_job(request: JobCreate, http_request: Request = None):
         request.workflow = _validate_workflow_reference(request.workflow, request.task_type)
     except (ValueError, OSError) as error:
         raise HTTPException(400, f"Invalid workflow: {error}") from error
+    from core.workflows import workflow_min_vram_mb
+    request.min_vram_mb = max(request.min_vram_mb, workflow_min_vram_mb(request.workflow))
     job = store.create(request.topic, request.character_id, request.priority, request.source,
                        request.task_type, request.min_vram_mb, request.brand_id, request.workflow,
                        request.aspect_ratio, request.output_preset, request.scheduled_for,
@@ -295,6 +297,8 @@ def create_job_from_scenario_snapshot(
         workflow = _validate_workflow_reference(workflow, task_type)
     except (ValueError, OSError) as error:
         raise HTTPException(400, f"Invalid workflow: {error}") from error
+    from core.workflows import workflow_min_vram_mb
+    min_vram_mb = max(min_vram_mb, workflow_min_vram_mb(workflow))
 
     clean_key = (idempotency_key or "").strip() or None
     if clean_key is not None and len(clean_key) > 128:

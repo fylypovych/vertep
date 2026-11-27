@@ -75,6 +75,55 @@ class TTSProvider(ABC):
         ...
 
 
+class STTProvider(ABC):
+    """Speech-to-text transcription (e.g. local faster-whisper runtime)."""
+
+    @property
+    @abstractmethod
+    def provider(self) -> str:
+        ...
+
+    @abstractmethod
+    def configured(self) -> bool:
+        ...
+
+    @abstractmethod
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        language: str | None = None,
+        model: str | None = None,
+    ) -> dict:
+        ...
+
+
+class LipSyncProvider(ABC):
+    """Avatar lip-sync animation driven by synthesized speech (e.g. MuseTalk)."""
+
+    @property
+    @abstractmethod
+    def provider(self) -> str:
+        ...
+
+    @abstractmethod
+    def configured(self) -> bool:
+        ...
+
+    @abstractmethod
+    def animate(
+        self,
+        portrait_path: Path,
+        audio_path: Path,
+        output: Path,
+        *,
+        fps: int = 25,
+        bbox_shift: int = 0,
+        character_id: str | None = None,
+    ) -> dict:
+        ...
+
+
 class AssemblyProvider(ABC):
     """Video / audio assembly (e.g. FFmpeg)."""
 

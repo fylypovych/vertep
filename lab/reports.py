@@ -16,7 +16,7 @@ from .state_store import read_jsonl
 
 #: Every section a client may request; the panel's toggles map 1:1 to these.
 SECTIONS: tuple = ("status", "queue", "roles", "gpu", "budget", "policy",
-                   "issues", "evidence", "rights", "grants", "transfers",
+                   "issues", "evidence", "evals", "rights", "grants", "transfers",
                    "notifications", "audit")
 
 
@@ -59,6 +59,8 @@ class ReportBuilder:
                     "closed": self.governance.closed()}
         if name == "evidence":
             return {"evidence": self.governance.ir_evidence()}
+        if name == "evals":
+            return {"evals": read_jsonl(self.gate.state_dir / "evals" / "history.jsonl")}
         if name == "rights":
             return {"requests": self.gate.rights_requests()}
         if name == "grants":

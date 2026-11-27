@@ -21,7 +21,24 @@ from worker import application_container as containers
 
 
 def enabled() -> bool:
-    return os.getenv("VERTEP_APPLICATION_MODULES", "false").lower() == "true"
+    return os.getenv("VERTEP_APPLICATION_MODULES", "false").lower() in ("true", "host")
+
+
+def host_mode() -> bool:
+    """No Docker in the Worker (production): the host executor runs the containers."""
+    return os.getenv("VERTEP_APPLICATION_MODULES", "").lower() == "host"
+
+
+def _host_dir() -> Path:
+    return Path(os.getenv("VERTEP_APPLICATION_REQUEST_DIR", "/data/config/application-modules"))
+
+
+def _host_state() -> dict:
+    try:
+        state = json.loads((_host_dir() / "state.json").read_text(encoding="utf-8"))
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _ports_file() -> Path:
@@ -69,10 +86,14 @@ def local_module(module_id: str) -> tuple[str, str] | None:
     """(endpoint, module token) of an application module running and ready on this node."""
     if not enabled():
         return None
-    port, token = _ports().get(module_id), _tokens().get(module_id)
-    if not port or not token:
+    token = _tokens().get(module_id)
+    if host_mode():
+        endpoint = (_host_state().get("modules", {}).get(module_id) or {}).get("endpoint")
+    else:
+        port = _ports().get(module_id)
+        endpoint = f"http://{os.getenv('VERTEP_NODE_ADDRESS', '127.0.0.1')}:{port}" if port else None
+    if not endpoint or not token:
         return None
-    endpoint = f"http://{os.getenv('VERTEP_NODE_ADDRESS', '127.0.0.1')}:{port}"
     try:
         if httpx.get(f"{endpoint}/health", timeout=3).json().get("ready") is not True:
             return None
@@ -104,7 +125,7 @@ def reconcile(client: httpx.Client, core_url: str, node_name: str) -> list[dict]
     response = client.post(f"{core_url}/api/modules/node-assignments", json={"node_name": node_name})
     response.raise_for_status()
     trust = _trust()
-    desired = {}
+    desired, packages = {}, {}
     for item in response.json().get("modules", []):
         try:
             manifest = verify_package(item["package"], trust)  # the node verifies, it does not trust CORE blindly
@@ -112,6 +133,9 @@ def reconcile(client: httpx.Client, core_url: str, node_name: str) -> list[dict]
             continue
         if manifest.kind == "application" and manifest.module_id == item["module_id"]:
             desired[manifest.module_id] = manifest
+            packages[manifest.module_id] = item["package"]
+    if host_mode():
+        return _reconcile_on_host(client, core_url, node_name, desired, packages)
     ports, running = _ports(), _running()
     base = int(os.getenv("VERTEP_APPLICATION_PORT_BASE", "28100"))
     container_core = os.getenv("VERTEP_APPLICATION_CORE_URL", core_url)
@@ -138,4 +162,57 @@ def reconcile(client: httpx.Client, core_url: str, node_name: str) -> list[dict]
         except (httpx.HTTPError, ValueError):
             ready = False
         inventory.append({**manifest.to_dict(), "ready": ready, "endpoint": endpoint, "origin": "application"})
+    return inventory
+
+
+HOST_RETRY_SECONDS = 300
+
+
+def _ready(endpoint: str) -> bool:
+    try:
+        return httpx.get(f"{endpoint}/health", timeout=3).json().get("ready") is True
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+def _reconcile_on_host(client: httpx.Client, core_url: str, node_name: str, desired: dict,
+                       packages: dict) -> list[dict]:
+    """Ask the host executor for the assigned containers and report what it runs.
+
+    A new request is written when the assignment changed, or again after
+    HOST_RETRY_SECONDS while a module is not ready (failed start, or a recreated
+    CORE/Worker container that left the module network)."""
+    import time
+    from datetime import datetime
+    state = _host_state()
+    started = state.get("modules", {}) if isinstance(state.get("modules"), dict) else {}
+    wanted = {module_id: manifest.version for module_id, manifest in desired.items()}
+    inventory = []
+    for module_id, manifest in sorted(desired.items()):
+        info = started.get(module_id) or {}
+        endpoint = info.get("endpoint") or f"http://{containers.resource_name(module_id)}:{int(manifest.container['port'])}"
+        ready = info.get("version") == manifest.version and _ready(endpoint)
+        inventory.append({**manifest.to_dict(), "ready": ready, "endpoint": endpoint, "origin": "application"})
+    try:
+        age = time.time() - datetime.fromisoformat(state["updated_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        age = float("inf")
+    changed = wanted != state.get("requested") or set(started) - set(wanted)
+    stale = age >= HOST_RETRY_SECONDS and not all(item["ready"] for item in inventory)
+    request_path = _host_dir() / "request.json"
+    if (changed or stale) and not request_path.exists():
+        modules = []
+        for module_id, manifest in sorted(desired.items()):
+            response = client.post(f"{core_url}/api/modules/token", json={"node_name": node_name, "module_id": module_id})
+            if response.status_code != 200:
+                continue
+            token = response.json()["token"]
+            if (started.get(module_id) or {}).get("version") != manifest.version:
+                _save_token(module_id, token)  # the token the container about to start will accept
+            modules.append({"module_id": module_id, "package": packages[module_id], "token": token})
+        request_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = request_path.with_name(".request.json.tmp")
+        temporary.write_text(json.dumps({"node_name": node_name, "modules": modules}), encoding="utf-8")
+        os.chmod(temporary, 0o600)  # carries module tokens
+        temporary.replace(request_path)
     return inventory

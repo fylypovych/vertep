@@ -57,6 +57,18 @@ report = {
         "ComfyUI-VideoHelperSuite": {"version": vhs_pin, "commit": vhs_commit},
         "ComfyUI_IPAdapter_plus": {"version": ipadapter_pin, "commit": ipadapter_commit},
     },
+    "wan22_nodes": [
+        "UNETLoader",
+        "CLIPLoader",
+        "VAELoader",
+        "CLIPTextEncode",
+        "ModelSamplingSD3",
+        "Wan22ImageToVideoLatent",
+        "EmptyHunyuanLatentVideo",
+        "KSampler",
+        "VAEDecode",
+        "VHS_VideoCombine",
+    ],
 }
 with open("/opt/comfyui/runtime-inventory.json", "w", encoding="utf-8") as handle:
     json.dump(report, handle, indent=2, sort_keys=True)

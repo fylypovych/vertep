@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .budget import BudgetLedger
+from .eval_runner import LabEvalRunner, default_configs_dir
 from .executor import executor_from_environment
 from .governance import Governance, default_transport
 from .gpu_lease import FakeResourceProvider, LeaseManager, ResourceRequirement
@@ -66,10 +67,12 @@ def build_context(args) -> dict:
     governance = Governance(gate, default_transport(), state_dir=state_dir / "governance")
     notifications = NotificationSettings(gate, state_dir=state_dir)
     reports = ReportBuilder(orchestrator, gate, governance, notifications)
+    eval_runner = LabEvalRunner(state_dir, gate, budget)
     return {"state_dir": state_dir, "workspace": workspace, "gate": gate,
             "budget": budget, "orchestrator": orchestrator, "governance": governance,
             "leases": orchestrator.leases, "executor": executor,
             "notifications": notifications, "reports": reports,
+            "evals": eval_runner,
             "settings": LabSettings(gate, state_dir)}
 
 
@@ -411,7 +414,54 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--sections", default="",
                         help="перелік секцій; порожньо — всі доступні")
     report.set_defaults(handler=command_report)
+
+    eval_cmd = sub.add_parser("eval", help="ізольована оцінка якості LLM/RAG (Promptfoo / lm-eval)")
+    eval_cmd.add_argument("eval_action", choices=["list", "promptfoo", "lm-eval"])
+    eval_cmd.add_argument("--config", default="", help="шлях до конфігу Promptfoo")
+    eval_cmd.add_argument("--tasks", default="global_mmlu_uk", help="задачі lm-evaluation-harness через кому")
+    eval_cmd.add_argument("--provider", default="ollama")
+    eval_cmd.add_argument("--model", default="llama3.2")
+    eval_cmd.add_argument("--endpoint", default="")
+    eval_cmd.add_argument("--limit", type=int, default=0)
+    eval_cmd.add_argument("--commit", default="0" * 40)
+    eval_cmd.set_defaults(handler=command_eval)
     return parser
+
+
+def command_eval(context) -> int:
+    """Run or list isolated LAB AI quality evaluations (#546)."""
+    args = context["args"]
+    runner: LabEvalRunner = context["evals"]
+    action = args.eval_action
+    if action == "list":
+        _print({"evals": runner.list_runs()})
+        return 0
+    if action == "promptfoo":
+        config = Path(args.config) if args.config else default_configs_dir() / "promptfoo-uk-rag.yaml"
+        report = runner.run_promptfoo(
+            config_path=config,
+            provider=args.provider,
+            model=args.model,
+            endpoint=args.endpoint or None,
+            commit=args.commit,
+            actor=args.actor,
+        )
+        _print(report)
+        return 0
+    if action == "lm-eval":
+        tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
+        report = runner.run_lm_eval(
+            tasks=tasks,
+            provider=args.provider,
+            model=args.model,
+            endpoint=args.endpoint or None,
+            limit=args.limit or None,
+            commit=args.commit,
+            actor=args.actor,
+        )
+        _print(report)
+        return 0
+    return 2
 
 
 def main(argv=None) -> int:

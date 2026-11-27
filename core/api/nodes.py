@@ -17,6 +17,9 @@ router = APIRouter()
 CAPABILITY_BACKENDS = {
     "text_generation": "Ollama / LLM Provider",
     "speech_synthesis": "TTS Provider",
+    "speech_recognition": "STT Provider",
+    "lora_training": "LoRA Trainer (ai-toolkit)",
+    "avatar_lipsync": "MuseTalk Lip-Sync",
     "image_generation": "ComfyUI",
     "image_upscale": "ComfyUI",
     "controlnet": "ComfyUI",

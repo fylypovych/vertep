@@ -34,7 +34,7 @@ def resource_name(module_id: str) -> str:
     return "vertep-mod-" + re.sub(r"[^a-z0-9_.-]", "-", module_id.lower())
 
 
-def run_arguments(manifest: ModuleManifest, *, core_url: str, module_token: str, host_port: int,
+def run_arguments(manifest: ModuleManifest, *, core_url: str, module_token: str, host_port: int | None,
                   bind_address: str = "127.0.0.1", command: list[str] | None = None) -> list[str]:
     """The complete ``docker run`` argument list for one application instance."""
     if manifest.kind != "application" or not manifest.container:
@@ -50,11 +50,14 @@ def run_arguments(manifest: ModuleManifest, *, core_url: str, module_token: str,
         "--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
         f"--mount=type=volume,src={name}-data,dst=/data",
         f"--network={name}",
-        f"--publish={bind_address}:{int(host_port)}:{manifest.container['port']}",
         f"--env=VERTEP_MODULE_ID={manifest.module_id}",
         f"--env=VERTEP_CORE_URL={core_url}",
         f"--env=VERTEP_MODULE_TOKEN={module_token}",
     ]
+    if host_port is not None:
+        # Without a host port (host executor on CORE) the module is reached only on its own network.
+        arguments.insert(arguments.index(f"--network={name}") + 1,
+                         f"--publish={bind_address}:{int(host_port)}:{manifest.container['port']}")
     if resources.get("min_ram_mb"):
         arguments.append(f"--memory={max(int(resources['min_ram_mb']), 64)}m")
     if resources.get("min_cpu_cores"):

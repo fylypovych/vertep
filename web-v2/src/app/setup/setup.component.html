@@ -118,8 +118,20 @@
             <div class="text-sm">
               <div class="flex flex-wrap justify-between gap-2">
                 <span class="font-medium">{{ row.name | t }}</span>
-                <span [class.text-red-700]="row.status === 'Помилка'" [class.text-emerald-700]="row.status === 'Готово'">{{ row.status | t }}</span>
+                <span [class.text-red-700]="row.status === 'Помилка'" [class.text-emerald-700]="row.status === 'Готово'"
+                  [class.text-amber-700]="row.status === 'Розгортається'">{{ row.status | t }}</span>
               </div>
+              @if (row.percent !== null) {
+                <div class="flex items-center gap-2 mt-1" role="progressbar" [attr.aria-valuenow]="row.percent"
+                  aria-valuemin="0" aria-valuemax="100" [attr.aria-label]="row.name | t">
+                  <div class="h-2 flex-1 rounded-full bg-slate-200 overflow-hidden">
+                    <div class="h-full rounded-full transition-all duration-500" [style.width.%]="row.percent"
+                      [class.bg-emerald-500]="row.status === 'Готово'" [class.bg-red-500]="row.status === 'Помилка'"
+                      [class.bg-amber-500]="row.status === 'Розгортається'" [class.animate-pulse]="row.status === 'Розгортається'"></div>
+                  </div>
+                  <span class="text-xs text-slate-600 whitespace-nowrap">{{ row.stage | t }}@if (row.status === 'Розгортається') { · {{ row.percent }}% }</span>
+                </div>
+              }
               <p class="text-xs text-slate-500">{{ (row.required ? 'Обов’язкова перевірка' : 'Необов’язкова перевірка') | t }}</p>
               @if (row.code && row.status === 'Помилка') { <p class="text-sm text-red-700">{{ row.code | t }}</p> }
             </div>

@@ -1,0 +1,13 @@
+{
+  "suite": "vertep-uk-baseline",
+  "engine": "lm-evaluation-harness",
+  "description": "Isolated LAB Ukrainian benchmark suite against local Ollama",
+  "provider": "ollama",
+  "default_model": "llama3.2",
+  "default_endpoint": "http://127.0.0.1:11434",
+  "tasks": [
+    "global_mmlu_uk",
+    "flores_uk"
+  ],
+  "default_limit": 50
+}

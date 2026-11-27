@@ -27,7 +27,60 @@ class WorkflowInUseError(ValueError):
 
 
 
-def validate_workflow(workflow: dict) -> Dict[str, Any]:
+def _estimate_workflow_vram_mb(workflow: dict, meta: dict | None = None) -> int:
+    """Resolve minimum VRAM requirement (MB) from sidecar metadata or known Wan2.2 nodes."""
+    if isinstance(meta, dict):
+        declared = meta.get("min_vram_mb")
+        if isinstance(declared, int) and declared > 0:
+            return declared
+    serialized = json.dumps(workflow).lower()
+    node_types = {
+        node.get("class_type")
+        for node in workflow.values()
+        if isinstance(node, dict) and isinstance(node.get("class_type"), str)
+    }
+    if "wan_14b_model" in serialized or ("wan2.2" in serialized and "14b" in serialized):
+        return 24576
+    if "Wan22ImageToVideoLatent" in node_types or "wan_unet_model" in serialized or "wan2.2" in serialized:
+        return 12288
+    return 0
+
+
+def workflow_min_vram_mb(workflow_ref: str | None, root: str | Path | None = None) -> int:
+    """Return the declared/estimated minimum VRAM (MB) for a workflow reference."""
+    if not workflow_ref or not isinstance(workflow_ref, str):
+        return 0
+    wf_root = Path(root or os.getenv("WORKFLOWS_ROOT", "workflows")).resolve()
+    ref_path = Path(workflow_ref)
+    if ref_path.is_absolute():
+        resolved = ref_path.resolve()
+    elif ref_path.parts and ref_path.parts[0] == "workflows":
+        resolved = (wf_root / Path(*ref_path.parts[1:])).resolve()
+    else:
+        resolved = (wf_root / ref_path).resolve()
+    if resolved != wf_root and wf_root not in resolved.parents:
+        return 0
+    if not resolved.is_file():
+        return 0
+    meta_path = resolved.parent / f"{resolved.name}.meta.json"
+    meta: dict | None = None
+    if meta_path.is_file():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                meta = loaded
+        except (OSError, ValueError):
+            meta = None
+    try:
+        workflow = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return int((meta or {}).get("min_vram_mb") or 0)
+    if not isinstance(workflow, dict):
+        return int((meta or {}).get("min_vram_mb") or 0)
+    return _estimate_workflow_vram_mb(workflow, meta)
+
+
+def validate_workflow(workflow: dict, meta: dict | None = None) -> Dict[str, Any]:
     errors = []
     warnings = []
     schema_info = {
@@ -64,6 +117,8 @@ def validate_workflow(workflow: dict) -> Dict[str, Any]:
             if placeholder not in schema_info["has_placeholders"]:
                 schema_info["has_placeholders"].append(placeholder)
 
+    schema_info["estimated_vram_mb"] = _estimate_workflow_vram_mb(workflow, meta)
+
     if schema_info["node_count"] == 0:
         warnings.append("Workflow has no nodes")
 
@@ -88,17 +143,24 @@ class WorkflowRegistry:
             for path in (self.root / kind).glob("*.json"):
                 if path.name.endswith(".meta.json") or path.parent.name == VERSION_DIR:
                     continue
+                meta = self._load_meta(kind, path.name)
                 try:
                     workflow = json.loads(path.read_text(encoding="utf-8"))
-                    validation = validate_workflow(workflow)
+                    validation = validate_workflow(workflow, meta=meta)
                 except (OSError, ValueError) as error:
                     validation = {"valid": False, "errors": [str(error)], "warnings": [], "schema": {}}
-                result.append({
+                entry = {
                     "type": kind,
                     "name": path.name,
                     "path": f"workflows/{kind}/{path.name}",
                     **validation,
-                })
+                }
+                if meta:
+                    entry["meta"] = meta
+                min_vram = (validation.get("schema") or {}).get("estimated_vram_mb", 0)
+                if min_vram:
+                    entry["min_vram_mb"] = min_vram
+                result.append(entry)
         return sorted(result, key=lambda item: (item["type"], item["name"]))
 
     def _collect_usage(self, reference: str) -> dict:
@@ -170,11 +232,12 @@ class WorkflowRegistry:
         self._validate_path(kind, name)
         path = self.root / kind / name
         workflow = json.loads(path.read_text(encoding="utf-8"))
-        validation = validate_workflow(workflow)
+        meta = self._load_meta(kind, name)
+        validation = validate_workflow(workflow, meta=meta)
         return {
             "workflow": workflow,
             "validation": validation,
-            "meta": self._load_meta(kind, name),
+            "meta": meta,
         }
 
     def save(self, kind: str, name: str, workflow: dict, force: bool = False) -> dict:

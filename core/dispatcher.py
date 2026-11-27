@@ -11,6 +11,25 @@ from .models import Job, JobStatus
 # durable self-test record (enrollment separated from runtime readiness).
 RUNTIME_READY_STATUSES = {"ONLINE", "READY", "FREE", "BUSY"}
 
+TASK_REQUIRED_CAPABILITY: dict[str, str] = {
+    "image": "image_generation",
+    "video": "video_generation",
+    "text": "text_generation",
+    "voice": "speech_synthesis",
+    "stt": "speech_recognition",
+    "lora_train": "lora_training",
+    "lipsync": "avatar_lipsync",
+    "publish": "publishing",
+    # Issue #122 P5: final assembly of an external engine
+    # runs on a Worker, so it is gated like any other task.
+    "assembly": "video_assembly",
+}
+
+# Minimum GPU VRAM (MiB) required by default for GPU-bound task types (#551).
+TASK_MIN_VRAM_MB: dict[str, int] = {
+    "lipsync": 8192,
+}
+
 
 def _dispatcher_locked(method):
     @wraps(method)
@@ -197,16 +216,18 @@ def available_worker(workers: list[dict], job: Job, task_type: str | None = None
         available_vram = worker.get("free_vram_mb")
         if available_vram is None:
             available_vram = worker.get("vram_mb", 0)
-        required_vram = min_vram_mb if min_vram_mb is not None else job.min_vram_mb
+        effective_task_type = task_type or job.task_type
+        default_vram = TASK_MIN_VRAM_MB.get(effective_task_type, 0)
+        required_vram = (
+            min_vram_mb
+            if min_vram_mb is not None
+            else max(job.min_vram_mb, default_vram)
+        )
         if available_vram < required_vram:
             continue
-        effective_task_type = task_type or job.task_type
-        required_capability = {"image": "image_generation", "video": "video_generation",
-                               "text": "text_generation", "voice": "speech_synthesis",
-                               "publish": "publishing",
-                               # Issue #122 P5: final assembly of an external engine
-                               # runs on a Worker, so it is gated like any other task.
-                               "assembly": "video_assembly"}.get(effective_task_type, effective_task_type)
+        required_capability = TASK_REQUIRED_CAPABILITY.get(
+            effective_task_type, effective_task_type
+        )
         capabilities = tested_capabilities if require_self_test else set(worker.get("capabilities") or [])
         if capabilities and required_capability not in capabilities:
             continue
@@ -379,7 +400,12 @@ class Dispatcher:
             return TaskResponse(accepted=False, declined_reason="Task already has an owner")
         targeted = isinstance(task.payload, dict) and task.payload.get("module_targets") is not None
         # A module task is matched by its READY placed instances, not by task type.
-        required_cap = task.capabilities_required or (set() if targeted else {task.task_type})
+        default_cap = (
+            TASK_REQUIRED_CAPABILITY["lipsync"]
+            if task.task_type == "lipsync"
+            else task.task_type
+        )
+        required_cap = task.capabilities_required or (set() if targeted else {default_cap})
         candidates = self._find_candidates(required_cap, task)
         if not candidates:
             return TaskResponse(
@@ -489,8 +515,12 @@ class Dispatcher:
                 requirements = payload.get("resource_requirements", {})
             if (resources.get("cpu_cores") or 0) < requirements.get("min_cpu_cores", 0) or (resources.get("ram_mb") or 0) < requirements.get("min_ram_mb", 0):
                 continue
-            if task.vram_mb is not None:
-                min_vram = task.vram_mb
+            min_vram = (
+                task.vram_mb
+                if task.vram_mb is not None
+                else TASK_MIN_VRAM_MB.get(task.task_type)
+            )
+            if min_vram is not None:
                 if resources.get("vram_mb", 0) < min_vram:
                     continue
             candidates.append({

@@ -782,8 +782,8 @@ async def system_test(payload: dict | None = None):
                 unavailable = [name for name, provider in pm.items()
                                if isinstance(provider, dict)
                                and provider.get("configured") is False
-                               and {"tts": "voice", "llm": "text", "compute": "gpu", "image": "gpu",
-                                    "video": "gpu", "publisher": "publisher"}.get(name)
+                               and {"tts": "voice", "stt": "voice", "llm": "text", "compute": "gpu", "image": "gpu",
+                                    "video": "gpu", "lipsync": "gpu", "publisher": "publisher"}.get(name)
                                not in {probe["role"] for probe in result.get("runtime_probes", [])}]
                 if unavailable:
                     full_failures.append("providers(unavailable: " + ", ".join(unavailable) + ")")

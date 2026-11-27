@@ -24,6 +24,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
 try:
+    from otio_export import DEFAULT_FPS, OTIO_MEDIA_TYPE, export_storyboard_otio
     from storyboard_logic import (
         Conflict,
         NotFound,
@@ -32,6 +33,7 @@ try:
         health_check,
     )
 except ImportError:
+    from .otio_export import DEFAULT_FPS, OTIO_MEDIA_TYPE, export_storyboard_otio
     from .storyboard_logic import (
         Conflict,
         NotFound,
@@ -48,9 +50,12 @@ _lock = threading.Lock()
 _state: dict[str, Any] = {"connection": None, "store": None}
 
 JOB = re.compile(r"/storyboards/([A-Za-z0-9_.-]{1,80})")
+JOB_OTIO = re.compile(r"/storyboards/([A-Za-z0-9_.-]{1,80})/export/otio")
 SCENARIO = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})")
+SCENARIO_OTIO = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})/export/otio")
 SCENARIO_VERSIONS = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})/versions")
 SCENARIO_VERSION = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})/versions/([0-9]{1,9})")
+SCENARIO_VERSION_OTIO = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})/versions/([0-9]{1,9})/export/otio")
 SCENARIO_COPY = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})/copy")
 SCENARIO_ARCHIVE = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})/archive")
 SCENARIO_RESTORE = re.compile(r"/scenarios/([a-z0-9][a-z0-9_-]{1,63})/restore")
@@ -144,11 +149,14 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args) -> None:
         pass
 
-    def _send(self, status: int, body: Any, kind: str = "application/json") -> None:
+    def _send(self, status: int, body: Any, kind: str = "application/json",
+              extra_headers: dict[str, str] | None = None) -> None:
         data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", kind)
         self.send_header("content-length", str(len(data)))
+        for header, value in (extra_headers or {}).items():
+            self.send_header(header, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -209,6 +217,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(503, {"error": str(error)})
         if result is None:
             return self._send(404, {"error": "not available"})
+        if len(result) == 4:
+            status, body, content_type, extra_headers = result
+            return self._send(status, body, content_type, extra_headers)
         status, body = result
         if isinstance(body, bytes):
             return self._send(status, body, "text/html; charset=utf-8")
@@ -224,12 +235,33 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/ui/index.html":
             return 200, (UI_DIR / "index.html").read_bytes()
 
+        def _otio_response(doc: dict[str, Any], filename: str, source_kind: str):
+            raw_fps = (query.get("fps") or [str(DEFAULT_FPS)])[0]
+            try:
+                otio_payload = export_storyboard_otio(doc, fps=float(raw_fps), source_kind=source_kind)
+            except ValueError as error:
+                raise ScenarioError(str(error)) from error
+            safe_file = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename).strip("_") or "timeline"
+            return (
+                200,
+                otio_payload.encode("utf-8"),
+                OTIO_MEDIA_TYPE,
+                {"content-disposition": f'attachment; filename="{safe_file}.otio"'},
+            )
+
         # -- #501 Job Storyboards (read-only from CORE) --------------------------
         if method == "GET" and path == "/storyboards":
             items = [item for item in (_core("/api/modules/self/storyboards") or []) if _visible(item, role, brands)]
             if brand_param:
                 items = [item for item in items if brand_param in {item["brand_id"], *item["character_owner_brands"]}]
             return 200, items
+        match = JOB_OTIO.fullmatch(path) if method == "GET" else None
+        if match:
+            job_id = match.group(1)
+            item = _core(f"/api/modules/self/storyboards/{quote(job_id, safe='')}")
+            if item is None or not _visible(item, role, brands):
+                raise NotFound("Storyboard not found")
+            return _otio_response(item, f"storyboard-{job_id}", "job_storyboard")
         match = JOB.fullmatch(path) if method == "GET" else None
         if match:
             item = _core(f"/api/modules/self/storyboards/{quote(match.group(1), safe='')}")
@@ -258,6 +290,18 @@ class Handler(BaseHTTPRequestHandler):
                 body["owner_brand_id"] = owner_brand
                 return 201, data.create_scenario(body, actor)
             return None
+
+        match = SCENARIO_VERSION_OTIO.fullmatch(path)
+        if match and method == "GET":
+            sid, ver = match.group(1), int(match.group(2))
+            doc = data.get_version(sid, ver, role, brands, brand_id=brand_param, system=system)
+            return _otio_response(doc, f"scenario-{sid}-v{ver}", "scenario_version")
+
+        match = SCENARIO_OTIO.fullmatch(path)
+        if match and method == "GET":
+            sid = match.group(1)
+            doc = data.get_scenario(sid, role, brands, brand_id=brand_param, system=system)
+            return _otio_response(doc, f"scenario-{sid}", "scenario_draft")
 
         match = SCENARIO_VERSION.fullmatch(path)
         if match and method == "GET":

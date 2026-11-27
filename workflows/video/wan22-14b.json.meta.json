@@ -1,0 +1,24 @@
+{
+  "engine": "wan2.2",
+  "variant": "14b",
+  "license": "Apache-2.0",
+  "min_vram_mb": 24576,
+  "recommended_vram_mb": 24576,
+  "supported_gpu_vendors": ["nvidia", "amd"],
+  "required_nodes": [
+    "UNETLoader",
+    "CLIPLoader",
+    "VAELoader",
+    "CLIPTextEncode",
+    "ModelSamplingSD3",
+    "EmptyHunyuanLatentVideo",
+    "KSampler",
+    "VAEDecode",
+    "VHS_VideoCombine"
+  ],
+  "required_models": [
+    "{{WAN_14B_MODEL}}",
+    "{{WAN_CLIP_MODEL}}",
+    "{{WAN_14B_VAE_MODEL}}"
+  ]
+}

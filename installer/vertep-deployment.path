@@ -3,6 +3,8 @@ Description=Очікування вибору ролі у Vertep Web Wizard
 
 [Path]
 PathExists=@VERTEP_ROOT@/config/deployment-request.json
+# The Worker asks for its application module containers (it has no Docker access).
+PathExists=@VERTEP_ROOT@/config/application-modules/request.json
 Unit=vertep-deployment.service
 
 [Install]

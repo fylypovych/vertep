@@ -24,12 +24,16 @@ from .base import (
     AssemblyProvider,
     ComputeProvider,
     ImageProvider,
+    LipSyncProvider,
     LLMProvider,
     PublisherProvider,
+    STTProvider,
     TTSProvider,
     VideoEngine,
     VideoProvider,
 )
+from .lipsync_backends import MuseTalkProvider
+from .stt_backends import FasterWhisperProvider
 from .compute_backends import ComfyUIDistributedProvider
 from .video_engines import MoneyPrinterEngine, NativeVertepEngine, UnsupportedVideoEngine
 
@@ -300,6 +304,22 @@ class ProviderRegistry:
             return entry(provider_name, **kwargs)
         return entry  # type: ignore[return-value]
 
+    def stt(self, provider_name: str | None = None, **kwargs: Any) -> STTProvider:
+        entry = self._providers.get("stt")
+        if entry is None:
+            raise LookupError("STT provider not registered")
+        if callable(entry) and not isinstance(entry, type):
+            return entry(provider_name, **kwargs)
+        return entry  # type: ignore[return-value]
+
+    def lipsync(self, provider_name: str | None = None, **kwargs: Any) -> LipSyncProvider:
+        entry = self._providers.get("lipsync")
+        if entry is None:
+            raise LookupError("Lip-sync provider not registered")
+        if callable(entry) and not isinstance(entry, type):
+            return entry(provider_name, **kwargs)
+        return entry  # type: ignore[return-value]
+
     def assembly(self) -> AssemblyProvider:
         return self._providers["assembly"]
 
@@ -340,6 +360,8 @@ def _create_default_registry() -> ProviderRegistry:
 
     # TTS needs a factory because provider_name varies per character/job.
     registry.register("tts", _make_tts)
+    registry.register("stt", _make_stt)
+    registry.register("lipsync", _make_lipsync)
 
     registry.register("assembly", DefaultAssemblyProvider(FFmpegAdapter()))
     registry.register("video_engine", _make_video_engine())
@@ -407,6 +429,24 @@ def _make_tts(provider_name: str | None = None, **kwargs: Any) -> TTSProvider:
     if name == "kokoro":
         return KokoroProvider()
     return DefaultTTSProvider(TTSAdapter(provider_name))
+
+
+def _make_stt(provider_name: str | None = None, **kwargs: Any) -> STTProvider:
+    """Resolve the local STT backend (#544)."""
+    name = (provider_name or os.getenv("STT_PROVIDER", "faster-whisper")).lower().strip()
+    if name in {"", "faster-whisper", "whisper"}:
+        return FasterWhisperProvider(**kwargs)
+    raise ValueError(f"Unsupported STT provider: {name}")
+
+
+def _make_lipsync(provider_name: str | None = None, **kwargs: Any) -> LipSyncProvider:
+    """Resolve the local GPU lip-sync backend (#551)."""
+    name = (provider_name or os.getenv("LIPSYNC_PROVIDER", "musetalk")).lower().strip()
+    if name in {"", "musetalk"}:
+        return MuseTalkProvider(**kwargs)
+    raise ValueError(f"Unsupported lip-sync provider: {name}")
+
+
 def provider_matrix() -> dict[str, dict]:
     """Describe the currently active backend matrix (no network I/O).
 
@@ -453,6 +493,24 @@ def provider_matrix() -> dict[str, dict]:
         "options": ["none", "mock", "piper", "kokoro"],
         "env": "TTS_PROVIDER",
         "configured": tts_configured,
+    }
+
+    # STT — optional local faster-whisper runtime (#544).
+    stt_name = os.getenv("STT_PROVIDER", "faster-whisper").lower().strip() or "faster-whisper"
+    matrix["stt"] = {
+        "backend": stt_name,
+        "options": ["faster-whisper"],
+        "env": "STT_URL",
+        "configured": FasterWhisperProvider().configured() if stt_name == "faster-whisper" else False,
+    }
+
+    # Lip-sync — optional local MuseTalk GPU runtime (#551).
+    lipsync_name = os.getenv("LIPSYNC_PROVIDER", "musetalk").lower().strip() or "musetalk"
+    matrix["lipsync"] = {
+        "backend": lipsync_name,
+        "options": ["musetalk"],
+        "env": "MUSETALK_URL",
+        "configured": MuseTalkProvider().configured() if lipsync_name == "musetalk" else False,
     }
 
     # Compute — GPU image/video share the same backend.
@@ -568,6 +626,8 @@ __all__ = [
     "ImageProvider",
     "VideoProvider",
     "TTSProvider",
+    "STTProvider",
+    "LipSyncProvider",
     "AssemblyProvider",
     "ComputeProvider",
     "PublisherProvider",
@@ -577,6 +637,8 @@ __all__ = [
     "DefaultImageProvider",
     "DefaultVideoProvider",
     "DefaultTTSProvider",
+    "FasterWhisperProvider",
+    "MuseTalkProvider",
     "DefaultAssemblyProvider",
     "DefaultComputeProvider",
     "DefaultPublisherProvider",

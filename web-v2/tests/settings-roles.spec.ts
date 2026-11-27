@@ -40,6 +40,10 @@ test('«Розмістити тут» одразу зберігає вузол, 
   await expect(page.getByTestId('placed-image-gpu')).toHaveText('Розміщено');
   await expect(page.getByTestId('waiting-node-image')).toBeVisible();
   await expect(page.getByTestId('activate-blocker-image')).toHaveText('Чекаємо на запуск модуля на вузлі');
+  const bar = page.getByTestId('progress-image');
+  await expect(bar).toContainText('Вузол запускає модуль');
+  await expect(bar).toContainText('3/5 · 60%');
+  await expect(bar.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '60');
   await expect(page.getByTestId('ready-image-gpu')).toHaveText('Вузол не повідомляв модуль');
   await page.getByTestId('unplace-image-gpu').click();
   await expect.poll(() => placements).toEqual([['gpu'], []]);

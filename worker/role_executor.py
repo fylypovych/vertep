@@ -764,6 +764,295 @@ def _deliver_inputs(task: dict, snapshot: dict, job_id: str, root: Path) -> None
         logger.info("Assembly inputs delivered from CORE for %s", job_id)
 
 
+def execute_stt(task: dict) -> list[dict]:
+    """Transcribe audio on a Worker via the local faster-whisper STT runtime (#544)."""
+    from adapters.providers.stt_backends import FasterWhisperProvider
+
+    audio_base64 = task.get("audio_base64")
+    audio_path_raw = task.get("audio_path")
+    filename = str(task.get("filename") or "audio.wav").strip() or "audio.wav"
+    if isinstance(audio_base64, str) and audio_base64.strip():
+        audio_bytes = base64.b64decode(audio_base64, validate=True)
+    elif isinstance(audio_path_raw, str) and audio_path_raw.strip():
+        job_root = Path(os.getenv("JOB_ROOT", "storage/jobs")).resolve()
+        candidate = Path(audio_path_raw)
+        resolved = candidate.resolve() if candidate.is_absolute() else (job_root / candidate).resolve()
+        if resolved != job_root and job_root not in resolved.parents:
+            raise ValueError("STT audio_path escapes JOB_ROOT")
+        if not resolved.is_file():
+            raise FileNotFoundError(f"STT audio file not found: {audio_path_raw}")
+        audio_bytes = resolved.read_bytes()
+        filename = resolved.name
+    else:
+        raise ValueError("STT task requires audio_base64 or audio_path")
+
+    stt_url = os.getenv("STT_URL", "http://stt:8099").rstrip("/")
+    provider = FasterWhisperProvider(
+        url=stt_url,
+        model=str(task.get("model") or os.getenv("STT_MODEL") or "").strip() or None,
+        post=lambda url, **kwargs: migration_post(httpx, url, **kwargs),
+    )
+    transcript = provider.transcribe_bytes(
+        audio_bytes,
+        filename=filename,
+        language=task.get("language"),
+        model=task.get("model"),
+        vad_filter=bool(task.get("vad_filter", True)),
+    )
+    payload = json.dumps(transcript, ensure_ascii=False).encode("utf-8")
+    scene_id = task.get("scene_id") or "stt"
+    artifact = _artifact(f"transcript-{scene_id}.json", "transcript", payload)
+    artifact["contract"] = {
+        "format": transcript["format"],
+        "provider": transcript["provider"],
+        "engine": transcript["engine"],
+        "model": transcript["model"],
+        "language": transcript["language"],
+        "duration": transcript["duration"],
+        "audio_sha256": transcript["audio_sha256"],
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+    }
+    return [artifact]
+
+
+def execute_lora_train(task: dict) -> list[dict]:
+    """Train a character LoRA on a GPU Worker via isolated ostris/ai-toolkit (#548)."""
+    import tempfile
+    from adapters.lora_training import (
+        LORA_CONTRACT_FORMAT,
+        prepare_character_dataset,
+        save_lora_artifact,
+        validate_base_model,
+    )
+
+    character_id = str(task.get("character_id") or "").strip()
+    base_model = str(task.get("base_model") or "").strip()
+    spec = validate_base_model(base_model)
+    trigger_word = str(task.get("trigger_word") or f"vertep_{character_id}").strip()
+    steps = int(task.get("steps") or 1000)
+    rank = int(task.get("rank") or 16)
+    learning_rate = float(task.get("learning_rate") or 1e-4)
+    resolution = int(task.get("resolution") or spec["default_resolution"])
+
+    images_payload: list[dict] = []
+    if isinstance(task.get("images"), list) and task["images"]:
+        images_payload = list(task["images"])
+        ds_sha = hashlib.sha256(
+            json.dumps(images_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    else:
+        with tempfile.TemporaryDirectory(prefix="vertep-lora-ds-") as ds_tmp:
+            dataset = prepare_character_dataset(
+                character_id,
+                Path(ds_tmp),
+                trigger_word=trigger_word,
+            )
+            ds_sha = dataset["dataset_sha256"]
+            for entry in dataset["images"]:
+                img_path = Path(ds_tmp) / entry["filename"]
+                cap_path = Path(ds_tmp) / entry["caption_file"]
+                images_payload.append({
+                    "filename": entry["filename"],
+                    "content_base64": base64.b64encode(img_path.read_bytes()).decode("ascii"),
+                    "caption": cap_path.read_text(encoding="utf-8").strip(),
+                })
+
+    endpoint = os.getenv("LORA_TRAINER_URL", "http://lora-trainer:8101").rstrip("/") + "/train"
+    response = migration_post(
+        httpx,
+        endpoint,
+        json={
+            "character_id": character_id,
+            "base_model": spec["model"],
+            "trigger_word": trigger_word,
+            "steps": steps,
+            "rank": rank,
+            "learning_rate": learning_rate,
+            "resolution": resolution,
+            "images": images_payload,
+        },
+        timeout=int(os.getenv("LORA_TRAIN_TIMEOUT_SECONDS", "14400")),
+    )
+    response.raise_for_status()
+    body = response.json()
+    lora_b64 = body.get("lora_base64")
+    if not isinstance(lora_b64, str) or not lora_b64:
+        raise RuntimeError("LoRA trainer returned no weights")
+    lora_bytes = base64.b64decode(lora_b64, validate=True)
+    actual_sha = hashlib.sha256(lora_bytes).hexdigest()
+    if body.get("sha256") and body["sha256"] != actual_sha:
+        raise RuntimeError("LoRA artifact SHA256 mismatch")
+
+    lora_root = Path(os.getenv("LORA_MODELS_ROOT", "models/loras"))
+    saved = save_lora_artifact(
+        lora_bytes,
+        character_id=character_id,
+        base_model=spec["model"],
+        trigger_word=trigger_word,
+        steps=steps,
+        rank=rank,
+        dataset_sha256=body.get("dataset_sha256") or ds_sha,
+        output_root=lora_root,
+        filename=body.get("filename"),
+    )
+    artifact = _artifact(saved["filename"], "lora", lora_bytes)
+    artifact["contract"] = {
+        "format": LORA_CONTRACT_FORMAT,
+        "engine": "ai-toolkit",
+        "character_id": character_id,
+        "base_model": spec["model"],
+        "base_model_license": spec["license"],
+        "trigger_word": trigger_word,
+        "comfyui_lora_name": saved["comfyui_lora_name"],
+        "dataset_sha256": saved["dataset_sha256"],
+        "sha256": actual_sha,
+        "size": len(lora_bytes),
+    }
+    return [artifact]
+
+
+def _resolve_lipsync_portrait(task: dict) -> tuple[bytes, str]:
+    """Resolve portrait/avatar media from task payload or character references (#551)."""
+    portrait_b64 = task.get("portrait_base64")
+    if isinstance(portrait_b64, str) and portrait_b64.strip():
+        filename = str(task.get("portrait_filename") or "avatar.png").strip() or "avatar.png"
+        return base64.b64decode(portrait_b64, validate=True), Path(filename).name
+
+    portrait_path_raw = task.get("portrait_path")
+    if isinstance(portrait_path_raw, str) and portrait_path_raw.strip():
+        allowed_roots = (
+            Path(os.getenv("JOB_ROOT", "storage/jobs")).resolve(),
+            Path(os.getenv("CHARACTERS_ROOT", "characters")).resolve(),
+        )
+        candidate = Path(portrait_path_raw)
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+        else:
+            resolved = (allowed_roots[0] / candidate).resolve()
+            if not resolved.is_file():
+                resolved = (allowed_roots[1] / candidate).resolve()
+        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+            raise ValueError("Lip-sync portrait_path escapes allowed storage roots")
+        if not resolved.is_file():
+            raise FileNotFoundError(f"Lip-sync portrait file not found: {portrait_path_raw}")
+        return resolved.read_bytes(), resolved.name
+
+    fetched = _fetch_character_references(task)
+    if fetched:
+        filename, data = fetched[0]
+        return data, filename
+
+    character_id = str(task.get("character_id") or "").strip()
+    if character_id:
+        from core.character_references import list_references, reference_path
+
+        requested = str(task.get("portrait_filename") or "").strip()
+        if requested:
+            ref = reference_path(character_id, requested)
+            if ref is None:
+                raise FileNotFoundError(
+                    f"Character reference {requested!r} not found for {character_id!r}"
+                )
+            return ref.read_bytes(), ref.name
+        refs = list_references(character_id)
+        if not refs:
+            raise FileNotFoundError(f"Character {character_id!r} has no reference portrait")
+        ref = reference_path(character_id, refs[0]["filename"])
+        if ref is None:
+            raise FileNotFoundError(f"Character reference missing for {character_id!r}")
+        return ref.read_bytes(), ref.name
+
+    raise ValueError("Lip-sync task requires portrait_base64, portrait_path, or character_id")
+
+
+def _resolve_lipsync_audio(task: dict) -> tuple[bytes, str, str | None]:
+    """Resolve and verify WAV audio (including audio_contract/v1 SHA256) for lip-sync (#551)."""
+    audio_artifact = task.get("audio_artifact")
+    audio_contract = task.get("audio_contract")
+    filename = str(task.get("audio_filename") or "speech.wav").strip() or "speech.wav"
+
+    if isinstance(audio_artifact, dict) and audio_artifact.get("data_base64"):
+        audio_bytes = base64.b64decode(str(audio_artifact["data_base64"]), validate=True)
+        filename = str(audio_artifact.get("filename") or filename).strip() or "speech.wav"
+        if audio_contract is None and isinstance(audio_artifact.get("contract"), dict):
+            audio_contract = audio_artifact["contract"]
+    elif isinstance(task.get("audio_base64"), str) and task["audio_base64"].strip():
+        audio_bytes = base64.b64decode(task["audio_base64"], validate=True)
+    elif isinstance(task.get("audio_path"), str) and task["audio_path"].strip():
+        job_root = Path(os.getenv("JOB_ROOT", "storage/jobs")).resolve()
+        candidate = Path(task["audio_path"])
+        resolved = candidate.resolve() if candidate.is_absolute() else (job_root / candidate).resolve()
+        if resolved != job_root and job_root not in resolved.parents:
+            raise ValueError("Lip-sync audio_path escapes JOB_ROOT")
+        if not resolved.is_file():
+            raise FileNotFoundError(f"Lip-sync audio file not found: {task['audio_path']}")
+        audio_bytes = resolved.read_bytes()
+        filename = resolved.name
+    else:
+        raise ValueError("Lip-sync task requires audio_artifact, audio_base64, or audio_path")
+
+    contract_format: str | None = None
+    if isinstance(audio_contract, dict):
+        contract_format = str(audio_contract.get("format") or "").strip() or None
+        if contract_format and contract_format != "audio_contract/v1":
+            raise ValueError(f"Unsupported audio contract format: {contract_format}")
+        expected_sha = str(audio_contract.get("sha256") or "").strip()
+        if expected_sha and hashlib.sha256(audio_bytes).hexdigest() != expected_sha:
+            raise RuntimeError("Lip-sync input audio does not match audio_contract/v1 sha256")
+
+    return audio_bytes, Path(filename).name, contract_format
+
+
+def execute_lipsync(task: dict) -> list[dict]:
+    """Animate a character avatar portrait against WAV speech via MuseTalk on GPU Worker (#551)."""
+    from adapters.providers.lipsync_backends import LIPSYNC_CONTRACT_FORMAT, MuseTalkProvider
+
+    portrait_bytes, portrait_filename = _resolve_lipsync_portrait(task)
+    audio_bytes, audio_filename, audio_contract_format = _resolve_lipsync_audio(task)
+    character_id = str(task.get("character_id") or "").strip() or None
+    scene_id = task.get("scene_id")
+    fps = int(task.get("fps") or 25)
+    bbox_shift = int(task.get("bbox_shift") or 0)
+
+    endpoint = os.getenv("MUSETALK_URL", "http://musetalk:8102").rstrip("/")
+    provider = MuseTalkProvider(
+        url=endpoint,
+        post=lambda url, **kwargs: migration_post(httpx, url, **kwargs),
+    )
+    video_bytes, meta = provider.animate_bytes(
+        portrait_bytes,
+        audio_bytes,
+        portrait_filename=portrait_filename,
+        audio_filename=audio_filename,
+        fps=fps,
+        bbox_shift=bbox_shift,
+        character_id=character_id,
+    )
+    output_name = f"lipsync-{scene_id or character_id or 'avatar'}.mp4"
+    artifact = _media_artifact(
+        output_name,
+        "video",
+        video_bytes,
+        workflow="musetalk",
+        task_type="lipsync",
+    )
+    artifact["contract"].update({
+        "format": LIPSYNC_CONTRACT_FORMAT,
+        "provider": meta["provider"],
+        "engine": meta["engine"],
+        "license": meta["license"],
+        "character_id": character_id,
+        "scene_id": scene_id,
+        "fps": meta["fps"],
+        "bbox_shift": meta["bbox_shift"],
+        "audio_sha256": meta["audio_sha256"],
+        "portrait_sha256": meta["portrait_sha256"],
+        "audio_contract_format": audio_contract_format,
+    })
+    return [artifact]
+
+
 def execute_knowledge_extract(task: dict) -> list[dict]:
     """Deterministic document extraction, sanitization, and optional OCR on CPU Worker (#506 K2)."""
     from worker.knowledge_extractor import extract_from_task
@@ -773,14 +1062,17 @@ def execute_knowledge_extract(task: dict) -> list[dict]:
 
 
 EXECUTORS = {"text": execute_text, "script": execute_script, "voice": execute_voice,
+             "stt": execute_stt,
+             "lora_train": execute_lora_train,
+             "lipsync": execute_lipsync,
              "publish": execute_publisher, "backup": execute_backup,
              "image": execute_image, "video": execute_video,
              "assembly": execute_assembly,
              "storyboard": execute_storyboard,
              "knowledge_extract": execute_knowledge_extract}
 ROLE_TASKS = {"text": {"text", "script", "storyboard", "assembly", "knowledge_extract"},
-              "voice": {"voice"}, "publisher": {"publish"},
-              "backup": {"backup"}, "gpu": {"image", "video", "assembly"},
+              "voice": {"voice", "stt"}, "publisher": {"publish"},
+              "backup": {"backup"}, "gpu": {"image", "video", "assembly", "lora_train", "lipsync"},
               }
 
 

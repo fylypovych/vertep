@@ -201,3 +201,29 @@ test('без виявленого GPU модуль зображень вимкн
   await expect(page.locator('#setup-deployment-status')).toContainText('не в робочому стані: tts');
   expect(selected).toEqual([]);
 });
+
+test('поки служби розгортаються, кожна вибрана служба показує етап і прогрес, а не помилку', async ({ page }, testInfo) => {
+  await page.route('**/api/setup', route => route.fulfill({ json: status }));
+  await page.route('**/api/setup/selection', route => route.fulfill({ json: { accepted: true } }));
+  await page.route('**/api/setup/health*', route => route.fulfill({ json: {
+    ready: false, required: ['docker', 'tts'], checks: { docker: 'OK', tts: 'OFFLINE', gpu: 'OPTIONAL' },
+    details: { tts: { code: 'health_endpoint_unavailable' } },
+    deployment: { state: 'APPLYING', phase: 'PULLING', error: null },
+  } }));
+  await page.goto('/setup?token=abc');
+  const next = page.locator('#next');
+  await next.click();
+  await next.click();
+  await page.fill('#username', 'admin');
+  await page.fill('#password', 'long-enough-password');
+  await page.fill('#confirmation', 'long-enough-password');
+  for (let i = 0; i < 5; i++) await next.click();
+  const health = page.locator('#health');
+  await expect(health).toContainText('Розгортається');
+  await expect(health).toContainText('Завантаження образів · 40%');
+  await expect(health).not.toContainText('Вибрана служба недоступна');
+  await expect(health.getByRole('progressbar', { name: 'Синтез мовлення' })).toHaveAttribute('aria-valuenow', '40');
+  await expect(health.getByRole('progressbar', { name: 'Docker' })).toHaveAttribute('aria-valuenow', '100');
+  await expect(health.getByRole('progressbar')).toHaveCount(2);
+  await page.screenshot({ path: testInfo.outputPath('health-deploying.png') });
+});

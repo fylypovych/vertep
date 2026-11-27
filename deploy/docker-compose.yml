@@ -184,6 +184,9 @@ services:
       PROMETHEUS_URL: http://monitoring:9090/-/healthy
       BACKUP_ROOT: /data/backups
       UPDATE_REQUEST_DIR: /data/config/update/requests
+      # Application module containers are started by the host executor (no Docker in the Worker).
+      VERTEP_APPLICATION_MODULES: ${VERTEP_APPLICATION_MODULES:-host}
+      VERTEP_APPLICATION_STATE: /data/config/application-modules/worker-ports.json
     volumes: ["./models:/data/models", "./logs:/data/logs", "./config:/data/config", "./backups:/data/backups", "./storage:/data/storage"]
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import worker.service' >/dev/null"]
@@ -216,6 +219,58 @@ services:
     restart: unless-stopped
     read_only: true
     tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  stt:
+    # Opt-in local faster-whisper STT runtime (#544, MIT).
+    # Internal-only (no published host ports); enable with `--profile stt` or COMPOSE_PROFILES=stt.
+    image: ${VERTEP_STT_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/stt:${VERTEP_VERSION}}
+    profiles: ["stt"]
+    environment:
+      STT_MODELS_DIR: /data/models/stt
+      STT_MODEL: "${STT_MODEL:-small}"
+      STT_DEVICE: "${STT_DEVICE:-cpu}"
+      STT_COMPUTE_TYPE: "${STT_COMPUTE_TYPE:-int8}"
+    volumes: ["./models:/data/models"]
+    expose: ["8099"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8099/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  lora-trainer:
+    # Opt-in isolated LoRA training runtime powered by ostris/ai-toolkit (MIT, #548).
+    # Internal-only (no published host ports); enable with `--profile lora-trainer`.
+    image: ${VERTEP_LORA_TRAINER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/lora-trainer:${VERTEP_VERSION}}
+    profiles: ["lora-trainer"]
+    volumes: ["./models:/data/models", "./storage:/data/storage"]
+    expose: ["8101"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8101/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  musetalk:
+    # Opt-in isolated GPU lip-sync runtime powered by MuseTalk (MIT, #551) without InsightFace.
+    # Internal-only (no published host ports); enable with `--profile musetalk`.
+    image: ${VERTEP_MUSETALK_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/musetalk:${VERTEP_VERSION}}
+    profiles: ["musetalk"]
+    volumes: ["./models:/data/models", "./storage:/data/storage"]
+    expose: ["8102"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8102/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
   publisher-worker:

@@ -1,0 +1,24 @@
+{
+  "engine": "wan2.2",
+  "variant": "ti2v-5b",
+  "license": "Apache-2.0",
+  "min_vram_mb": 12288,
+  "recommended_vram_mb": 16384,
+  "supported_gpu_vendors": ["nvidia", "amd"],
+  "required_nodes": [
+    "UNETLoader",
+    "CLIPLoader",
+    "VAELoader",
+    "CLIPTextEncode",
+    "ModelSamplingSD3",
+    "Wan22ImageToVideoLatent",
+    "KSampler",
+    "VAEDecode",
+    "VHS_VideoCombine"
+  ],
+  "required_models": [
+    "{{WAN_UNET_MODEL}}",
+    "{{WAN_CLIP_MODEL}}",
+    "{{WAN_VAE_MODEL}}"
+  ]
+}

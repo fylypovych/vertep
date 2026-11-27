@@ -7,7 +7,7 @@ RUN useradd -u 65532 -m storyboard
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY storyboard_logic.py storyboard_module.py manifest.yaml ./
+COPY storyboard_logic.py storyboard_module.py otio_export.py manifest.yaml ./
 COPY migrations/ ./migrations/
 COPY ui/ ./ui/
 

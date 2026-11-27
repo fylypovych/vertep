@@ -656,11 +656,110 @@ def _apply(root: Path, runner=subprocess.run) -> dict:
         raise
 
 
+MODULE_REQUEST = "config/application-modules/request.json"
+MODULE_STATE = "config/application-modules/state.json"
+MODULE_CORE_URL = "http://core:8080"
+
+
+def _compose_container(root: Path, service: str, runner=subprocess.run) -> str:
+    result = runner(["docker", "compose", "--env-file", str(root / ".env"), "-f", str(root / "docker-compose.yml"),
+                     "ps", "-q", service], capture_output=True, text=True, timeout=120, check=False)
+    return (result.stdout or "").strip().splitlines()[0] if (result.stdout or "").strip() else ""
+
+
+def _attach_module_network(root: Path, module_id: str, runner=subprocess.run) -> None:
+    """Only CORE (alias ``core``) and the Worker join the module's own network: the module
+    reaches CORE's module gateway, CORE and the Worker reach the module; nothing else."""
+    from worker.application_container import resource_name
+    network = resource_name(module_id)
+    for service, alias in (("core", ["--alias", "core"]), ("worker", [])):
+        container = _compose_container(root, service, runner)
+        if container:  # an already connected container answers with an error; that is the goal state
+            runner(["docker", "network", "connect", *alias, network, container],
+                   capture_output=True, text=True, timeout=120, check=False)
+
+
+def apply_modules(root: Path, runner=subprocess.run) -> dict:
+    """Run the application module containers the local Worker asked for.
+
+    The Worker has no Docker access; it writes the signed packages and module tokens
+    CORE gave it. Every package is verified again here against the host's own trust
+    root and started with the fixed hardened argument list (no host port)."""
+    from core.module.packages import verify_package
+    from core.module.trust import TrustStore
+    from worker import application_container as containers
+    request_path = root / MODULE_REQUEST
+    original = request_path.read_bytes()
+    state = {"modules": {}, "errors": {}, "requested": {}}
+    try:
+        request = json.loads(original)
+        trust = TrustStore.from_root(root / "runtime/module-trust")
+        desired = {}
+        for item in request.get("modules", []) if isinstance(request, dict) else []:
+            module_id = str(item.get("module_id", "")) if isinstance(item, dict) else ""
+            try:
+                manifest = verify_package(item["package"], trust)
+                if manifest.kind != "application" or manifest.module_id != module_id or not manifest.container:
+                    raise ValueError("Пакет не є application-модулем із цим ідентифікатором")
+                desired[module_id] = (manifest, env_value(item.get("token"), "module token"))
+                state["requested"][module_id] = manifest.version
+            except Exception as error:
+                state["errors"][module_id or "?"] = str(error)
+        listed = runner(["docker", "ps", "--filter", "label=vertep.module", "--format",
+                         '{{.Label "vertep.module"}} {{.Label "vertep.module.version"}}'],
+                        capture_output=True, text=True, timeout=60, check=True)
+        running = dict(line.split()[:2] for line in listed.stdout.splitlines() if len(line.split()) == 2)
+        for module_id in set(running) - set(desired):
+            containers.stop(module_id)
+        for module_id, (manifest, token) in sorted(desired.items()):
+            try:
+                if running.get(module_id) != manifest.version:
+                    containers.stop(module_id)
+                    containers.start(manifest, core_url=MODULE_CORE_URL, module_token=token, host_port=None)
+                _attach_module_network(root, module_id, runner)
+            except (subprocess.SubprocessError, OSError, ValueError) as error:
+                detail = getattr(error, "stderr", "") or str(error)
+                state["errors"][module_id] = str(detail).strip()[-500:]
+                continue
+            state["modules"][module_id] = {
+                "version": manifest.version,
+                "endpoint": f"http://{containers.resource_name(module_id)}:{int(manifest.container['port'])}"}
+        return state
+    finally:
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_json(root / MODULE_STATE, state)
+        # Consumed even on failure: PathExists would otherwise rerun it at once; the Worker
+        # asks again later. A newer request written meanwhile is kept.
+        if request_path.is_file() and request_path.read_bytes() == original:
+            request_path.unlink()
+
+
+def reattach_modules(root: Path, runner=subprocess.run) -> None:
+    """A recreated CORE/Worker container has lost the module networks it was joined to."""
+    try:
+        modules = json.loads((root / MODULE_STATE).read_text(encoding="utf-8")).get("modules", {})
+    except (OSError, ValueError):
+        return
+    for module_id in modules:
+        _attach_module_network(root, module_id, runner)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Застосувати роль Vertep із Web Wizard")
     parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
-    apply(args.root.resolve())
+    root = args.root.resolve()
+    modules_requested = (root / MODULE_REQUEST).is_file()
+    if modules_requested:
+        try:
+            apply_modules(root)
+        except Exception as error:  # the role deployment below must still run
+            print(f"Запуск модулів не вдався: {error}", file=sys.stderr)
+    if (root / "config/deployment-request.json").is_file() or not modules_requested:
+        try:
+            apply(root)
+        finally:
+            reattach_modules(root)
 
 
 if __name__ == "__main__":

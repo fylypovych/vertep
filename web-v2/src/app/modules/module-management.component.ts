@@ -100,6 +100,19 @@ const REASON_TEXT: Record<string, string> = {
           <div class="rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-800" role="alert" [attr.data-testid]="'module-action-error-' + module.module_id">{{ moduleError()!.message }}</div>
         }
         @if (isAdmin() && !module.system) {
+          @if (progress(module); as step) {
+            <div class="space-y-1" [attr.data-testid]="'progress-' + module.module_id">
+              <div class="flex justify-between text-xs">
+                <span [class]="step.waiting ? 'text-amber-700' : 'text-slate-500'">{{ step.label | t }}</span>
+                <span class="text-slate-500">{{ step.done }}/5 · {{ step.percent }}%</span>
+              </div>
+              <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden" role="progressbar"
+                   aria-valuemin="0" aria-valuemax="100" [attr.aria-valuenow]="step.percent" [attr.aria-label]="module.label | t">
+                <div class="h-full rounded-full transition-all" [style.width.%]="step.percent"
+                     [ngClass]="step.waiting ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'"></div>
+              </div>
+            </div>
+          }
           <ol class="space-y-2 text-sm" [attr.data-testid]="'steps-' + module.module_id">
             <li class="flex flex-wrap items-center gap-2">
               <span class="w-5 text-slate-500">1.</span><span class="w-40">{{ 'Встановлення' | t }}</span>
@@ -166,6 +179,12 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void { this.poll?.unsubscribe(); }
   private refreshRuntime(): void {
     this.runtime.state().pipe(catchError(() => of(null))).subscribe(core => this.core.set(core));
+    // While a node is starting a module, keep its bar moving without a manual reload.
+    if (!this.busy() && this.modules().some(module => !module.system && this.progress(module).waiting)) {
+      this.api.catalog().pipe(catchError(() => of(null))).subscribe(catalog => {
+        if (catalog) { this.modules.set(catalog.modules); this.nodes.set(catalog.nodes); }
+      });
+    }
   }
 
   load(): void {
@@ -219,6 +238,19 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
     if (module.permissions.length && !this.approved(module)) return 'Спершу погодьте права';
     if (!this.reported(module)) return 'Чекаємо на запуск модуля на вузлі';
     return null;
+  }
+
+  /** Five steps of the card as one bar: completed steps × 20%; amber while the node is starting the module. */
+  progress(module: CatalogModule): { done: number; percent: number; label: string; waiting: boolean } {
+    const steps = [module.state !== 'NOT_INSTALLED', module.placement.length > 0, this.approved(module),
+      this.reported(module), module.state === 'ACTIVE'];
+    const done = steps.findIndex(ok => !ok);
+    const count = done < 0 ? 5 : done;
+    const waiting = count === 3;
+    const label = count === 5 ? 'Модуль активний'
+      : waiting ? (this.runtimePending() && this.core() ? this.deploymentText(this.core()!) : '') || 'Вузол запускає модуль'
+      : count === 4 ? 'Готовий до активації' : this.activationBlocker(module) || '';
+    return { done: count, percent: count * 20, label, waiting };
   }
 
   /** The answer appears in the card the administrator acted on, not above the list (out of view). */
