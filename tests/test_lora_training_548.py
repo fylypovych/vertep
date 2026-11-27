@@ -185,6 +185,14 @@ def test_lora_dispatcher_capability_and_outbound_only_compose():
     assert "services.lora_trainer_service:app" in dockerfile
     assert inbound_port_violations(ROOT / "deploy" / "docker-compose.yml") == []
 
+    # Release workflow, bootstrap, and runtime-env updater must ship lora-trainer in the signed image lock
+    release_yml = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "name: lora-trainer" in release_yml and "docker/lora-trainer/Dockerfile" in release_yml
+    bootstrap_sh = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+    assert "VERTEP_LORA_TRAINER_IMAGE=$(optional_image lora-trainer)" in bootstrap_sh
+    updater = (ROOT / "scripts" / "update-runtime-env.py").read_text(encoding="utf-8")
+    assert '"lora-trainer": "VERTEP_LORA_TRAINER_IMAGE"' in updater
+
 
 def test_core_queues_lora_and_imports_model_metadata(monkeypatch):
     from core.app import app

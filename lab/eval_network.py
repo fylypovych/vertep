@@ -81,9 +81,9 @@ def isolated_endpoint(endpoint):
             server = threading.Thread(target=relay.serve_forever, daemon=True)
             server.start()
             try:
-                prefix = [binary, "--unshare-net", "--unshare-pid", "--die-with-parent",
-                          "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-                          "--ro-bind", directory, directory]
+                prefix = [binary, "--unshare-user-try", "--unshare-net", "--unshare-pid",
+                          "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev",
+                          "--proc", "/proc", "--ro-bind", directory, directory]
                 yield "http://127.0.0.1:11434", prefix, relay_path
             finally:
                 relay.shutdown()

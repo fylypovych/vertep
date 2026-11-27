@@ -6,6 +6,8 @@ export const EN: Record<string, string> = {
   "Збережіть персонажа, щоб керувати співпрацею": "Save the character to manage collaborations",
   "Міграція": "Migration",
   "Модуль активний": "Module active",
+  "Моніторинг (модуль)": "Monitoring (module)",
+  "Розширення модуля": "Module extension",
   "Не вдалося завантажити співпрацю": "Could not load collaborations",
   "Персонаж активовано": "Character activated",
   "Персонаж деактивовано": "Character deactivated",

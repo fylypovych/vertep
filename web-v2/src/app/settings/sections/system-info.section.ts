@@ -1,6 +1,7 @@
 import { TPipe } from '../../core/i18n/t.pipe';
 import { inject, Component, OnInit, computed, signal } from '@angular/core';
 import { PolicyService } from '../../core/services/policy.service';
+import { NavigationStateService } from '../../core/services/navigation-state.service';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SystemApiService } from '../../core/api/system.api';
@@ -82,6 +83,7 @@ export class SystemInfoSectionComponent implements OnInit {
   labConnected = signal(false);
   labCommand = signal('');
   private policy = inject(PolicyService);
+  private navState = inject(NavigationStateService);
 
   canSaveTurnTimeout(): boolean { return this.policy.can('update_settings').allowed; }
 
@@ -94,7 +96,11 @@ export class SystemInfoSectionComponent implements OnInit {
 
   saveLabPanel(): void {
     this.settingsApi.saveLabPanel(this.labPanelUrl.trim()).subscribe({
-      next: (saved) => { this.labPanelUrl = saved.url || ''; this.toast.show('Збережено', 'success'); },
+      next: (saved) => {
+        this.labPanelUrl = saved.url || '';
+        this.navState.refreshLab();
+        this.toast.show('Збережено', 'success');
+      },
       error: (err) => this.toast.show(err.message, 'error'),
     });
   }
@@ -112,7 +118,12 @@ export class SystemInfoSectionComponent implements OnInit {
 
   disconnectLab(): void {
     this.settingsApi.labDisconnect().subscribe({
-      next: () => { this.labConnected.set(false); this.labPanelUrl = ''; this.toast.show('Збережено', 'success'); },
+      next: () => {
+        this.labConnected.set(false);
+        this.labPanelUrl = '';
+        this.navState.refreshLab();
+        this.toast.show('Збережено', 'success');
+      },
       error: (err) => this.toast.show(err.message, 'error'),
     });
   }

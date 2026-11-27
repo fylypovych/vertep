@@ -1,13 +1,13 @@
 import { Component, OnDestroy, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterModule } from '@angular/router';
-import { HttpClient, HttpContext } from '@angular/common/http';
+import { NavigationEnd, Router, RouterModule } from '@angular/router';
+import { Subscription } from 'rxjs';
+import { filter } from 'rxjs/operators';
 import { TPipe } from '../../core/i18n/t.pipe';
 import { SidebarService } from '../../core/services/sidebar.service';
 import { SystemApiService } from '../../core/api/system.api';
 import { PolicyService } from '../../core/services/policy.service';
-import { ModulesApiService } from '../../core/api/modules.api';
-import { BACKGROUND_REQUEST } from '../../core/interceptors/auth.interceptor';
+import { NavigationStateService } from '../../core/services/navigation-state.service';
 
 const MODULE_ICON = `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>`;
 
@@ -30,7 +30,11 @@ interface V3NavItem {
   label: string;
   icon: string;
   exact?: boolean;
+  /** Additional v3 route prefixes (aliases) that should highlight this nav item (#554). */
+  matchPaths?: string[];
   adminOnly?: boolean;
+  /** Shown only to non-admin roles (e.g. moderator Workflows entry without admin Pipeline tabs). */
+  moderatorOnly?: boolean;
 }
 
 interface V3SidebarGroup {
@@ -89,9 +93,8 @@ const PANEL_API_MAJOR = 1;
             }
             @for (item of group.items; track item.id) {
               <a [routerLink]="item.path"
-                 routerLinkActive="v3-nav-active"
-                 ariaCurrentWhenActive="page"
-                 [routerLinkActiveOptions]="{ exact: item.exact ?? false }"
+                 [class.v3-nav-active]="isItemActive(item)"
+                 [attr.aria-current]="isItemActive(item) ? 'page' : null"
                  class="group flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-xl transition-colors"
                  style="color: var(--v3-text-muted)"
                  [attr.data-testid]="'v3-nav-' + item.id"
@@ -163,6 +166,7 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
         {
           id: 'jobs',
           path: '/v3/jobs',
+          matchPaths: ['/v3/jobs', '/v3/queue'],
           label: 'Завдання і черга',
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>`,
         },
@@ -180,6 +184,7 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
         {
           id: 'monitor',
           path: '/v3/monitor',
+          matchPaths: ['/v3/monitor', '/v3/health', '/v3/alerts', '/v3/logs', '/v3/real-tests'],
           label: 'Моніторинг',
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>`,
         },
@@ -199,6 +204,7 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
         {
           id: 'pipeline',
           path: '/v3/pipeline',
+          matchPaths: ['/v3/pipeline', '/v3/workflows'],
           label: 'Конвеєр',
           adminOnly: true,
           icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>`,
@@ -214,13 +220,44 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
     },
   ];
 
-  moduleItems = signal<(V3NavItem & { group: string; rawPath: string })[]>([]);
-  labConfigured = signal(false);
+  private readonly moderatorWorkflowsItem: V3NavItem = {
+    id: 'workflows',
+    path: '/v3/workflows',
+    matchPaths: ['/v3/workflows', '/v3/pipeline'],
+    label: 'Шаблони обробки',
+    moderatorOnly: true,
+    icon: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.25v11.5M6 12h12M6 12l5 5m0 0l5-5"/></svg>`,
+  };
+
+  private readonly baseLabels = new Set(
+    this.baseGroups.flatMap(group => group.items.map(item => item.label)),
+  );
+
+  currentPath = signal('');
   runtimeVersion = signal<string | null>(null);
   panelVersion = signal<string | null>(null);
   panelCommit = signal<string | null>(null);
   apiIncompatible = signal(false);
   private statusTimer?: ReturnType<typeof setInterval>;
+  private routerSub?: Subscription;
+
+  moduleItems = computed<(V3NavItem & { group: string; rawPath: string })[]>(() =>
+    this.navState.moduleItems().map(item => {
+      const isExtension = !MODULE_GROUPS[item.group];
+      const label = isExtension && this.baseLabels.has(item.label)
+        ? `${item.label} (модуль)`
+        : item.label;
+      return {
+        id: 'module-' + item.module_id + '-' + item.id,
+        rawPath: item.path,
+        path: item.path.startsWith('/v3') ? item.path : `/v3${item.path.startsWith('/') ? '' : '/'}${item.path}`,
+        label,
+        icon: PAGE_ICONS[item.path] || MODULE_ICON,
+        adminOnly: item.admin_only,
+        group: item.group,
+      };
+    }),
+  );
 
   visibleGroups = computed(() => {
     const isAdmin = this.policy.userRole() === 'admin';
@@ -236,7 +273,10 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
         .filter(item => MODULE_GROUPS[item.group] === group.label)
         .sort((a, b) => rank(a.rawPath) - rank(b.rawPath));
       const items = [...group.items, ...own];
-      if (group.label === 'Інфраструктура' && this.labConfigured()) {
+      if (group.label === 'Студія' && !isAdmin) {
+        items.push(this.moderatorWorkflowsItem);
+      }
+      if (group.label === 'Інфраструктура' && this.navState.labConfigured()) {
         items.push(labItem);
       }
       return { label: group.label, items };
@@ -250,7 +290,7 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
     return allGroups
       .map(group => ({
         label: group.label,
-        items: group.items.filter(item => !item.adminOnly || isAdmin),
+        items: group.items.filter(item => (!item.adminOnly || isAdmin) && (!item.moderatorOnly || !isAdmin)),
       }))
       .filter(group => group.items.length > 0);
   });
@@ -262,11 +302,16 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
     private sidebarService: SidebarService,
     private systemApi: SystemApiService,
     private policy: PolicyService,
-    private modulesApi: ModulesApiService,
-    private http: HttpClient,
+    private navState: NavigationStateService,
+    private router: Router,
   ) {}
 
   ngOnInit(): void {
+    this.currentPath.set(this.normalizePath(this.router.url));
+    this.routerSub = this.router.events
+      .pipe(filter(event => event instanceof NavigationEnd))
+      .subscribe(event => this.currentPath.set(this.normalizePath((event as NavigationEnd).urlAfterRedirects)));
+
     fetch('/ui-version.json', { cache: 'no-store' })
       .then(response => (response.ok ? response.json() : null))
       .then(identity => {
@@ -276,33 +321,28 @@ export class V3SidebarComponent implements OnInit, OnDestroy {
       .catch(() => { this.panelVersion.set(null); });
 
     this.checkCore();
-    this.loadModuleMenu();
-    this.statusTimer = setInterval(() => { this.checkCore(); this.loadModuleMenu(); }, 30_000);
-
-    this.http.get<{ url: string | null }>('/api/lab/panel', {
-      context: new HttpContext().set(BACKGROUND_REQUEST, true),
-    }).subscribe({
-      next: ({ url }) => this.labConfigured.set(!!url),
-      error: () => this.labConfigured.set(false),
-    });
+    this.navState.refreshAll();
+    this.statusTimer = setInterval(() => { this.checkCore(); this.navState.refreshAll(); }, 30_000);
   }
 
   ngOnDestroy(): void {
     if (this.statusTimer) clearInterval(this.statusTimer);
+    this.routerSub?.unsubscribe();
   }
 
-  private loadModuleMenu(): void {
-    this.modulesApi.navigation().subscribe(items => {
-      this.moduleItems.set(items.map(item => ({
-        id: 'module-' + item.module_id + '-' + item.id,
-        rawPath: item.path,
-        path: item.path.startsWith('/v3') ? item.path : `/v3${item.path.startsWith('/') ? '' : '/'}${item.path}`,
-        label: item.label,
-        icon: PAGE_ICONS[item.path] || MODULE_ICON,
-        adminOnly: item.admin_only,
-        group: item.group,
-      })));
-    });
+  isItemActive(item: V3NavItem): boolean {
+    const path = this.currentPath();
+    if (!path) return false;
+    const targets = item.matchPaths?.length ? item.matchPaths : [item.path];
+    if (item.exact) {
+      return targets.includes(path);
+    }
+    return targets.some(prefix => path === prefix || path.startsWith(prefix + '/'));
+  }
+
+  private normalizePath(url: string): string {
+    const withoutQuery = (url || '/').split('?')[0].split('#')[0];
+    return withoutQuery.replace(/\/+$/, '') || '/';
   }
 
   private checkCore(): void {

@@ -869,6 +869,9 @@ VERTEP_MONEYPRINTER_IMAGE=$(optional_image moneyprinter)
 # The self-test refuses to report ready without an immutable digest, so export the
 # digest separately instead of letting it parse the image reference.
 VERTEP_MONEYPRINTER_IMAGE_DIGEST=$(jq -r '.images["moneyprinter"].digest // empty' "$manifest_tmp")
+VERTEP_STT_IMAGE=$(optional_image stt)
+VERTEP_LORA_TRAINER_IMAGE=$(optional_image lora-trainer)
+VERTEP_MUSETALK_IMAGE=$(optional_image musetalk)
 POSTGRES_PASSWORD=$postgres_password
 UPDATE_DATABASE_URL=postgresql://vertep:$postgres_password@127.0.0.1:5432/vertep
 SYSTEM_STATE_BACKEND=postgres

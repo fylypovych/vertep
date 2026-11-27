@@ -14,12 +14,17 @@ WORKDIR $VERTEP_LAB_HOME
 
 # Only the standard library plus FastAPI is required for the control image.
 RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap libseccomp2 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home /nonexistent vertep \
+    && mkdir -p /var/lib/vertep-lab \
+    && chown 10001:10001 /var/lib/vertep-lab
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # The isolated laboratory subsystem lives next to, never inside production.
 COPY lab ./lab
 COPY scripts/lab-orchestrator.py .
+RUN chmod -R a+rX $VERTEP_LAB_HOME
 
+USER 10001:10001
 CMD ["python", "-m", "lab.cli", "status"]

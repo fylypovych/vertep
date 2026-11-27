@@ -71,7 +71,10 @@ export class UiVersionService {
       }
       if (tab === 'users') return { path: '/v3/settings', queryParams: { tab: 'users' }, fragment };
       if (tab === 'security') return { path: '/v3/settings', queryParams: { tab: 'security' }, fragment };
-      if (tab === 'publishing' || tab === 'telegram' || tab === 'secrets') {
+      if (tab === 'publishing') {
+        return { path: '/v3/settings', queryParams: { tab: 'publishing' }, fragment };
+      }
+      if (tab === 'telegram' || tab === 'secrets') {
         return { path: '/v3/settings', queryParams: { tab: 'integrations', section: tab }, fragment };
       }
       return { path: '/v3/settings', queryParams: { tab: 'general' }, fragment };
@@ -123,7 +126,7 @@ export class UiVersionService {
       if (tab === 'users') return { path: '/settings', queryParams: { tab: 'users' }, fragment };
       if (tab === 'security') return { path: '/settings', queryParams: { tab: 'security' }, fragment };
       if (tab === 'integrations') {
-        const section = params['section'] || 'publishing';
+        const section = params['section'] || 'telegram';
         return { path: '/settings', queryParams: { tab: section }, fragment };
       }
       return { path: '/settings', queryParams: { tab: 'system' }, fragment };

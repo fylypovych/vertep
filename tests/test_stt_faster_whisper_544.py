@@ -199,6 +199,14 @@ def test_stt_dockerfile_and_compose_profile_preserve_outbound_only():
     violations = inbound_port_violations(compose_path)
     assert violations == [], f"Outbound-only violations: {violations}"
 
+    # Release workflow, bootstrap, and runtime-env updater must ship stt in the signed image lock
+    release_yml = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "name: stt" in release_yml and "docker/stt/Dockerfile" in release_yml
+    bootstrap_sh = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+    assert "VERTEP_STT_IMAGE=$(optional_image stt)" in bootstrap_sh
+    updater = (ROOT / "scripts" / "update-runtime-env.py").read_text(encoding="utf-8")
+    assert '"stt": "VERTEP_STT_IMAGE"' in updater
+
 
 def test_dispatcher_routes_stt_tasks_only_to_speech_recognition_workers():
     from datetime import datetime, timezone

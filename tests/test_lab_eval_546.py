@@ -142,3 +142,31 @@ def test_promptfoo_and_lm_eval_runners_persist_structured_reports(tmp_path):
     parser = build_parser()
     parsed = parser.parse_args(["eval", "promptfoo", "--model", "llama3.2"])
     assert parsed.eval_action == "promptfoo"
+
+
+def test_lab_compose_and_dockerfile_support_unprivileged_bwrap_eval_isolation():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    eval_net_src = (root / "lab" / "eval_network.py").read_text(encoding="utf-8")
+    assert "--unshare-user-try" in eval_net_src
+    assert "--unshare-net" in eval_net_src
+    assert "--unshare-pid" in eval_net_src
+
+    dockerfile = (root / "deploy" / "lab" / "Dockerfile").read_text(encoding="utf-8")
+    assert "bubblewrap" in dockerfile and "libseccomp2" in dockerfile
+    assert "USER 10001:10001" in dockerfile
+
+    for rel, services in (
+        ("deploy/lab/docker-compose.yml", ("lab-control",)),
+        ("deploy/lab/docker-compose.web.yml", ("lab-control", "lab-executor")),
+    ):
+        compose = yaml.safe_load((root / rel).read_text(encoding="utf-8"))
+        for svc_name in services:
+            svc = compose["services"][svc_name]
+            assert not svc.get("privileged")
+            assert "ALL" in (svc.get("cap_drop") or [])
+            sec_opts = set(svc.get("security_opt") or [])
+            assert "no-new-privileges:true" in sec_opts
+            assert "seccomp=unconfined" in sec_opts
+            assert "apparmor=unconfined" in sec_opts

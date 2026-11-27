@@ -293,14 +293,46 @@ def module_storyboard(job_id: str, request: Request):
     artifacts = {item.artifact_id: item for item in job.artifacts}
     scene_audio = {item.scene_id: item for item in job.artifacts
                    if item.scene_id and item.kind == "audio"}
+    scene_video = {item.scene_id: item for item in job.artifacts
+                   if item.scene_id and (item.kind in {"video", "video_scene"}
+                                         or item.mime_type.startswith("video/"))}
+    runtime_by_id = {item.scene_id: item for item in job.scenes}
+    runtime_by_index = {item.index: item for item in job.scenes}
     public_url = os.getenv("PUBLIC_URL", "").rstrip("/")
     versions = []
     for version in job.storyboards:
+        is_active = version.version == job.active_storyboard_version
         scenes = []
         for scene in sorted(version.scenes, key=lambda item: item.index):
+            runtime_scene = (
+                runtime_by_id.get(scene.scene_id) or runtime_by_index.get(scene.index)
+                if is_active else None
+            )
+            runtime_artifacts = (
+                [artifacts[aid] for aid in runtime_scene.artifact_ids if aid in artifacts]
+                if runtime_scene is not None else []
+            )
             image = artifacts.get(scene.image_artifact_id) if scene.image_artifact_id else None
+            if image is None and runtime_artifacts:
+                image = next(
+                    (a for a in reversed(runtime_artifacts)
+                     if a.mime_type.startswith("image/") or a.kind == "image"),
+                    None,
+                )
             rendered = artifacts.get(scene.artifact_id) if scene.artifact_id else None
+            if rendered is None and runtime_artifacts:
+                rendered = next(
+                    (a for a in reversed(runtime_artifacts)
+                     if a.mime_type.startswith("video/") or a.kind in {"video", "video_scene"}),
+                    None,
+                )
+            if rendered is None:
+                rendered = scene_video.get(scene.scene_id)
+                if rendered is None and runtime_scene is not None:
+                    rendered = scene_video.get(runtime_scene.scene_id)
             audio = scene_audio.get(scene.scene_id)
+            if audio is None and runtime_scene is not None:
+                audio = scene_audio.get(runtime_scene.scene_id)
             media = {}
             for media_type, artifact in (("image", image), ("video", rendered), ("audio", audio)):
                 if artifact is None:

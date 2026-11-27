@@ -303,3 +303,196 @@ test('#536: MVP-сторінки v3 — Dashboard, Profile, Brands (Персон
   await expect(page.getByTestId('v3-character-card-narrator-1')).toBeVisible();
   await expect(page.getByTestId('v3-character-card-hero-2')).toBeVisible();
 });
+
+test('#554: модератор бачить «Шаблони обробки» у v3, перемикається v2 ↔ v3 без AdminGuard і не бачить адмінських вкладок', async ({ page }) => {
+  await setupApiMocks(page, { role: 'moderator' });
+  await page.goto('/workflows');
+  await expect(page.getByTestId('switch-to-v3')).toBeVisible({ timeout: 20000 });
+
+  await page.getByTestId('switch-to-v3').click();
+  await expect(page).toHaveURL(/\/v3\/pipeline\?tab=workflows$/);
+  await expect(page.getByTestId('v3-pipeline-workspace')).toBeVisible();
+  await expect(page.getByTestId('v3-tab-workflows')).toBeVisible();
+  await expect(page.getByTestId('v3-tab-models')).toHaveCount(0);
+  await expect(page.getByTestId('v3-tab-video-engine')).toHaveCount(0);
+  await expect(page.getByTestId('v3-tab-workflow-mode')).toHaveCount(0);
+
+  const nav = page.getByTestId('v3-sidebar-nav');
+  await expect(nav.getByTestId('v3-nav-workflows')).toBeVisible();
+  await expect(nav.getByTestId('v3-nav-workflows')).toHaveAttribute('aria-current', 'page');
+  await expect(nav.getByText('Керування', { exact: true })).toHaveCount(0);
+
+  // Moderator attempting an admin tab stays on workflows.
+  await page.goto('/v3/pipeline?tab=models');
+  await expect(page.getByTestId('v3-tab-workflows')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('v3-tab-models')).toHaveCount(0);
+
+  // Switch back to v2 returns to /workflows.
+  await page.getByTestId('switch-to-v2').click();
+  await expect(page).toHaveURL(/\/workflows$/);
+});
+
+test('#554: облікові дані платформ доступні при вимкненому brands і deep-links publishing/integrations працюють у v2 ↔ v3', async ({ page }) => {
+  // Active brands: /settings?tab=publishing -> v3 redirects to /v3/brands#platforms; /v3/settings?tab=integrations -> v2 goes to telegram.
+  await setupApiMocks(page, { role: 'admin' });
+  await page.goto('/settings?tab=publishing');
+  await expect(page.getByTestId('switch-to-v3')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('switch-to-v3').click();
+  await expect(page).toHaveURL(/\/v3\/brands#platforms$/);
+  await expect(page.locator('[data-testid="settings-publishing"][data-part="platforms"]')).toBeVisible();
+
+  // Brand moderators link opens /v3/settings?tab=users directly.
+  await page.getByTestId('v3-brand-moderators-vertep').getByText('Олена Модератор').click();
+  await expect(page).toHaveURL(/\/v3\/settings\?tab=users$/);
+  await expect(page.getByTestId('v3-tab-users')).toHaveAttribute('aria-selected', 'true');
+
+  // Integrations tab in v3 maps back to telegram in v2 (not publishing).
+  await page.goto('/v3/settings?tab=integrations');
+  await expect(page.getByTestId('v3-tab-integrations')).toHaveAttribute('aria-selected', 'true');
+  await page.getByTestId('switch-to-v2').click();
+  await expect(page).toHaveURL(/\/settings\?tab=telegram$/);
+
+  // Inactive brands: /v3/brands is guarded -> /v3, and platform credentials stay accessible in Settings -> Integrations.
+  await setupApiMocks(page, { role: 'admin', modules: [] });
+  await page.goto('/v3/brands');
+  await expect(page).toHaveURL(/\/v3$/);
+
+  await page.goto('/v3/settings?tab=publishing');
+  await expect(page.getByTestId('v3-tab-integrations')).toHaveAttribute('aria-selected', 'true');
+  const fallback = page.locator('[data-testid="settings-publishing"][data-part="platforms"]');
+  await expect(fallback).toBeVisible();
+  await expect(fallback.getByTestId('publishing-credentials')).toBeVisible();
+});
+
+test('#554: миттєве оновлення меню при зміні модулів/LAB, без колізії monitoring, заголовки модулів і підсвічування вкладок/аліасів', async ({ page }) => {
+  let navItems: any[] = [
+    { module_id: 'brands', id: 'brands', label: 'Бренди', path: '/brands', group: 'content', admin_only: false },
+  ];
+  let backupOn = true;
+  let labUrl: string | null = null;
+  let catalogModules: any[] = [
+    {
+      module_id: 'brands', label: 'Бренди', version: '0.0.4.17', kind: 'application', bundled: true, state: 'ACTIVE',
+      runtime_role: null, requires_gpu: false, target: 'any', scaling: 'single_owner', resources: {},
+      dependencies: [], permissions: [], approved_permissions: [], placement: ['core'],
+      nodes: [{ node_id: 'core', compatible_reasons: [], runtime_missing: false, instance: { state: 'READY', reasons: [], version: '0.0.4.17' } }],
+    },
+    {
+      module_id: 'monitoring', label: 'Моніторинг', version: '0.0.4.17', kind: 'application', bundled: true, state: 'INACTIVE',
+      runtime_role: null, requires_gpu: false, target: 'any', scaling: 'single_owner', resources: {},
+      dependencies: [], permissions: [], approved_permissions: [], placement: ['core'],
+      nodes: [{ node_id: 'core', compatible_reasons: [], runtime_missing: false, instance: { state: 'INSTALLED', reasons: [], version: '0.0.4.17' } }],
+    },
+    {
+      module_id: 'storyboard', label: 'Сторіборд', version: '0.0.4.19', kind: 'application', bundled: true, state: 'INACTIVE',
+      runtime_role: null, requires_gpu: false, target: 'any', scaling: 'single_owner', resources: {},
+      dependencies: [], permissions: [], approved_permissions: [], placement: ['core'],
+      nodes: [{ node_id: 'core', compatible_reasons: [], runtime_missing: false, instance: { state: 'INSTALLED', reasons: [], version: '0.0.4.19' } }],
+    },
+    {
+      module_id: 'backup', label: 'Резервні копії', version: '0.0.3.91', kind: 'role', bundled: true, state: 'ACTIVE',
+      runtime_role: 'backup', requires_gpu: false, target: 'any', scaling: 'single_owner', resources: {},
+      dependencies: [], permissions: [], approved_permissions: [], placement: ['core'],
+      nodes: [{ node_id: 'core', compatible_reasons: [], runtime_missing: false, instance: { state: 'READY', reasons: [], version: '0.0.3.91' } }],
+    },
+  ];
+
+  await setupApiMocks(page, { role: 'admin' });
+  await page.route('**/api/modules/navigation', (route: any) => route.fulfill({ json: { items: navItems } }));
+  await page.route('**/api/system/backups/available', (route: any) => route.fulfill({ json: { available: backupOn } }));
+  await page.route('**/api/lab/panel', (route: any) => route.fulfill({ json: { url: labUrl } }));
+  await page.route('**/api/settings/lab-panel', (route: any) => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      labUrl = body.url || null;
+      return route.fulfill({ json: { url: labUrl } });
+    }
+    return route.fulfill({ json: { url: labUrl } });
+  });
+  await page.route('**/api/modules/ui-extensions', (route: any) => route.fulfill({
+    json: {
+      extensions: [
+        { module_id: 'storyboard', version: '0.0.4.19', url: '/api/modules/ui/storyboard/index.html', navigation: [{ id: 'storyboard', label: 'Сторіборд' }] },
+      ],
+    },
+  }));
+  await page.route('**/api/modules/ui/storyboard/index.html', (route: any) =>
+    route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><html><body>Storyboard UI</body></html>' }));
+  await page.route('**/api/nodes/module-catalog', (route: any) => route.fulfill({
+    json: { modules: catalogModules, nodes: [{ node_id: 'core', role: 'core', environment: 'docker', isolation: 'container' }] },
+  }));
+  await page.route('**/api/nodes/module-registry/lifecycle/**', (route: any) => {
+    const action = route.request().url().split('/').pop();
+    const { module_id } = route.request().postDataJSON();
+    catalogModules = catalogModules.map(m => m.module_id === module_id ? { ...m, state: action === 'activate' ? 'ACTIVE' : 'INACTIVE' } : m);
+    if (module_id === 'brands') {
+      navItems = action === 'activate'
+        ? [...navItems, { module_id: 'brands', id: 'brands', label: 'Бренди', path: '/brands', group: 'content', admin_only: false }]
+        : navItems.filter(i => i.module_id !== 'brands');
+    }
+    if (module_id === 'monitoring') {
+      navItems = action === 'activate'
+        ? [...navItems, { module_id: 'monitoring', id: 'monitoring', label: 'Моніторинг', path: '/modules/monitoring', group: 'modules', admin_only: false }]
+        : navItems.filter(i => i.module_id !== 'monitoring');
+    }
+    if (module_id === 'storyboard') {
+      navItems = action === 'activate'
+        ? [...navItems, { module_id: 'storyboard', id: 'storyboard', label: 'Сторіборд', path: '/modules/storyboard', group: 'modules', admin_only: false }]
+        : navItems.filter(i => i.module_id !== 'storyboard');
+    }
+    if (module_id === 'backup') {
+      backupOn = action === 'activate';
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto('/v3/modules');
+  const nav = page.getByTestId('v3-sidebar-nav');
+  await expect(nav.getByText('Бренди', { exact: true })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('v3-tab-backup')).toBeVisible();
+
+  // Active highlight stays on «Модулі та обслуговування» when switching tabs (?tab=update).
+  await page.getByTestId('v3-tab-update').click();
+  await expect(page).toHaveURL(/\/v3\/modules\?tab=update$/);
+  await expect(nav.getByTestId('v3-nav-modules')).toHaveAttribute('aria-current', 'page');
+  await page.getByTestId('v3-tab-catalog').click();
+
+  // Deactivate brands & backup -> sidebar and «Бекапи» tab update immediately without reload.
+  await page.getByTestId('deactivate-brands').click();
+  await expect(nav.getByText('Бренди', { exact: true })).toHaveCount(0);
+  await page.getByTestId('deactivate-backup').click();
+  await expect(page.getByTestId('v3-tab-backup')).toHaveCount(0);
+
+  // Activate monitoring & storyboard -> immediate update, no duplicate «Моніторинг» label.
+  await page.getByTestId('activate-monitoring').click();
+  await page.getByTestId('activate-storyboard').click();
+  await expect(nav.getByText('Моніторинг (модуль)', { exact: true })).toBeVisible();
+  await expect(nav.getByText('Сторіборд', { exact: true })).toBeVisible();
+
+  const allLabels = await nav.locator('a').allTextContents();
+  const trimmed = allLabels.map(s => s.trim());
+  expect(new Set(trimmed).size).toBe(trimmed.length);
+
+  // Clicking module extension shows module title in header and does NOT highlight «Модулі та обслуговування».
+  await nav.getByText('Сторіборд', { exact: true }).click();
+  await expect(page).toHaveURL(/\/v3\/modules\/storyboard$/);
+  await expect(page.getByTestId('v3-header-title')).toHaveText('Сторіборд');
+  await expect(page.getByTestId('v3-header-subtitle')).toHaveText('Розширення модуля');
+  await expect(nav.getByTestId('v3-nav-modules')).not.toHaveAttribute('aria-current', 'page');
+
+  // Alias routes highlight their parent nav item.
+  await page.goto('/v3/queue');
+  await expect(nav.getByTestId('v3-nav-jobs')).toHaveAttribute('aria-current', 'page', { timeout: 20000 });
+  await page.goto('/v3/alerts');
+  await expect(nav.getByTestId('v3-nav-monitor')).toHaveAttribute('aria-current', 'page', { timeout: 20000 });
+  await page.goto('/v3/workflows');
+  await expect(nav.getByTestId('v3-nav-pipeline')).toHaveAttribute('aria-current', 'page', { timeout: 20000 });
+
+  // Saving LAB URL updates «Лабораторія» item immediately without reload.
+  await page.goto('/v3/settings?tab=general');
+  await expect(nav).toBeVisible({ timeout: 20000 });
+  await expect(nav.getByTestId('v3-nav-lab')).toHaveCount(0);
+  await page.getByTestId('lab-panel-url').fill('https://lab.local');
+  await page.getByTestId('lab-panel-save').click();
+  await expect(nav.getByTestId('v3-nav-lab')).toBeVisible({ timeout: 20000 });
+});

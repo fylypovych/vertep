@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
+import { NavigationStateService } from '../../core/services/navigation-state.service';
 import { SystemInfoSectionComponent } from '../../settings/sections/system-info.section';
 import { BrandingSectionComponent } from '../../settings/sections/branding.section';
 import { UsersSectionComponent } from '../../settings/sections/users.section';
@@ -45,6 +46,9 @@ import { TabbedWorkspaceComponent, WorkspaceTab } from '../ui/tabbed-workspace.c
         }
         @case ('integrations') {
           <div class="space-y-5">
+            @if (!brandsActive()) {
+              <app-settings-publishing part="platforms" data-testid="v3-settings-platforms-fallback" />
+            }
             <app-settings-telegram />
             <app-settings-secrets />
           </div>
@@ -65,11 +69,17 @@ export class V3SettingsWorkspaceComponent implements OnInit, OnDestroy {
   ];
 
   activeTab = signal('general');
+  brandsActive = computed(() => this.navState.brandsActive());
   private sub?: Subscription;
 
-  constructor(private route: ActivatedRoute, private router: Router) {}
+  constructor(
+    private route: ActivatedRoute,
+    private router: Router,
+    private navState: NavigationStateService,
+  ) {}
 
   ngOnInit(): void {
+    this.navState.ensureModulesLoaded().subscribe();
     this.sub = this.route.queryParamMap.subscribe(params => {
       const raw = params.get('tab') || 'general';
       // Support legacy v2 /v3/settings?tab=... deep links cleanly.
@@ -81,7 +91,17 @@ export class V3SettingsWorkspaceComponent implements OnInit, OnDestroy {
         this.router.navigate(['/v3/pipeline'], { queryParams: { tab: raw }, replaceUrl: true });
         return;
       }
-      if (raw === 'publishing' || raw === 'telegram' || raw === 'secrets') {
+      if (raw === 'publishing') {
+        this.navState.ensureModulesLoaded().subscribe(items => {
+          if (items.some(item => item.path === '/brands')) {
+            this.router.navigate(['/v3/brands'], { fragment: 'platforms', replaceUrl: true });
+          } else {
+            this.activeTab.set('integrations');
+          }
+        });
+        return;
+      }
+      if (raw === 'telegram' || raw === 'secrets') {
         this.activeTab.set('integrations');
         return;
       }

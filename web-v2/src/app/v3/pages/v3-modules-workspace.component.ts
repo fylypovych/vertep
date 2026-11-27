@@ -1,9 +1,8 @@
 import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
-import { HttpClient, HttpContext } from '@angular/common/http';
 import { Subscription } from 'rxjs';
-import { BACKGROUND_REQUEST } from '../../core/interceptors/auth.interceptor';
+import { NavigationStateService } from '../../core/services/navigation-state.service';
 import { ModuleManagementComponent } from '../../modules/module-management.component';
 import { UpdateSectionComponent } from '../../settings/sections/update.section';
 import { BackupSectionComponent } from '../../settings/sections/backup.section';
@@ -36,7 +35,7 @@ import { TabbedWorkspaceComponent, WorkspaceTab } from '../ui/tabbed-workspace.c
 })
 export class V3ModulesWorkspaceComponent implements OnInit, OnDestroy {
   activeTab = signal('catalog');
-  backupAvailable = signal(false);
+  backupAvailable = computed(() => this.navState.backupAvailable());
   private sub?: Subscription;
 
   tabs = computed<WorkspaceTab[]>(() => {
@@ -53,16 +52,11 @@ export class V3ModulesWorkspaceComponent implements OnInit, OnDestroy {
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    private http: HttpClient,
+    private navState: NavigationStateService,
   ) {}
 
   ngOnInit(): void {
-    this.http.get<{ available: boolean }>('/api/system/backups/available', {
-      context: new HttpContext().set(BACKGROUND_REQUEST, true),
-    }).subscribe({
-      next: ({ available }) => this.backupAvailable.set(!!available),
-      error: () => this.backupAvailable.set(false),
-    });
+    this.navState.refreshBackup();
 
     this.sub = this.route.queryParamMap.subscribe(params => {
       const requested = params.get('tab') || 'catalog';

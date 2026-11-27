@@ -183,3 +183,95 @@ def test_export_uses_media_links_from_core_storyboard_gateway(monkeypatch):
         assert track[0].media_reference.target_url == (
             f"https://vertep.example/api/jobs/{job.job_id}/artifacts/{artifact.artifact_id}/download"
         )
+
+
+def test_export_maps_production_runtime_scene_video_image_and_audio_for_active_version(monkeypatch):
+    """Regression (#550): production pipeline stores storyboard scenes as sb-<ver>-<idx>,
+    runtime scenes as scene-<idx:03d> with artifact_ids (not StoryboardScene.artifact_id),
+    and TTS audio keyed by runtime scene_id."""
+    from types import SimpleNamespace
+
+    from core.artifacts import register_artifact
+    from core.models import SceneRecord, StoryboardScene, StoryboardVersion
+    from core.module import gateway
+    from core.state import store
+
+    job = store.create("Production storyboard media", "did_samogon", 5)
+
+    # Scene 1: rendered video + runtime image + TTS audio (all keyed by runtime scene-001)
+    img1_path = store.root / job.job_id / "images" / "scene-001.png"
+    img1_path.write_bytes(b"png-scene-1")
+    img1 = register_artifact(job, store.root, img1_path, "image", scene_id="scene-001")
+
+    vid1_path = store.root / job.job_id / "video" / "scene-001.mp4"
+    vid1_path.write_bytes(b"mp4-scene-1")
+    vid1 = register_artifact(job, store.root, vid1_path, "video_scene", scene_id="scene-001")
+
+    aud1_path = store.root / job.job_id / "audio" / "voice-scene-001.wav"
+    aud1_path.write_bytes(b"wav-scene-1")
+    aud1 = register_artifact(job, store.root, aud1_path, "audio", scene_id="scene-001")
+
+    # Scene 2: runtime image only + TTS audio (no video yet, no StoryboardScene.artifact_id)
+    img2_path = store.root / job.job_id / "images" / "scene-002.png"
+    img2_path.write_bytes(b"png-scene-2")
+    img2 = register_artifact(job, store.root, img2_path, "image", scene_id="scene-002")
+
+    aud2_path = store.root / job.job_id / "audio" / "voice-scene-002.wav"
+    aud2_path.write_bytes(b"wav-scene-2")
+    aud2 = register_artifact(job, store.root, aud2_path, "audio", scene_id="scene-002")
+
+    job.scenes = [
+        SceneRecord(scene_id="scene-001", index=1, prompt="S1", duration=4.0,
+                    artifact_ids=[img1.artifact_id, vid1.artifact_id]),
+        SceneRecord(scene_id="scene-002", index=2, prompt="S2", duration=5.0,
+                    artifact_ids=[img2.artifact_id]),
+    ]
+    job.storyboards = [
+        StoryboardVersion(
+            version=1,
+            title="Active Production Version",
+            status="approved",
+            scenes=[
+                StoryboardScene(index=1, scene_id="sb-1-1", prompt="S1", video_prompt="S1", duration=4),
+                StoryboardScene(index=2, scene_id="sb-1-2", prompt="S2", video_prompt="S2", duration=5),
+            ],
+        ),
+        StoryboardVersion(
+            version=2,
+            title="Inactive Draft Version",
+            status="pending_approval",
+            scenes=[
+                StoryboardScene(index=1, scene_id="sb-2-1", prompt="Draft S1", video_prompt="Draft", duration=9),
+            ],
+        ),
+    ]
+    job.active_storyboard_version = 1
+
+    monkeypatch.setenv("PUBLIC_URL", "https://vertep.example")
+    monkeypatch.setattr(gateway, "_require_storyboard_module", lambda _: SimpleNamespace(module_id="storyboard"))
+
+    document = gateway.module_storyboard(job.job_id, None)
+    active_doc = next(v for v in document["storyboards"] if v["version"] == 1)
+    draft_doc = next(v for v in document["storyboards"] if v["version"] == 2)
+
+    # Active version receives video/image/audio URLs from runtime scenes; draft version stays isolated.
+    assert active_doc["scenes"][0]["media"]["video_url"].endswith(f"/{vid1.artifact_id}/download")
+    assert active_doc["scenes"][0]["media"]["image_url"].endswith(f"/{img1.artifact_id}/download")
+    assert active_doc["scenes"][0]["media"]["audio_url"].endswith(f"/{aud1.artifact_id}/download")
+    assert active_doc["scenes"][1]["media"]["image_url"].endswith(f"/{img2.artifact_id}/download")
+    assert active_doc["scenes"][1]["media"]["audio_url"].endswith(f"/{aud2.artifact_id}/download")
+    assert draft_doc["scenes"][0]["media"] == {}
+
+    # OTIO export resolves ExternalReference for both video/image and audio tracks on all active scenes.
+    timeline = otio.adapters.read_from_string(export_storyboard_otio(document), adapter_name="otio_json")
+    video_track = timeline.video_tracks()[0]
+    audio_track = timeline.audio_tracks()[0]
+    assert len(video_track) == 2 and len(audio_track) == 2
+    assert isinstance(video_track[0].media_reference, otio.schema.ExternalReference)
+    assert video_track[0].media_reference.target_url.endswith(f"/{vid1.artifact_id}/download")
+    assert isinstance(audio_track[0].media_reference, otio.schema.ExternalReference)
+    assert audio_track[0].media_reference.target_url.endswith(f"/{aud1.artifact_id}/download")
+    assert isinstance(video_track[1].media_reference, otio.schema.ExternalReference)
+    assert video_track[1].media_reference.target_url.endswith(f"/{img2.artifact_id}/download")
+    assert isinstance(audio_track[1].media_reference, otio.schema.ExternalReference)
+    assert audio_track[1].media_reference.target_url.endswith(f"/{aud2.artifact_id}/download")

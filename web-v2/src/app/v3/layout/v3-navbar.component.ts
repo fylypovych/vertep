@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, HostListener, OnDestroy, OnInit, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, HostListener, OnDestroy, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { NavigationEnd, Router, RouterModule } from '@angular/router';
 import { filter, Subscription } from 'rxjs';
@@ -9,6 +9,7 @@ import { UiVersionService } from '../../core/services/ui-version.service';
 import { AuthApiService } from '../../core/api/auth.api';
 import { SystemApiService } from '../../core/api/system.api';
 import { PolicyService, SystemMode } from '../../core/services/policy.service';
+import { NavigationStateService } from '../../core/services/navigation-state.service';
 
 const V3_PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   '':           { title: 'Дашборд',                  subtitle: 'Огляд системи Vertep' },
@@ -126,8 +127,21 @@ const V3_PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   `,
 })
 export class V3NavbarComponent implements OnInit, OnDestroy {
-  readonly title = signal('Дашборд');
-  readonly subtitle = signal('Огляд системи Vertep');
+  private readonly currentUrl = signal('/v3');
+  private readonly pageInfo = computed(() => {
+    const cleaned = this.currentUrl().replace(/^\/v3\/?/, '').split('?')[0].split('#')[0];
+    const segments = cleaned.split('/').filter(Boolean);
+    const first = segments[0] || '';
+    if (first === 'modules' && segments[1]) {
+      const moduleId = decodeURIComponent(segments[1]);
+      const navItem = this.navState.moduleItems().find(item => item.module_id === moduleId);
+      return { title: navItem?.label || moduleId, subtitle: 'Розширення модуля' };
+    }
+    return V3_PAGE_TITLES[first] ?? V3_PAGE_TITLES[''];
+  });
+
+  readonly title = computed(() => this.pageInfo().title);
+  readonly subtitle = computed(() => this.pageInfo().subtitle);
   readonly userInitialSig = signal('A');
   readonly usernameSig = signal('');
   systemState = 'Невизначений';
@@ -143,14 +157,15 @@ export class V3NavbarComponent implements OnInit, OnDestroy {
     private auth: AuthApiService,
     private system: SystemApiService,
     private policy: PolicyService,
+    private navState: NavigationStateService,
     private cdr: ChangeDetectorRef,
   ) {}
 
   ngOnInit(): void {
-    this.updateTitle(this.router.url);
+    this.currentUrl.set(this.router.url);
     this.subs.add(
       this.router.events.pipe(filter(e => e instanceof NavigationEnd))
-        .subscribe(e => this.updateTitle((e as NavigationEnd).urlAfterRedirects)),
+        .subscribe(e => this.currentUrl.set((e as NavigationEnd).urlAfterRedirects)),
     );
     this.loadSystemState();
     this.loadUserProfile();
@@ -186,14 +201,6 @@ export class V3NavbarComponent implements OnInit, OnDestroy {
 
   get roleLabel(): string { return this.policy.userRole() === 'admin' ? 'Адмін' : 'Модератор'; }
   get roleFullLabel(): string { return this.policy.userRole() === 'admin' ? 'Адміністратор' : 'Модератор'; }
-
-  private updateTitle(url: string): void {
-    const cleaned = url.replace(/^\/v3\/?/, '').split('?')[0].split('#')[0];
-    const first = cleaned.split('/')[0] || '';
-    const info = V3_PAGE_TITLES[first] ?? V3_PAGE_TITLES[''];
-    this.title.set(info.title);
-    this.subtitle.set(info.subtitle);
-  }
 
   private loadSystemState(): void {
     this.system.status().subscribe({

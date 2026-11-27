@@ -181,6 +181,9 @@ jobs:
           - {name: grafana, file: docker/grafana/Dockerfile, platforms: "linux/amd64,linux/arm64"}
           - {name: comfyui, file: docker/comfyui-nvidia/Dockerfile, platforms: "linux/amd64"}
           - {name: moneyprinter, file: docker/moneyprinter/Dockerfile, platforms: "linux/amd64"}
+          - {name: stt, file: docker/stt/Dockerfile, platforms: "linux/amd64,linux/arm64"}
+          - {name: lora-trainer, file: docker/lora-trainer/Dockerfile, platforms: "linux/amd64"}
+          - {name: musetalk, file: docker/musetalk/Dockerfile, platforms: "linux/amd64"}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v3

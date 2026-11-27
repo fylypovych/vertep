@@ -371,7 +371,8 @@ def qualify(root: Path, run_compose: bool = False, artifact_root: Path | None = 
                        "VERTEP_LOG_STORE_IMAGE", "VERTEP_LOG_COLLECTOR_IMAGE",
                        "VERTEP_UPDATE_AGENT_IMAGE", "VERTEP_LICENSE_MANAGER_IMAGE",
                        "VERTEP_DISPATCHER_IMAGE", "VERTEP_SCHEDULER_IMAGE",
-                       "VERTEP_CERTIFICATE_MANAGER_IMAGE", "VERTEP_MONEYPRINTER_IMAGE"}
+                       "VERTEP_CERTIFICATE_MANAGER_IMAGE", "VERTEP_MONEYPRINTER_IMAGE",
+                       "VERTEP_STT_IMAGE", "VERTEP_LORA_TRAINER_IMAGE", "VERTEP_MUSETALK_IMAGE"}
     missing_image_variables = sorted(name for name in image_variables if f"${{{name}" not in compose)
     record("compose_image_digest_overrides", not missing_image_variables,
            ", ".join(missing_image_variables))

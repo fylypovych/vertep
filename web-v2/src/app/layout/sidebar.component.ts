@@ -1,13 +1,11 @@
 import { TPipe } from '../core/i18n/t.pipe';
-import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, signal } from '@angular/core';
 import { RouterModule } from '@angular/router';
-import { HttpClient, HttpContext } from '@angular/common/http';
-import { BACKGROUND_REQUEST } from '../core/interceptors/auth.interceptor';
 import { CommonModule } from '@angular/common';
 import { SidebarService } from '../core/services/sidebar.service';
 import { SystemApiService } from '../core/api/system.api';
 import { PolicyService } from '../core/services/policy.service';
-import { ModulesApiService } from '../core/api/modules.api';
+import { NavigationStateService } from '../core/services/navigation-state.service';
 
 const MODULE_ICON = `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>`;
 
@@ -212,11 +210,20 @@ export class SidebarComponent implements OnInit, OnDestroy {
   ];
 
   /** Menu entries READY modules declare; a module that is not READY has none (owner, 23.11.2026). */
-  moduleItems = signal<(NavItem & { group: string })[]>([]);
+  moduleItems = computed<(NavItem & { group: string })[]>(() =>
+    this.navState.moduleItems().map(item => ({
+      id: 'module-' + item.module_id + '-' + item.id,
+      path: item.path,
+      label: item.label,
+      icon: PAGE_ICONS[item.path] || MODULE_ICON,
+      adminOnly: item.admin_only,
+      group: item.group,
+    })),
+  );
   /** #491 L3: «Лабораторія» for an administrator, only when CORE has LAB_PANEL_URL. */
-  labConfigured = signal(false);
+  labConfigured = computed(() => this.navState.labConfigured());
   /** Built-in pages whose service answers (Бекапи): shown only then. */
-  activeModules = signal<Set<string>>(new Set());
+  activeModules = computed<Set<string>>(() => new Set(this.navState.backupAvailable() ? ['backup'] : []));
 
   visibleGroups = computed(() => {
     const isAdmin = this.policy.userRole() === 'admin';
@@ -264,7 +271,7 @@ export class SidebarComponent implements OnInit, OnDestroy {
   private statusTimer?: ReturnType<typeof setInterval>;
 
   constructor(private sidebarService: SidebarService, private systemApi: SystemApiService, private policy: PolicyService,
-              private modulesApi: ModulesApiService, private http: HttpClient) {}
+              private navState: NavigationStateService) {}
 
   ngOnInit(): void {
     fetch('/ui-version.json', { cache: 'no-store' })
@@ -276,34 +283,8 @@ export class SidebarComponent implements OnInit, OnDestroy {
     // version and API compatibility are re-checked, so a reconnect clears the
     // state and an incompatible CORE is reported without reloading the page.
     // A module activated or deactivated meanwhile changes the menu without a reload.
-    this.statusTimer = setInterval(() => { this.checkCore(); this.loadModuleMenu(); }, 30_000);
-    // A background probe: a refusal (moderator, no session yet) never redirects or reports an error.
-    this.http.get<{ url: string | null }>('/api/lab/panel',
-        { context: new HttpContext().set(BACKGROUND_REQUEST, true) }).subscribe({
-      next: ({ url }) => this.labConfigured.set(!!url),
-      error: () => this.labConfigured.set(false),  // a moderator gets 403: no entry
-    });
-    this.loadModuleMenu();
-  }
-
-  private loadModuleMenu(): void {
-    // «Бекапи» is shown while the backup service answers — deployed as a module or as a role.
-    // Only the administrator has the entry; a refusal or an unreachable service hides it.
-    if (this.policy.userRole() === 'admin') {
-      this.http.get<{ available: boolean }>('/api/system/backups/available',
-          { context: new HttpContext().set(BACKGROUND_REQUEST, true) }).subscribe({
-        next: ({ available }) => this.activeModules.set(new Set(available ? ['backup'] : [])),
-        error: () => this.activeModules.set(new Set()),
-      });
-    }
-    this.modulesApi.navigation().subscribe(items => this.moduleItems.set(items.map(item => ({
-      id: 'module-' + item.module_id + '-' + item.id,
-      path: item.path,
-      label: item.label,
-      icon: PAGE_ICONS[item.path] || MODULE_ICON,
-      adminOnly: item.admin_only,
-      group: item.group,
-    }))));
+    this.statusTimer = setInterval(() => { this.checkCore(); this.navState.refreshAll(); }, 30_000);
+    this.navState.refreshAll();
   }
 
   ngOnDestroy(): void {

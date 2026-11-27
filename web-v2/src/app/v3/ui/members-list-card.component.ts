@@ -13,6 +13,7 @@ export interface MemberListItem {
   statusTone?: 'ok' | 'warn' | 'muted' | 'danger';
   badge?: string;
   route?: string | string[];
+  queryParams?: Record<string, string>;
   actionLabel?: string;
 }
 
@@ -61,7 +62,7 @@ export interface MemberListItem {
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   @if (item.route) {
-                    <a [routerLink]="item.route" class="text-sm font-medium truncate hover:underline" style="color: var(--v3-text)">
+                    <a [routerLink]="item.route" [queryParams]="item.queryParams" class="text-sm font-medium truncate hover:underline" style="color: var(--v3-text)">
                       {{ item.name }}
                     </a>
                   } @else {
@@ -90,6 +91,7 @@ export interface MemberListItem {
               <div class="flex-shrink-0">
                 @if (item.route && item.actionLabel) {
                   <a [routerLink]="item.route"
+                     [queryParams]="item.queryParams"
                      class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border transition-colors hover:bg-[#faf9f6]"
                      style="border-color: var(--v3-border-strong); color: var(--v3-accent)">
                     {{ item.actionLabel | t }}

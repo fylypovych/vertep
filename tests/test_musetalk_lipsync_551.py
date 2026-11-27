@@ -402,6 +402,14 @@ def test_musetalk_dockerfile_and_compose_outbound_only():
     assert "8102" in [str(p) for p in svc.get("expose", [])]
     assert inbound_port_violations(compose_path) == []
 
+    # Release workflow, bootstrap, and runtime-env updater must ship musetalk in the signed image lock
+    release_yml = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "name: musetalk" in release_yml and "docker/musetalk/Dockerfile" in release_yml
+    bootstrap_sh = Path("bootstrap.sh").read_text(encoding="utf-8")
+    assert "VERTEP_MUSETALK_IMAGE=$(optional_image musetalk)" in bootstrap_sh
+    updater = Path("scripts/update-runtime-env.py").read_text(encoding="utf-8")
+    assert '"musetalk": "VERTEP_MUSETALK_IMAGE"' in updater
+
 
 def test_core_queues_lipsync_with_verified_audio_and_imports_video(monkeypatch):
     from core.app import app

@@ -75,6 +75,28 @@ def test_any_other_certificate_is_still_refused(core, tmp_path, monkeypatch):
         httpx.get(url, verify=context)
 
 
+def test_pinned_certificate_keeps_the_host_name_check_against_its_own_name(core, tmp_path, monkeypatch):
+    """The pin never switches the name check off: a certificate that is trusted but names
+    something else than the pin (same key material path, other name) is refused."""
+    from lab.tls import resource_context
+    url, cert = core
+    monkeypatch.setenv("LAB_RESOURCE_CA_FILE", str(cert))
+    context = resource_context()
+    assert context.check_hostname is True and context.verify_mode == ssl.CERT_REQUIRED
+    context.pinned_name = "other.example"
+    with pytest.raises(httpx.ConnectError):
+        httpx.get(url, verify=context)
+
+
+def test_pinned_certificate_works_through_urllib(core, monkeypatch):
+    import urllib.request
+    from lab.tls import resource_context
+    url, cert = core
+    monkeypatch.setenv("LAB_RESOURCE_CA_FILE", str(cert))
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=resource_context()))
+    assert opener.open(url, timeout=5).read() == b"ok"
+
+
 def test_a_real_ca_keeps_the_host_name_check(tmp_path, monkeypatch):
     from lab.tls import resource_context
     ca, _ = _certificate(tmp_path, "ca", ca=True, san="Vertep CA")

@@ -35,6 +35,12 @@ services:
       - LAB_GITHUB_TOKEN=${LAB_GITHUB_TOKEN:-}
       - LAB_GITHUB_REPOSITORY=${LAB_GITHUB_REPOSITORY:-}
       - LAB_GITHUB_API_URL=${LAB_GITHUB_API_URL:-}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+      - apparmor=unconfined
     deploy:
       resources:
         limits:

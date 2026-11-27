@@ -4,6 +4,7 @@ import { Observable, Subscription, forkJoin, of, timer } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { TPipe } from '../core/i18n/t.pipe';
 import { PolicyService } from '../core/services/policy.service';
+import { NavigationStateService } from '../core/services/navigation-state.service';
 import { CatalogModule, CatalogNode, CoreRuntimeApiService, CoreRuntimeState, ModuleManagementApiService } from '../core/api/modules.api';
 
 const STATE_TEXT: Record<string, string> = {
@@ -172,7 +173,12 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
   busy = signal(false);
   isAdmin = computed(() => this.policy.userRole() === 'admin');
 
-  constructor(private api: ModuleManagementApiService, private runtime: CoreRuntimeApiService, private policy: PolicyService) {}
+  constructor(
+    private api: ModuleManagementApiService,
+    private runtime: CoreRuntimeApiService,
+    private policy: PolicyService,
+    private navState: NavigationStateService,
+  ) {}
 
   private poll?: Subscription;
   ngOnInit(): void { this.poll = timer(0, 3000).subscribe(() => this.refreshRuntime()); this.load(); }
@@ -261,7 +267,12 @@ export class ModuleManagementComponent implements OnInit, OnDestroy {
     this.error.set(null);
     this.moduleError.set(null);
     request.subscribe({
-      next: () => { this.busy.set(false); this.load(); },
+      next: () => {
+        this.busy.set(false);
+        this.load();
+        this.navState.refreshModules().subscribe();
+        this.navState.refreshBackup();
+      },
       error: (error: Error) => {
         this.busy.set(false);
         if (moduleId) this.moduleError.set({ module: moduleId, message: error.message });

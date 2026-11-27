@@ -48,15 +48,24 @@ def test_host_executor_starts_verified_modules_and_joins_only_core_and_worker(mo
     monkeypatch.setattr(containers, "start", lambda m, **options: started.append((m.module_id, options)))
     monkeypatch.setattr(containers, "stop", lambda module_id: stopped.append(module_id))
 
-    def runner(command, **_):
+    postgres = FakePostgres()
+
+    def runner(command, **options):
         commands.append(command)
         if command[:2] == ["docker", "ps"]:
             return SimpleNamespace(stdout="old 1.0\n", returncode=0)
         if "ps" in command and "-q" in command:
             return SimpleNamespace(stdout=f"id-{command[-1]}\n", returncode=0)
-        return SimpleNamespace(stdout="", returncode=0)
+        return postgres(command, **options) or SimpleNamespace(stdout="", returncode=0)
 
     state = apply.apply_modules(tmp_path, runner)
+    # Before PostgreSQL joins, only the module's own role may log in from that network.
+    assert postgres.hba.splitlines()[:2] == [
+        f"host all {postgres.role('brands')} 172.30.0.0/16 scram-sha-256 # vertep-module=brands",
+        "host all all 172.30.0.0/16 reject # vertep-module=brands"]
+    assert postgres.hba.endswith("host all all all scram-sha-256\n") and postgres.reloaded
+    assert commands.index(["docker", "network", "connect", "--alias", "postgres", "vertep-mod-brands", "id-postgres"]) \
+        > postgres.written_at(commands)
     assert started == [("brands", {"core_url": "http://core:8080", "module_token": "t-brands", "host_port": None})]
     assert "old" in stopped  # no longer assigned
     assert ["docker", "network", "connect", "--alias", "core", "vertep-mod-brands", "id-core"] in commands
@@ -202,3 +211,70 @@ def test_module_database_address_comes_from_either_dsn_form():
     assert _database_address("host=postgres port=5432 dbname=vertep user=vertep password=secret") == ("postgres", 5432)
     assert _database_address("postgresql://vertep:secret@db.local:6432/vertep") == ("db.local", 6432)
     assert _database_address("") == (None, None)
+
+
+class FakePostgres:
+    """The postgres container as the host executor sees it through ``docker``."""
+
+    def __init__(self, broken=False):
+        self.hba = "local all all trust\nhost all all all scram-sha-256\n"
+        self.broken, self.reloaded, self.writes = broken, False, []
+
+    @staticmethod
+    def role(module_id):
+        import hashlib
+        return f"mod_{module_id}_{hashlib.sha256(b'vertep').hexdigest()[:8]}"
+
+    def written_at(self, commands):
+        return max(index for index, command in enumerate(commands) if "-i" in command)
+
+    def __call__(self, command, input=None, **_):
+        if command[:3] == ["docker", "network", "inspect"]:
+            return SimpleNamespace(stdout="172.30.0.0/16 \n", returncode=0)
+        if command[:2] != ["docker", "exec"]:
+            return None
+        if "-i" in command:
+            self.writes.append(input)
+            self.hba = input
+        elif "cat" in command:
+            return SimpleNamespace(stdout=self.hba, returncode=0)
+        elif "current_setting" in command[-1]:
+            return SimpleNamespace(stdout="/var/lib/postgresql/data/pg_hba.conf|vertep\n", returncode=0)
+        elif "pg_hba_file_rules" in command[-1]:
+            return SimpleNamespace(stdout="1\n" if self.broken else "0\n", returncode=0)
+        elif "pg_reload_conf" in command[-1]:
+            self.reloaded = True
+        return SimpleNamespace(stdout="", returncode=0)
+
+
+def test_postgres_never_joins_a_module_network_when_its_access_rules_fail(tmp_path):
+    apply = executor()
+    postgres = FakePostgres(broken=True)
+    commands = []
+
+    def runner(command, **options):
+        commands.append(command)
+        if "ps" in command and "-q" in command:
+            return SimpleNamespace(stdout=f"id-{command[-1]}\n", returncode=0)
+        return postgres(command, **options) or SimpleNamespace(stdout="", returncode=0)
+
+    original = postgres.hba
+    import pytest
+    with pytest.raises(ValueError):
+        apply._attach_module_network(tmp_path, "brands", runner, database=True)
+    assert postgres.hba == original and not postgres.reloaded  # restored, never loaded
+    assert not any(command[:3] == ["docker", "network", "connect"] and "id-postgres" in command for command in commands)
+
+
+def test_module_hba_rules_replace_their_own_and_a_reused_subnet():
+    apply = executor()
+    current = ("host all old_role 10.1.0.0/16 scram-sha-256 # vertep-module=brands\n"
+               "host all other 10.2.0.0/16 scram-sha-256 # vertep-module=gone\n"
+               "host all keep 10.3.0.0/16 scram-sha-256 # vertep-module=monitoring\n"
+               "host all all all scram-sha-256\n")
+    merged = apply._merge_hba(current, "brands", apply._module_hba_lines("brands", "r", ["10.2.0.0/16"]), ["10.2.0.0/16"])
+    assert merged.splitlines() == [
+        "host all r 10.2.0.0/16 scram-sha-256 # vertep-module=brands",
+        "host all all 10.2.0.0/16 reject # vertep-module=brands",
+        "host all keep 10.3.0.0/16 scram-sha-256 # vertep-module=monitoring",
+        "host all all all scram-sha-256"]

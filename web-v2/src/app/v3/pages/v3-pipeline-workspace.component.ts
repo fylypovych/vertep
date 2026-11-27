@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
+import { PolicyService } from '../../core/services/policy.service';
 import { WorkflowsComponent } from '../../workflows/workflows.component';
 import { ModelsSectionComponent } from '../../settings/sections/models.section';
 import { VideoEngineSectionComponent } from '../../settings/sections/video-engine.section';
@@ -22,7 +23,7 @@ import { TabbedWorkspaceComponent, WorkspaceTab } from '../ui/tabbed-workspace.c
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <app-v3-tabbed-workspace
-      [tabs]="tabs"
+      [tabs]="tabs()"
       [activeTab]="activeTab()"
       (tabChange)="selectTab($event)"
       testId="v3-pipeline-workspace">
@@ -36,28 +37,44 @@ import { TabbedWorkspaceComponent, WorkspaceTab } from '../ui/tabbed-workspace.c
   `,
 })
 export class V3PipelineWorkspaceComponent implements OnInit, OnDestroy {
-  readonly tabs: WorkspaceTab[] = [
-    { id: 'workflows', label: 'Шаблони обробки' },
-    { id: 'models', label: 'Моделі' },
-    { id: 'video-engine', label: 'Движок відео' },
-    { id: 'workflow-mode', label: 'Режим workflow' },
-  ];
+  tabs = computed<WorkspaceTab[]>(() => {
+    const list: WorkspaceTab[] = [{ id: 'workflows', label: 'Шаблони обробки' }];
+    if (this.policy.userRole() === 'admin') {
+      list.push(
+        { id: 'models', label: 'Моделі' },
+        { id: 'video-engine', label: 'Движок відео' },
+        { id: 'workflow-mode', label: 'Режим workflow' },
+      );
+    }
+    return list;
+  });
 
   activeTab = signal('workflows');
   private sub?: Subscription;
 
-  constructor(private route: ActivatedRoute, private router: Router) {}
+  constructor(
+    private route: ActivatedRoute,
+    private router: Router,
+    private policy: PolicyService,
+  ) {}
 
   ngOnInit(): void {
     this.sub = this.route.queryParamMap.subscribe(params => {
       const requested = params.get('tab') || 'workflows';
-      this.activeTab.set(this.tabs.some(t => t.id === requested) ? requested : 'workflows');
+      const allowed = this.tabs().some(t => t.id === requested);
+      if (!allowed) {
+        this.activeTab.set('workflows');
+        this.router.navigate(['/v3/pipeline'], { queryParams: { tab: 'workflows' }, replaceUrl: true });
+        return;
+      }
+      this.activeTab.set(requested);
     });
   }
 
   ngOnDestroy(): void { this.sub?.unsubscribe(); }
 
   selectTab(tab: string): void {
+    if (!this.tabs().some(t => t.id === tab)) return;
     this.activeTab.set(tab);
     this.router.navigate(['/v3/pipeline'], { queryParams: { tab }, replaceUrl: true });
   }

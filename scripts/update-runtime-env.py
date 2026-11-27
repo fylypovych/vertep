@@ -29,6 +29,10 @@ IMAGE_KEYS = {
     "log-store": "VERTEP_LOG_STORE_IMAGE",
     "log-collector": "VERTEP_LOG_COLLECTOR_IMAGE",
     "update-agent": "VERTEP_UPDATE_AGENT_IMAGE",
+    "moneyprinter": "VERTEP_MONEYPRINTER_IMAGE",
+    "stt": "VERTEP_STT_IMAGE",
+    "lora-trainer": "VERTEP_LORA_TRAINER_IMAGE",
+    "musetalk": "VERTEP_MUSETALK_IMAGE",
 }
 
 

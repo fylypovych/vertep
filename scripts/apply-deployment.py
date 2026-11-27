@@ -671,17 +671,78 @@ def _attach_module_network(root: Path, module_id: str, runner=subprocess.run,
                            database: bool = False) -> None:
     """Only CORE (alias ``core``) and the Worker join the module's own network: the module
     reaches CORE's module gateway, CORE and the Worker reach the module. PostgreSQL joins
-    only for a module with its own schema (migrations); its role reaches that schema only."""
+    only for a module with its own schema, and only after pg_hba lets nothing but that
+    module's own role log in from the module's network (fail closed)."""
     from worker.application_container import resource_name
     network = resource_name(module_id)
-    services = [("core", ["--alias", "core"]), ("worker", [])]
-    if database:
-        services.append(("postgres", ["--alias", "postgres"]))
-    for service, alias in services:
+    for service, alias in (("core", ["--alias", "core"]), ("worker", [])):
         container = _compose_container(root, service, runner)
         if container:  # an already connected container answers with an error; that is the goal state
             runner(["docker", "network", "connect", *alias, network, container],
                    capture_output=True, text=True, timeout=120, check=False)
+    if not database:
+        return
+    postgres = _compose_container(root, "postgres", runner)
+    if postgres:
+        _limit_module_database(postgres, module_id, network, runner)
+        runner(["docker", "network", "connect", "--alias", "postgres", network, postgres],
+               capture_output=True, text=True, timeout=120, check=False)
+
+
+HBA_TAG = "# vertep-module="
+
+
+def _checked(runner, command: list[str], **options) -> str:
+    result = runner(command, capture_output=True, text=True, timeout=120, check=False, **options)
+    if result.returncode != 0:
+        raise ValueError(f"{' '.join(command[:4])}: {(result.stderr or result.stdout or '').strip()[-300:]}")
+    return result.stdout or ""
+
+
+def _module_hba_lines(module_id: str, role: str, subnets: list[str]) -> list[str]:
+    """From the module network only the module's own role logs in (password); every other
+    role there, the CORE owner/superuser included, is rejected before the generic rules."""
+    lines = []
+    for subnet in subnets:
+        lines.append(f"host all {role} {subnet} scram-sha-256 {HBA_TAG}{module_id}")
+        lines.append(f"host all all {subnet} reject {HBA_TAG}{module_id}")
+    return lines
+
+
+def _merge_hba(current: str, module_id: str, lines: list[str], subnets: list[str]) -> str:
+    """Module rules go first; earlier rules of this module or for the same (reused) subnet go."""
+    kept = []
+    for line in current.splitlines():
+        if HBA_TAG in line:
+            fields = line.split()
+            if line.split(HBA_TAG, 1)[1].strip() == module_id or (len(fields) > 3 and fields[3] in subnets):
+                continue
+        kept.append(line)
+    return "\n".join(lines + kept) + "\n"
+
+
+def _limit_module_database(container: str, module_id: str, network: str, runner=subprocess.run) -> None:
+    import hashlib
+    from core.module.data import schema_name
+    subnets = _checked(runner, ["docker", "network", "inspect", "-f",
+                                "{{range .IPAM.Config}}{{.Subnet}} {{end}}", network]).split()
+    if not subnets or not all(re.fullmatch(r"[0-9A-Fa-f:.]+/\d{1,3}", subnet) for subnet in subnets):
+        raise ValueError(f"Мережа {network} не має підмережі для обмеження доступу до БД")
+    psql = ["docker", "exec", "-u", "postgres", container, "sh", "-c",
+            'psql -v ON_ERROR_STOP=1 -AtX -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$0"']
+    hba_file, database = _checked(runner, [*psql, "SELECT current_setting('hba_file'), current_database()"]
+                                  ).strip().split("|", 1)
+    # Same role name as core.module.data.ModuleDatabase.role_name.
+    role = f"{schema_name(module_id)[:50]}_{hashlib.sha256(database.encode()).hexdigest()[:8]}"
+    current = _checked(runner, ["docker", "exec", "-u", "postgres", container, "cat", hba_file])
+    updated = _merge_hba(current, module_id, _module_hba_lines(module_id, role, subnets), subnets)
+    write = ["docker", "exec", "-i", "-u", "postgres", container, "sh", "-c", 'cat > "$0.vertep" && mv "$0.vertep" "$0"',
+             hba_file]
+    _checked(runner, write, input=updated)
+    if _checked(runner, [*psql, "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL"]).strip() != "0":
+        _checked(runner, write, input=current)  # never leave a broken pg_hba behind
+        raise ValueError("pg_hba.conf з правилами модуля не пройшов перевірку")
+    _checked(runner, [*psql, "SELECT pg_reload_conf()"])
 
 
 def _private_json(path: Path, value: dict) -> None:
@@ -778,7 +839,11 @@ def reattach_modules(root: Path, runner=subprocess.run) -> None:
     except (OSError, ValueError):
         return
     for module_id, info in modules.items():
-        _attach_module_network(root, module_id, runner, database=bool((info or {}).get("database")))
+        try:
+            _attach_module_network(root, module_id, runner, database=bool((info or {}).get("database")))
+        except (subprocess.SubprocessError, OSError, ValueError) as error:
+            # PostgreSQL stays off that network; the other modules are still reattached.
+            print(f"module {module_id}: {error}", file=sys.stderr)
 
 
 def main() -> None:

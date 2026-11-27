@@ -128,7 +128,7 @@ interface AccessUserSummary {
 
       <!-- Shared platform credentials (fallback) live with the brands, not in Settings. -->
       @if (canManagePlatforms) {
-        <app-settings-publishing part="platforms" data-testid="v3-brands-platforms" />
+        <app-settings-publishing id="platforms" part="platforms" data-testid="v3-brands-platforms" />
       }
 
       <!-- Brand Editor Modal -->
@@ -288,6 +288,7 @@ export class V3BrandsComponent implements OnInit {
         statusLabel: 'Модератор',
         statusTone: 'ok',
         route: ['/v3/settings'],
+        queryParams: { tab: 'users' },
         actionLabel: 'Доступ',
       }));
   }

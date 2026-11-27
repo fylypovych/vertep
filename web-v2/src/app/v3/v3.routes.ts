@@ -108,7 +108,6 @@ export const V3_ROUTES: Routes = [
       },
       {
         path: 'pipeline',
-        canActivate: [AdminGuard],
         loadComponent: () => import('./pages/v3-pipeline-workspace.component').then(m => m.V3PipelineWorkspaceComponent),
         title: 'Конвеєр',
       },
