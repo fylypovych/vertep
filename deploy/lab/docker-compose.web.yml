@@ -33,7 +33,7 @@ services:
     tmpfs:
       - /tmp
     cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true", "seccomp=unconfined", "apparmor=unconfined"]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/lab/healthz', timeout=3).close()"]
       interval: 15s
@@ -58,11 +58,36 @@ services:
     tmpfs:
       - /tmp
     cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true", "seccomp=unconfined", "apparmor=unconfined"]
+    security_opt: ["no-new-privileges:true"]
     depends_on:
       lab-control:
         condition: service_healthy
     restart: unless-stopped
+    networks: [lab-web]
+
+  # #546: model evaluations run only here, on demand, never in the API or the executor:
+  # bubblewrap needs its own user/network namespaces, which Docker's default seccomp and
+  # AppArmor profiles forbid. This container gets no secrets and no LAB state (its own
+  # volume), publishes nothing and starts only when asked:
+  #   docker compose -f docker-compose.web.yml --profile eval run --rm lab-eval eval lm-eval --endpoint http://<ollama>:11434
+  lab-eval:
+    image: ${LAB_CONTROL_IMAGE:-ghcr.io/fylypovych/vertep-lab-control:dev}
+    profiles: ["eval"]
+    entrypoint: ["python", "-m", "lab.cli"]
+    command: ["eval", "list"]
+    environment:
+      LAB_STATE_DIR: /var/lib/vertep-lab-eval
+      LAB_WORKSPACE: /var/lib/vertep-lab-eval/workspace
+      LAB_POLICY_GATE_ACTIVE: "true"
+      LAB_OLLAMA_URL: ${LAB_OLLAMA_URL:-}
+    volumes:
+      - lab-eval-state:/var/lib/vertep-lab-eval
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true", "seccomp=unconfined", "apparmor=unconfined"]
+    restart: "no"
     networks: [lab-web]
 
   lab-web:
@@ -87,6 +112,7 @@ services:
 
 volumes:
   lab-web-state:
+  lab-eval-state:
 
 networks:
   lab-web:

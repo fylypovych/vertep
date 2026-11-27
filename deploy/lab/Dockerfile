@@ -16,8 +16,8 @@ WORKDIR $VERTEP_LAB_HOME
 RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap libseccomp2 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --home /nonexistent vertep \
-    && mkdir -p /var/lib/vertep-lab \
-    && chown 10001:10001 /var/lib/vertep-lab
+    && mkdir -p /var/lib/vertep-lab /var/lib/vertep-lab-eval \
+    && chown 10001:10001 /var/lib/vertep-lab /var/lib/vertep-lab-eval
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

@@ -157,16 +157,28 @@ def test_lab_compose_and_dockerfile_support_unprivileged_bwrap_eval_isolation():
     assert "bubblewrap" in dockerfile and "libseccomp2" in dockerfile
     assert "USER 10001:10001" in dockerfile
 
+    unconfined = {"seccomp=unconfined", "apparmor=unconfined"}
     for rel, services in (
         ("deploy/lab/docker-compose.yml", ("lab-control",)),
         ("deploy/lab/docker-compose.web.yml", ("lab-control", "lab-executor")),
     ):
         compose = yaml.safe_load((root / rel).read_text(encoding="utf-8"))
+        # Services holding secrets keep Docker's default seccomp/AppArmor profiles.
         for svc_name in services:
             svc = compose["services"][svc_name]
             assert not svc.get("privileged")
             assert "ALL" in (svc.get("cap_drop") or [])
             sec_opts = set(svc.get("security_opt") or [])
             assert "no-new-privileges:true" in sec_opts
-            assert "seccomp=unconfined" in sec_opts
-            assert "apparmor=unconfined" in sec_opts
+            assert not sec_opts & unconfined, f"{rel}:{svc_name} must keep default profiles"
+        # Only the on-demand eval container drops them, and it holds no secrets or LAB state.
+        evaluator = compose["services"]["lab-eval"]
+        assert evaluator["profiles"] == ["eval"] and evaluator["restart"] == "no"
+        assert unconfined <= set(evaluator["security_opt"]) and "no-new-privileges:true" in evaluator["security_opt"]
+        assert "ALL" in evaluator["cap_drop"] and evaluator["read_only"] is True
+        assert not evaluator.get("ports") and not evaluator.get("privileged")
+        env = evaluator["environment"]
+        names = set(env) if isinstance(env, dict) else {item.split("=", 1)[0] for item in env}
+        assert not {name for name in names if "TOKEN" in name or "SECRET" in name or "GITHUB" in name}
+        mounts = evaluator["volumes"]
+        assert mounts == ["lab-eval-state:/var/lib/vertep-lab-eval"]

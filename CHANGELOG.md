@@ -1,3 +1,8 @@
+## ПРАВИЛЬНА НАЗВА: 0.0.4.68
+- LAB (#546): оцінювання моделей у bubblewrap винесено в окремий контейнер `lab-eval` (профіль `eval`, запуск лише на вимогу): без секретів, без стану LAB (власний том `lab-eval-state`), без портів, `cap_drop: ALL`, `read_only`, `no-new-privileges`; лише він працює без профілів seccomp/AppArmor. `lab-control` і `lab-executor` повернуто до стандартних профілів Docker (`deploy/lab/docker-compose.yml`, `deploy/lab/docker-compose.web.yml`, `deploy/lab/Dockerfile`, тест `tests/test_lab_eval_546.py`).
+- LAB: `deploy/lab/docker-compose.yml` знову проходить `docker compose config` — ліміт процесів `lab-sandbox` (64) перенесено з `pids_limit` у `deploy.resources.limits.pids`, бо новий Docker Compose відхиляв обидва поля разом.
+- Компонентні релізи: lab 0.0.4.41.
+
 ## ПРАВИЛЬНА НАЗВА: 0.0.4.67
 - Безпека LAB (#491): для закріпленого самопідписаного сертифіката CORE перевірка імені хоста більше не вимикається — ім'я звіряється з тим, що записане в самому сертифікаті (`lab/tls.py`, тести `tests/test_lab_tls_pinned_core.py`).
 - Безпека БД модулів: PostgreSQL приєднується до мережі модуля лише після того, як `pg_hba.conf` дозволяє з підмережі модуля вхід тільки його власній ролі й відхиляє всі інші, включно з власником CORE; невалідні правила відкочуються, і PostgreSQL до мережі не приєднується (`scripts/apply-deployment.py`, тести `tests/test_application_modules_host.py`).

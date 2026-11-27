@@ -39,8 +39,6 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp=unconfined
-      - apparmor=unconfined
     deploy:
       resources:
         limits:
@@ -53,6 +51,34 @@ services:
       timeout: 5s
       retries: 3
     restart: unless-stopped
+    networks: [lab-net]
+
+  # #546: model evaluations (bubblewrap namespaces) run only here, on demand; no secrets,
+  # no LAB state, no ports. Default seccomp/AppArmor forbid those namespaces, so only this
+  # container runs without them:
+  #   docker compose --profile eval run --rm lab-eval eval lm-eval --endpoint http://<ollama>:11434
+  lab-eval:
+    image: ghcr.io/fylypovych/vertep-lab-control:${VERSION:-dev}
+    profiles: ["eval"]
+    entrypoint: ["python", "-m", "lab.cli"]
+    command: ["eval", "list"]
+    environment:
+      - LAB_STATE_DIR=/var/lib/vertep-lab-eval
+      - LAB_WORKSPACE=/var/lib/vertep-lab-eval/workspace
+      - LAB_POLICY_GATE_ACTIVE=true
+      - LAB_OLLAMA_URL=${LAB_OLLAMA_URL:-}
+    volumes:
+      - lab-eval-state:/var/lib/vertep-lab-eval
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+      - apparmor=unconfined
+    restart: "no"
     networks: [lab-net]
 
   lab-sandbox:
@@ -78,12 +104,13 @@ services:
         limits:
           cpus: "2"
           memory: 4G
+          pids: 64
     restart: "no"
     network_mode: none
-    pids_limit: 64
 
 volumes:
   lab-state:
+  lab-eval-state:
   lab-repo:
 
 networks:
