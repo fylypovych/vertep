@@ -52,9 +52,77 @@ def test_the_precondition_runs_before_the_runtime_is_written_or_started():
     position = BOOTSTRAP.index(_guard())
     assert position < BOOTSTRAP.index('env_tmp=$(mktemp "$INSTALL_ROOT/.env.XXXXXX")')
     assert position < BOOTSTRAP.index('progress "Starting Vertep $version"')
-    # GPU detection itself is unchanged.
+    # PCI detection of NVIDIA is kept; Hyper-V GPU-P is detected in addition.
     assert ("if grep -qix '0x10de' /sys/bus/pci/devices/*/vendor 2>/dev/null "
-            "|| lspci 2>/dev/null | grep -qi nvidia; then") in BOOTSTRAP
+            "|| lspci 2>/dev/null | grep -qi nvidia \\\n") in BOOTSTRAP
+
+
+# ── Hyper-V GPU-P: Microsoft PCI device 0x1414, /dev/dxg, driver from the host in /usr/lib/wsl/lib ──
+
+def _detect(tmp_path, *, dxg, smi_output):
+    """Run the detection block with /dev/dxg, sysfs and /usr/lib/wsl/lib redirected to tmp_path."""
+    start = BOOTSTRAP.index('gpu_vendor=none; gpu_name="GPU not found"')
+    block = BOOTSTRAP[start:BOOTSTRAP.index('progress "Installing container runtime"')]
+    pci = tmp_path / "pci" / "0000:00:00.0"
+    pci.mkdir(parents=True)
+    (pci / "vendor").write_text("0x1414\n")
+    wsl = tmp_path / "wsl"
+    wsl.mkdir()
+    if smi_output is not None:
+        smi = wsl / "nvidia-smi"
+        smi.write_text("#!/bin/sh\n" + smi_output)
+        smi.chmod(0o755)
+    block = (block.replace("/dev/dxg", "/dev/null" if dxg else str(tmp_path / "no-dxg"))
+             .replace("/sys/bus/pci/devices", str(tmp_path / "pci"))
+             .replace("/usr/lib/wsl/lib", str(wsl)))
+    script = ("PATH=/usr/bin:/bin\nlspci(){ echo '00:00.0 3D controller: Microsoft Corporation Basic Render Driver'; }\n"
+              + block + 'printf "%s|%s|%s|%s|%s" "$gpu_vendor" "$gpu_name" "$gpu_vram_mb" "$driver" "$cuda"\n')
+    result = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+SMI = ('case "$1" in -L) echo "GPU 0: NVIDIA GeForce RTX 3060 Laptop GPU (UUID: GPU-1)";;\n'
+       '--query-gpu=*) echo "NVIDIA GeForce RTX 3060 Laptop GPU, 6144, 621.14";;\n'
+       '*) echo "| NVIDIA-SMI 620.70.03   KMD Version: 621.14   CUDA UMD Version: 13.5 |";; esac\n')
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+def test_gpu_p_nvidia_is_detected(tmp_path):
+    """The VERTEP-TEST-2 stand: RTX 3060 shared from the Hyper-V host."""
+    assert _detect(tmp_path, dxg=True, smi_output=SMI) == \
+        "nvidia|NVIDIA GeForce RTX 3060 Laptop GPU| 6144| 621.14|13.5"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.parametrize("dxg,smi_output", [
+    (False, SMI),    # driver files without the dxgkrnl device
+    (True, None),    # dxgkrnl without the host driver files
+    (True, "exit 9\n"),  # nvidia-smi present but not working
+])
+def test_a_plain_hyper_v_vm_stays_without_gpu(tmp_path, dxg, smi_output):
+    assert _detect(tmp_path, dxg=dxg, smi_output=smi_output).startswith("none|GPU not found|0|")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.parametrize("lspci,vendor", [
+    ("00:00.0 3D controller: Microsoft Corporation Basic Render Driver", "none"),  # "ATI" in "Corporation"
+    ("00:02.0 VGA compatible controller: Intel Corporation UHD Graphics", "none"),
+    ("00:00.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Root Complex", "none"),  # AMD CPU, not a GPU
+    ("03:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31", "amd"),
+])
+def test_amd_is_detected_only_from_a_display_device(lspci, vendor):
+    start = BOOTSTRAP.index('gpu_vendor=none; gpu_name="GPU not found"')
+    block = BOOTSTRAP[start:BOOTSTRAP.index('progress "Installing container runtime"')]
+    block = block.replace("/dev/dxg", "/nonexistent/dxg").replace("/sys/bus/pci/devices", "/nonexistent")
+    script = f"PATH=/usr/bin:/bin\nlspci(){{ echo '{lspci}'; }}\n" + block + 'printf "%s" "$gpu_vendor"\n'
+    result = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.stdout == vendor, result.stderr
+
+
+def test_gpu_p_never_installs_a_native_driver():
+    block = BOOTSTRAP[BOOTSTRAP.index("if [[ $gpu_vendor == nvidia && $driver == unavailable ]]; then"):]
+    assert block.index("[[ ! -c /dev/dxg ]] || fail") < block.index("ubuntu-drivers install")
 
 
 # ── Owner decision 16.11.2026: an update goes through; the additional gpu role is switched off ──

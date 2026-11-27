@@ -679,6 +679,21 @@ def _attach_module_network(root: Path, module_id: str, runner=subprocess.run) ->
                    capture_output=True, text=True, timeout=120, check=False)
 
 
+def _private_json(path: Path, value: dict) -> None:
+    """Like atomic_json, for a directory the Worker can write: the temporary file is
+    created exclusively (O_EXCL, 0600, unpredictable name) and replace() swaps a
+    planted link instead of writing through it."""
+    import tempfile
+    if path.parent.is_symlink():
+        raise ValueError("Каталог стану модулів є символьним посиланням")
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, ensure_ascii=False, indent=2)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
 def apply_modules(root: Path, runner=subprocess.run) -> dict:
     """Run the application module containers the local Worker asked for.
 
@@ -689,6 +704,9 @@ def apply_modules(root: Path, runner=subprocess.run) -> dict:
     from core.module.trust import TrustStore
     from worker import application_container as containers
     request_path = root / MODULE_REQUEST
+    # The Worker can write this directory: never follow a link it planted (root writes here).
+    if request_path.parent.is_symlink() or request_path.is_symlink():
+        raise ValueError("Каталог запиту модулів або сам запит є символьним посиланням")
     original = request_path.read_bytes()
     state = {"modules": {}, "errors": {}, "requested": {}}
     try:
@@ -727,7 +745,7 @@ def apply_modules(root: Path, runner=subprocess.run) -> dict:
         return state
     finally:
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
-        atomic_json(root / MODULE_STATE, state)
+        _private_json(root / MODULE_STATE, state)
         # Consumed even on failure: PathExists would otherwise rerun it at once; the Worker
         # asks again later. A newer request written meanwhile is kept.
         if request_path.is_file() and request_path.read_bytes() == original:

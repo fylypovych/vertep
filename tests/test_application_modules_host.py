@@ -125,3 +125,20 @@ def test_runtime_bundle_ships_what_the_host_executor_imports():
     spec.loader.exec_module(bundle)
     assert bundle.FILES["worker/application_container.py"] == "worker/application_container.py"
     assert bundle.FILES["config/module-trust/publishers.json"] == "runtime/module-trust/publishers.json"
+
+
+def test_host_executor_never_follows_a_link_the_worker_planted(tmp_path):
+    import pytest
+    apply = executor()
+    outside = tmp_path / "outside.json"
+    outside.write_text("keep")
+    (tmp_path / "config/application-modules").mkdir(parents=True)
+    (tmp_path / apply.MODULE_REQUEST).symlink_to(outside)
+    with pytest.raises(ValueError, match="символьним"):
+        apply.apply_modules(tmp_path, lambda *a, **k: None)
+    assert outside.read_text() == "keep"
+    state = tmp_path / apply.MODULE_STATE
+    state.symlink_to(outside)
+    apply._private_json(state, {"ok": True})
+    assert outside.read_text() == "keep" and not state.is_symlink()
+    assert stat.S_IMODE(state.stat().st_mode) == 0o600

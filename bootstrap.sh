@@ -169,7 +169,7 @@ filesystem=$(findmnt -n -o FSTYPE /opt 2>/dev/null || findmnt -n -o FSTYPE /)
 # The bundled ROCm 6.4.1 installer targets Noble only. Refuse before mutation
 # rather than configure a foreign-distribution repository on Resolute.
 if [[ $VERSION_ID == 26.04 && $existing_runtime == false && -c /dev/kfd && -d /dev/dri ]] \
-    && { grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -Eqi 'AMD|ATI'; }; then
+    && { grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -Ei 'vga|3d|display' | grep -Eqiw 'AMD|ATI'; }; then
   fail "Automatic AMD ROCm installation on Ubuntu 26.04 is not qualified; configure a compatible Docker/ROCm runtime first; no changes made"
 fi
 
@@ -191,13 +191,17 @@ done
 
 progress "Detecting hardware"
 gpu_vendor=none; gpu_name="GPU not found"; gpu_vram_mb=0; driver=unavailable; cuda=unavailable
-if grep -qix '0x10de' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -qi nvidia; then
+# Hyper-V GPU-P (GPU-PV) shows the GPU as a Microsoft PCI device (0x1414) behind /dev/dxg
+# (dxgkrnl); the NVIDIA user-mode driver comes from the host in /usr/lib/wsl/lib.
+[[ -c /dev/dxg && -x /usr/lib/wsl/lib/nvidia-smi ]] && PATH=$PATH:/usr/lib/wsl/lib
+if grep -qix '0x10de' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -qi nvidia \
+    || { [[ -c /dev/dxg ]] && nvidia-smi -L 2>/dev/null | grep -q NVIDIA; }; then
   gpu_vendor=nvidia
   if command -v nvidia-smi >/dev/null; then
     IFS=, read -r gpu_name gpu_vram_mb driver < <(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits | head -1)
-    cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: \([^ ]*\).*/\1/p' | head -1); cuda=${cuda:-unavailable}
+    cuda=$(nvidia-smi | sed -En 's/.*CUDA (UMD )?Version: ([^ ]*).*/\2/p' | head -1); cuda=${cuda:-unavailable}
   else gpu_name="NVIDIA GPU (driver pending)"; fi
-elif grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -Eqi 'AMD|ATI'; then gpu_vendor=amd; gpu_name="AMD GPU"; fi
+elif grep -qix '0x1002' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -Ei 'vga|3d|display' | grep -Eqiw 'AMD|ATI'; then gpu_vendor=amd; gpu_name="AMD GPU"; fi
 
 progress "Installing container runtime"
 export DEBIAN_FRONTEND=noninteractive
@@ -252,6 +256,8 @@ if [[ $existing_runtime == false && "$compose_pkg_version" != "$COMPOSE_APT_VERS
   fail "Docker Compose apt version mismatch: expected $COMPOSE_APT_VERSION, got $compose_pkg_version"
 fi
 if [[ $gpu_vendor == nvidia && $driver == unavailable ]]; then
+  # A native driver cannot drive a GPU-P device; it must come from the Hyper-V host.
+  [[ ! -c /dev/dxg ]] || fail "Hyper-V GPU-P device /dev/dxg found, but nvidia-smi from /usr/lib/wsl/lib does not work; copy the host NVIDIA driver files instead of installing a native driver; no changes made"
   apt-get install -y -qq ubuntu-drivers-common
   ubuntu-drivers install || fail "NVIDIA driver installation failed"
 fi
@@ -271,7 +277,7 @@ if [[ $gpu_vendor == nvidia ]] && ! { nvidia-smi >/dev/null 2>&1 && docker info 
   nvidia-smi >/dev/null 2>&1 \
     || fail "NVIDIA driver was installed but is not active; reboot the host and rerun bootstrap"
   IFS=, read -r gpu_name gpu_vram_mb driver < <(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits | head -1)
-  cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: \([^ ]*\).*/\1/p' | head -1); cuda=${cuda:-unavailable}
+  cuda=$(nvidia-smi | sed -En 's/.*CUDA (UMD )?Version: ([^ ]*).*/\2/p' | head -1); cuda=${cuda:-unavailable}
 elif [[ $gpu_vendor == amd && $existing_runtime == false ]]; then
   [[ $arch == amd64 ]] || fail "AMD ROCm runtime currently requires amd64"
   # Skip ROCm installation if no actual AMD GPU hardware is present (e.g., CI runners)
