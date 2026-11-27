@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import secrets
-import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -144,7 +143,8 @@ def _call_model(model: str, prompt: str, lease_id: str, limits: dict) -> dict:
         headers={"Content-Type": "application/json", "X-Vertep-Contract-Version": "1",
                  "X-Vertep-Lab-Token": os.getenv("LAB_RESOURCE_TOKEN", ""),
                  "X-Vertep-Lab-Lease": lease_id}, method="POST")
-    context = ssl.create_default_context(cafile=os.getenv("LAB_RESOURCE_CA_FILE", "").strip() or None)
+    from .tls import resource_context
+    context = resource_context()
     with urllib.request.urlopen(request, timeout=float(limits.get("timeout_seconds") or 600),
                                 context=context if url.startswith("https") else None) as response:
         return json.loads(response.read().decode("utf-8"))

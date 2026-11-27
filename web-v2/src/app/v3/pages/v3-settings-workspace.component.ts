@@ -36,6 +36,7 @@ import { TabbedWorkspaceComponent, WorkspaceTab } from '../ui/tabbed-workspace.c
         @case ('general') {
           <div class="space-y-5">
             <app-settings-system-info />
+            <app-settings-publishing part="address" />
             <app-settings-branding />
           </div>
         }
@@ -44,7 +45,6 @@ import { TabbedWorkspaceComponent, WorkspaceTab } from '../ui/tabbed-workspace.c
         }
         @case ('integrations') {
           <div class="space-y-5">
-            <app-settings-publishing />
             <app-settings-telegram />
             <app-settings-secrets />
           </div>

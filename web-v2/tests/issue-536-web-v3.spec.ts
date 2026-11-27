@@ -13,7 +13,12 @@ interface MockOptions {
   catalog?: string[];
 }
 
+const pageErrors: string[] = [];
+test.beforeEach(() => { pageErrors.length = 0; });
+test.afterEach(() => { expect(pageErrors, 'uncaught UI errors').toEqual([]); });
+
 async function setupApiMocks(page: any, opts: MockOptions = {}) {
+  page.on('console', (m: any) => { if (m.type() === 'error' && m.text().includes('GlobalErrorHandler')) pageErrors.push(m.text()); });
   const role = opts.role ?? 'admin';
   const brands = opts.brands ?? [
     { id: 'vertep', name: 'Vertep Studio', enabled: true, metadata: {}, publishing: {} },
@@ -123,8 +128,8 @@ async function setupApiMocks(page: any, opts: MockOptions = {}) {
     if (/\/brands\/[^/]+\/channels$/.test(url)) {
       return route.fulfill({ json: [] });
     }
-    if (/\/brands\/[^/]+\/shared-content$/.test(url)) {
-      return route.fulfill({ json: [] });
+    if (url.endsWith('/shared-content')) {
+      return route.fulfill({ json: { brand_id: new URL(req.url()).searchParams.get('brand_id'), items: [] } });
     }
     if (url.endsWith('/modules/characters/v1/characters')) {
       return route.fulfill({ json: characters });
@@ -173,6 +178,14 @@ test('#536: перемикач v2 ↔ v3 зберігає стан у localStora
   await page.getByTestId('switch-to-v2').click();
   await expect(page).toHaveURL(/\/alerts$/);
   expect(await page.evaluate(() => localStorage.getItem('vertep_ui_version'))).toBe('v2');
+
+  await page.goto('/v3/settings?tab=integrations');
+  await expect(page.getByTestId('v3-settings-workspace')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('settings-publishing')).toHaveCount(0);  // moved to Brands and General
+  await page.goto('/v3/settings?tab=general');
+  const address = page.locator('[data-testid="settings-publishing"][data-part="address"]');
+  await expect(address.getByTestId('publishing-public-url')).toBeVisible();
+  await expect(address.getByTestId('publishing-credentials')).toHaveCount(0);
 
   // Direct v3 deep links map to the proper tabbed workspaces
   await page.goto('/v3/settings?tab=models');
@@ -268,6 +281,11 @@ test('#536: MVP-сторінки v3 — Dashboard, Profile, Brands (Персон
   await expect(brandChars).toContainText('Козак Мамай');
   const brandMods = page.getByTestId('v3-brand-moderators-vertep');
   await expect(brandMods).toContainText('Олена Модератор');
+  // Shared platform credentials live with the brands; Settings keeps the public address in «Загальне».
+  const platforms = page.locator('[data-testid="settings-publishing"][data-part="platforms"]');
+  await expect(platforms).toContainText('Платформи публікації');
+  await expect(platforms.getByTestId('publishing-credentials')).toBeVisible();
+  await expect(platforms.getByTestId('publishing-public-url')).toHaveCount(0);
 
   // Navigate directly from Brand -> Character Profile (EntityProfileLayout)
   await brandChars.getByText('Дід Оповідач').click();

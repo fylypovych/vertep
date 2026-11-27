@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import ssl
 import time
 import urllib.error
 import urllib.request
@@ -270,9 +269,8 @@ class VertepResourceClient(ResourceProvider):
         self.enabled = bool(enabled)
         if opener is None:
             # Vertep ships its own CA; a custom opener never skips verification.
-            ca_file = os.getenv("LAB_RESOURCE_CA_FILE", "").strip()
-            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(
-                context=ssl.create_default_context(cafile=ca_file or None)))
+            from .tls import resource_context
+            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=resource_context()))
         self._opener = opener
 
     # -- transport -------------------------------------------------------

@@ -19,6 +19,7 @@ import { LoadingStateComponent } from '../../shared/loading-state.component';
 import { ErrorStateComponent } from '../../shared/error-state.component';
 import { PaperCardComponent } from '../ui/paper-card.component';
 import { MemberListItem, MembersListCardComponent } from '../ui/members-list-card.component';
+import { PublishingSectionComponent } from '../../settings/sections/publishing.section';
 
 interface AccessUserSummary {
   user: string;
@@ -42,6 +43,7 @@ interface AccessUserSummary {
     ErrorStateComponent,
     PaperCardComponent,
     MembersListCardComponent,
+    PublishingSectionComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -124,6 +126,11 @@ interface AccessUserSummary {
         </div>
       }
 
+      <!-- Shared platform credentials (fallback) live with the brands, not in Settings. -->
+      @if (canManagePlatforms) {
+        <app-settings-publishing part="platforms" data-testid="v3-brands-platforms" />
+      }
+
       <!-- Brand Editor Modal -->
       @if (showEditor()) {
         <div data-testid="v3-brand-editor-modal" class="fixed inset-0 bg-black/45 flex items-center justify-center z-50 p-4">
@@ -191,6 +198,7 @@ export class V3BrandsComponent implements OnInit {
   ) {}
 
   isAdmin(): boolean { return this.policy.userRole() === 'admin'; }
+  get canManagePlatforms(): boolean { return this.policy.can('update_settings').allowed; }
   get canCreateBrand(): boolean { return this.policy.can('create_brand').allowed; }
   get createBrandReason(): string | null { return this.policy.disabledReason('create_brand'); }
   get canUpdateBrand(): boolean { return this.policy.can('update_brand').allowed; }

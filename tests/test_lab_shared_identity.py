@@ -137,3 +137,30 @@ def test_administrator_sets_the_lab_panel_address_in_settings(tmp_path, monkeypa
     headers = {"X-CSRF-Token": cookies["vertep_csrf"]}
     assert client.put("/api/settings/lab-panel", json={"url": ""}, cookies=cookies, headers=headers).json() == {"url": None}
     assert client.get("/api/lab/panel", cookies=cookies).json() == {"url": None}
+
+
+def test_lab_frame_gives_the_admin_the_panel_with_a_verifiable_assertion(tmp_path, monkeypatch):
+    """#491 L2: the LAB panel inside Vertep — same assertion as /api/lab/login, for the frame."""
+    from core import lab_identity
+    from lab import identity
+    cookies = _core_session(monkeypatch, tmp_path, "admin", "admin")
+    framed = _core_client().get("/api/lab/frame", cookies=cookies).json()
+    assert framed["panel"] == "https://lab.example:8444"
+    assert framed["url"].startswith("https://lab.example:8444/#vertep_identity=")
+    monkeypatch.setenv("LAB_VERTEP_IDENTITY_KEY", lab_identity.public_key_pem())
+    identity.reset_cache()
+    assert identity.verify(framed["url"].split("#vertep_identity=", 1)[1]) == "admin"
+    identity.reset_cache()
+    moderator = _core_session(monkeypatch, tmp_path, "reader", "moderator")
+    assert _core_client().get("/api/lab/frame", cookies=moderator).status_code == 403
+
+
+def test_lab_panel_may_be_framed_only_by_the_connected_vertep():
+    from pathlib import Path
+    root = Path(__file__).parents[1]
+    nginx = (root / "deploy/lab/web/nginx.conf").read_text(encoding="utf-8")
+    assert nginx.count("include /tmp/lab-frame.conf;") == 2  # server and the index.html location
+    dockerfile = (root / "deploy/lab/Dockerfile.web").read_text(encoding="utf-8")
+    assert "frame-ancestors" in dockerfile and "LAB_VERTEP_URL" in dockerfile
+    compose = (root / "deploy/lab/docker-compose.web.yml").read_text(encoding="utf-8")
+    assert "LAB_VERTEP_URL: ${LAB_VERTEP_URL:-}" in compose.split("lab-web:", 1)[1]

@@ -24,6 +24,7 @@ def executor():
 def manifest(module_id="brands", version="0.0.4.16"):
     return SimpleNamespace(kind="application", module_id=module_id, version=version,
                            container={"image": "ghcr.io/x/m@sha256:" + "0" * 64, "port": 8080}, resource_requirements={},
+                           migrations=[{"id": "001", "version": version}],
                            to_dict=lambda: {"module_id": module_id, "version": version, "kind": "application"})
 
 
@@ -60,7 +61,10 @@ def test_host_executor_starts_verified_modules_and_joins_only_core_and_worker(mo
     assert "old" in stopped  # no longer assigned
     assert ["docker", "network", "connect", "--alias", "core", "vertep-mod-brands", "id-core"] in commands
     assert ["docker", "network", "connect", "vertep-mod-brands", "id-worker"] in commands
-    assert state["modules"] == {"brands": {"version": "0.0.4.16", "endpoint": "http://vertep-mod-brands:8080"}}
+    # Brands has its own schema: PostgreSQL joins its network under the name the DSN uses.
+    assert ["docker", "network", "connect", "--alias", "postgres", "vertep-mod-brands", "id-postgres"] in commands
+    assert state["modules"] == {"brands": {"version": "0.0.4.16", "database": True,
+                                           "endpoint": "http://vertep-mod-brands:8080"}}
     assert "bad signature" in state["errors"]["evil"] and "evil" not in state["requested"]
     assert not request.exists()  # consumed, so PathExists does not loop
     saved = tmp_path / apply.MODULE_STATE
@@ -191,3 +195,10 @@ def test_worker_trusts_its_own_release_manifest_for_a_bundled_module(monkeypatch
     import pytest
     with pytest.raises(ValueError):
         supervisor._verified({"module_id": "characters", "package": sent}, None)
+
+
+def test_module_database_address_comes_from_either_dsn_form():
+    from core.module.gateway import _database_address
+    assert _database_address("host=postgres port=5432 dbname=vertep user=vertep password=secret") == ("postgres", 5432)
+    assert _database_address("postgresql://vertep:secret@db.local:6432/vertep") == ("db.local", 6432)
+    assert _database_address("") == (None, None)

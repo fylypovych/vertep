@@ -36,8 +36,8 @@ def _fetch_public_key() -> str:
     if not base:
         raise IdentityError("Vertep identity is not configured")
     import httpx
-    verify: object = os.getenv("LAB_RESOURCE_CA_FILE", "").strip() or True
-    response = httpx.get(f"{base}/identity-key", timeout=10, verify=verify,
+    from .tls import resource_context
+    response = httpx.get(f"{base}/identity-key", timeout=10, verify=resource_context(),
                          headers={"x-vertep-lab-token": os.getenv("LAB_RESOURCE_TOKEN", "")})
     response.raise_for_status()
     body = response.json()

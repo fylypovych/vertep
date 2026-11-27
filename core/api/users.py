@@ -231,6 +231,23 @@ async def lab_connect(request: Request):
     return result
 
 
+@router.get("/api/lab/frame")
+def lab_frame(request: Request):
+    """#491 L2: the LAB panel inside Vertep. The page asks over XHR (same origin, session
+    cookie) and puts the answer into its frame: panel address + short-lived assertion."""
+    from core.lab_identity import issue, panel_url
+    from core.module.gateway import audit
+    identity = getattr(request.state, "vertep_identity", None)
+    if not identity or identity[1] != "admin":
+        audit("lab.identity", "denied", actor=identity[0] if identity else None, reason="not_admin")
+        raise HTTPException(403, "Administrator role required")
+    url = panel_url()
+    if not url:
+        return {"url": None}
+    audit("lab.identity", "allowed", actor=identity[0], via="frame")
+    return {"url": f"{url}/#vertep_identity={issue(identity[0], identity[1])}", "panel": url}
+
+
 @router.get("/api/lab/panel")
 def lab_panel(request: Request):
     """#491 L3: the configured LAB panel address for the administrator's «Лабораторія» entry."""

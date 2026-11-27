@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r modules/characters/requirements.txt
 COPY __init__.py modules/characters/__init__.py
 COPY characters_module.py modules/characters/
 COPY characters_logic.py modules/characters/
+COPY knowledge_logic.py modules/characters/
 COPY manifest.yaml modules/characters/
 COPY migrations/ modules/characters/migrations/
 COPY ui/ modules/characters/ui/

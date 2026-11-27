@@ -487,11 +487,22 @@ def module_database(request: Request):
     credentials = json.loads(stored)
     audit("module.database", "allowed", module=caller.module_id, node=caller.node_id)
     # Address as seen from module containers (may differ from CORE's own DSN host).
-    from urllib.parse import urlsplit
-    dsn = urlsplit(os.getenv("VERTEP_MODULE_DATABASE_URL") or os.getenv("DATABASE_URL") or "")
+    host, port = _database_address(os.getenv("VERTEP_MODULE_DATABASE_URL") or os.getenv("DATABASE_URL") or "")
     return {**{key: credentials[key] for key in ("role", "schema", "password", "database")},
-            "host": os.getenv("VERTEP_MODULE_DATABASE_HOST") or dsn.hostname,
-            "port": int(os.getenv("VERTEP_MODULE_DATABASE_PORT") or dsn.port or 5432)}
+            "host": os.getenv("VERTEP_MODULE_DATABASE_HOST") or host,
+            "port": int(os.getenv("VERTEP_MODULE_DATABASE_PORT") or port or 5432)}
+
+
+def _database_address(dsn: str) -> tuple[str | None, int | None]:
+    """Host and port of a URL DSN or of the key=value form production uses
+    (``host=postgres port=5432 dbname=…``); never the password."""
+    if "://" in dsn:
+        from urllib.parse import urlsplit
+        parts = urlsplit(dsn)
+        return parts.hostname, parts.port
+    fields = dict(item.split("=", 1) for item in dsn.split() if "=" in item)
+    port = fields.get("port", "")
+    return fields.get("host") or None, int(port) if port.isdigit() else None
 
 
 # -- shared capabilities for modules -------------------------------------------------

@@ -1,5 +1,5 @@
 import { TPipe } from '../../core/i18n/t.pipe';
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, Input, OnInit, computed, inject, signal } from '@angular/core';
 import { TimeoutError, timeout } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -18,17 +18,20 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
   selector: 'app-settings-publishing',
   standalone: true,
   imports: [TPipe, CommonModule, FormsModule, RouterLink, SecretGroupsComponent],
-  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-publishing">
-    <h3 class="text-lg font-semibold mb-1">{{ 'Публікація' | t }}</h3>
-    <p class="text-sm text-slate-600 mb-4" data-testid="publishing-brands-hint">{{ 'Куди публікувати, вирішують бренди: канал і його облікові дані задаються в' | t }}
+  template: `<div class="bg-white rounded-xl border border-slate-200 p-5" data-testid="settings-publishing" [attr.data-part]="part">
+    <h3 class="text-lg font-semibold mb-1">{{ (part === 'address' ? 'Публічна адреса Vertep' : part === 'platforms' ? 'Платформи публікації' : 'Публікація') | t }}</h3>
+    <p *ngIf="part === 'all'" class="text-sm text-slate-600 mb-4" data-testid="publishing-brands-hint">{{ 'Куди публікувати, вирішують бренди: канал і його облікові дані задаються в' | t }}
       <a [routerLink]="[routePrefix + '/brands']" class="text-blue-700">«{{ 'Бренди → Канали' | t }}»</a>. {{ 'Тут — загальні параметри та спільні облікові дані.' | t }}</p>
     <div *ngIf="error()" class="text-red-600 text-sm mb-2" data-testid="publishing-error">{{ error()! | t }}</div>
+    <ng-container *ngIf="part !== 'platforms'">
     <label class="block text-sm font-medium text-slate-700 mb-1" for="publishing-public-url">{{ 'Публічна адреса Vertep' | t }}</label>
     <input id="publishing-public-url" data-testid="publishing-public-url" [ngModel]="publicUrl()" (ngModelChange)="publicUrl.set($event)" [disabled]="!canEdit()"
            placeholder="https://vertep.example.com" class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
     <p class="text-xs text-slate-500 mt-1 mb-4">{{ 'Потрібна для Threads: платформа сама завантажує відео за посиланням, тому адреса має відкриватися з інтернету. Внутрішня адреса не підійде.' | t }}</p>
     <button class="px-3 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50" data-testid="publishing-save"
             [disabled]="!canEdit() || saving()" (click)="save()">{{ (saving() ? 'Збереження...' : 'Зберегти') | t }}</button>
+    </ng-container>
+    <ng-container *ngIf="part !== 'address'">
     <h4 class="text-base font-semibold mt-6 mb-1">{{ 'Спільні облікові дані платформ (запасні)' | t }}</h4>
     <p class="text-sm text-slate-500 mb-3">{{ 'Канал публікує зі своїми обліковими даними. Ці значення використовуються лише для каналу, де адміністратор явно дозволив спільні облікові дані; кожне таке використання записується в аудит. Значення зберігаються в захищеному сховищі й після збереження не показуються.' | t }}</p>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4" data-testid="publishing-shared-status">
@@ -40,9 +43,13 @@ export const PUBLISHING_SAVE_TIMEOUT_MS = 30_000;
       </div>
     </div>
     <app-secret-groups [groups]="platformGroups" data-testid="publishing-credentials" />
+    </ng-container>
   </div>`,
 })
 export class PublishingSectionComponent implements OnInit {
+  /** Interface 3.0 shows the parts where they belong: the address in Settings → General,
+   *  the platform credentials with the brands; the classic panel keeps both together. */
+  @Input() part: 'all' | 'address' | 'platforms' = 'all';
   private readonly router = inject(Router);
   get routePrefix(): string { return this.router.url.startsWith('/v3') ? '/v3' : ''; }
   publicUrl = signal('');
@@ -58,7 +65,7 @@ export class PublishingSectionComponent implements OnInit {
     { id: 'facebook', label: 'Facebook', names: ['facebook_access_token'] },
     { id: 'instagram', label: 'Instagram', names: ['instagram_client_id', 'instagram_client_secret', 'instagram_access_token', 'instagram_refresh_token'] },
     { id: 'threads', label: 'Threads', names: ['threads_client_id', 'threads_client_secret', 'threads_access_token', 'threads_refresh_token'],
-      hint: 'Також потрібна публічна адреса Vertep вище.' },
+      hint: 'Також потрібна публічна адреса Vertep (Налаштування → Загальне).' },
     { id: 'tiktok', label: 'TikTok', names: ['tiktok_client_id', 'tiktok_client_secret', 'tiktok_access_token', 'tiktok_refresh_token'] },
   ];
 

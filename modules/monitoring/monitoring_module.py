@@ -151,7 +151,8 @@ class MonitoringHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if urlparse(self.path).path == "/health":
-            return self._json_response({"status": "ok"})  # container liveness, no data
+            # The Worker's supervisor marks the module ready only on "ready": true (module contract).
+            return self._json_response({"status": "ok", "ready": True})  # container liveness, no data
         if self._guard("GET") is None:
             return
         if self._retention("GET"):
@@ -162,7 +163,7 @@ class MonitoringHandler(BaseHTTPRequestHandler):
 
         try:
             if path == "/health":
-                self._json_response({"status": "ok"})
+                self._json_response({"status": "ok", "ready": True})
             elif path == "/api/v1/metrics":
                 name = query.get("name", [None])[0]
                 node_id = query.get("node_id", [None])[0]

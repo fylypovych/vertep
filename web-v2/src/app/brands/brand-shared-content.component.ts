@@ -61,7 +61,8 @@ export class BrandSharedContentComponent implements OnChanges {
 
   load(): void {
     this.api.sharedContent(this.brandId).subscribe({
-      next: (data) => this.items.set(data.items),
+      // An answer without a list (older module, proxy page) shows «nothing shared», not a broken page.
+      next: (data) => this.items.set(Array.isArray(data?.items) ? data.items : []),
       error: () => this.items.set([]),
     });
   }

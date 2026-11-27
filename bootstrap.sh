@@ -194,6 +194,13 @@ gpu_vendor=none; gpu_name="GPU not found"; gpu_vram_mb=0; driver=unavailable; cu
 # Hyper-V GPU-P (GPU-PV) shows the GPU as a Microsoft PCI device (0x1414) behind /dev/dxg
 # (dxgkrnl); the NVIDIA user-mode driver comes from the host in /usr/lib/wsl/lib.
 [[ -c /dev/dxg && -x /usr/lib/wsl/lib/nvidia-smi ]] && PATH=$PATH:/usr/lib/wsl/lib
+# The NVIDIA Container Toolkit mounts nvidia-smi from the driver store into containers;
+# host driver files copied by hand keep 0644 there, and the Worker then sees no GPU.
+if [[ -c /dev/dxg ]]; then
+  for tool in /usr/lib/wsl/drivers/*/nvidia-smi; do
+    if [[ -f $tool ]]; then chmod 0755 "$tool"; fi
+  done
+fi
 if grep -qix '0x10de' /sys/bus/pci/devices/*/vendor 2>/dev/null || lspci 2>/dev/null | grep -qi nvidia \
     || { [[ -c /dev/dxg ]] && nvidia-smi -L 2>/dev/null | grep -q NVIDIA; }; then
   gpu_vendor=nvidia

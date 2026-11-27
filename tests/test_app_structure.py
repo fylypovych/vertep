@@ -92,6 +92,7 @@ def test_all_method_path_contracts_match_the_before_extraction_snapshot():
         ["POST", "/api/brands/migrate-to-module"],
         ["GET", "/api/lab/login"],  # #491 L3 shared administrator identity for the LAB panel.
         ["GET", "/api/lab/panel"],
+        ["GET", "/api/lab/frame"],  # #491 L2: the LAB panel framed inside Vertep.
         ["POST", "/api/lab/connection-token"],  # #491 the LAB connects itself with a one-time token.
         ["POST", "/api/lab/connect"],
         ["GET", "/api/lab/connection"],

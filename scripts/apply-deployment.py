@@ -667,12 +667,17 @@ def _compose_container(root: Path, service: str, runner=subprocess.run) -> str:
     return (result.stdout or "").strip().splitlines()[0] if (result.stdout or "").strip() else ""
 
 
-def _attach_module_network(root: Path, module_id: str, runner=subprocess.run) -> None:
+def _attach_module_network(root: Path, module_id: str, runner=subprocess.run,
+                           database: bool = False) -> None:
     """Only CORE (alias ``core``) and the Worker join the module's own network: the module
-    reaches CORE's module gateway, CORE and the Worker reach the module; nothing else."""
+    reaches CORE's module gateway, CORE and the Worker reach the module. PostgreSQL joins
+    only for a module with its own schema (migrations); its role reaches that schema only."""
     from worker.application_container import resource_name
     network = resource_name(module_id)
-    for service, alias in (("core", ["--alias", "core"]), ("worker", [])):
+    services = [("core", ["--alias", "core"]), ("worker", [])]
+    if database:
+        services.append(("postgres", ["--alias", "postgres"]))
+    for service, alias in services:
         container = _compose_container(root, service, runner)
         if container:  # an already connected container answers with an error; that is the goal state
             runner(["docker", "network", "connect", *alias, network, container],
@@ -748,13 +753,13 @@ def apply_modules(root: Path, runner=subprocess.run) -> dict:
                 if running.get(module_id) != manifest.version:
                     containers.stop(module_id)
                     containers.start(manifest, core_url=MODULE_CORE_URL, module_token=token, host_port=None)
-                _attach_module_network(root, module_id, runner)
+                _attach_module_network(root, module_id, runner, database=bool(manifest.migrations))
             except (subprocess.SubprocessError, OSError, ValueError) as error:
                 detail = getattr(error, "stderr", "") or str(error)
                 state["errors"][module_id] = str(detail).strip()[-500:]
                 continue
             state["modules"][module_id] = {
-                "version": manifest.version,
+                "version": manifest.version, "database": bool(manifest.migrations),
                 "endpoint": f"http://{containers.resource_name(module_id)}:{int(manifest.container['port'])}"}
         return state
     finally:
@@ -772,8 +777,8 @@ def reattach_modules(root: Path, runner=subprocess.run) -> None:
         modules = json.loads((root / MODULE_STATE).read_text(encoding="utf-8")).get("modules", {})
     except (OSError, ValueError):
         return
-    for module_id in modules:
-        _attach_module_network(root, module_id, runner)
+    for module_id, info in modules.items():
+        _attach_module_network(root, module_id, runner, database=bool((info or {}).get("database")))
 
 
 def main() -> None:

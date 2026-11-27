@@ -67,6 +67,8 @@ services:
 
   lab-web:
     image: ${LAB_WEB_IMAGE:-ghcr.io/fylypovych/vertep-lab-web:dev}
+    environment:
+      LAB_VERTEP_URL: ${LAB_VERTEP_URL:-}
     ports:
       - "${LAB_WEB_BIND:-0.0.0.0}:${LAB_WEB_PORT:-8444}:8443"
     volumes:
