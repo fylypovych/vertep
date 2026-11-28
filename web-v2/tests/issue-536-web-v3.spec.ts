@@ -362,6 +362,10 @@ test('#554: облікові дані платформ доступні при �
   const fallback = page.locator('[data-testid="settings-publishing"][data-part="platforms"]');
   await expect(fallback).toBeVisible();
   await expect(fallback.getByTestId('publishing-credentials')).toBeVisible();
+
+  // Reverse switch from /v3/settings?tab=publishing back to v2 preserves tab=publishing when brands is inactive.
+  await page.getByTestId('switch-to-v2').click();
+  await expect(page).toHaveURL(/\/settings\?tab=publishing$/);
 });
 
 test('#554: миттєве оновлення меню при зміні модулів/LAB, без колізії monitoring, заголовки модулів і підсвічування вкладок/аліасів', async ({ page }) => {
@@ -370,6 +374,7 @@ test('#554: миттєве оновлення меню при зміні мод�
   ];
   let backupOn = true;
   let labUrl: string | null = null;
+  let labConnected = false;
   let catalogModules: any[] = [
     {
       module_id: 'brands', label: 'Бренди', version: '0.0.4.17', kind: 'application', bundled: true, state: 'ACTIVE',
@@ -401,10 +406,19 @@ test('#554: миттєве оновлення меню при зміні мод�
   await page.route('**/api/modules/navigation', (route: any) => route.fulfill({ json: { items: navItems } }));
   await page.route('**/api/system/backups/available', (route: any) => route.fulfill({ json: { available: backupOn } }));
   await page.route('**/api/lab/panel', (route: any) => route.fulfill({ json: { url: labUrl } }));
+  await page.route('**/api/lab/connection', (route: any) => {
+    if (route.request().method() === 'DELETE') {
+      labConnected = false;
+      labUrl = null;
+      return route.fulfill({ json: { connected: false } });
+    }
+    return route.fulfill({ json: { connected: labConnected, connected_at: labConnected ? '2026-11-28T09:00:00Z' : null, panel_url: labUrl } });
+  });
   await page.route('**/api/settings/lab-panel', (route: any) => {
     if (route.request().method() === 'PUT') {
       const body = route.request().postDataJSON();
       labUrl = body.url || null;
+      labConnected = Boolean(labUrl);
       return route.fulfill({ json: { url: labUrl } });
     }
     return route.fulfill({ json: { url: labUrl } });
@@ -495,4 +509,11 @@ test('#554: миттєве оновлення меню при зміні мод�
   await page.getByTestId('lab-panel-url').fill('https://lab.local');
   await page.getByTestId('lab-panel-save').click();
   await expect(nav.getByTestId('v3-nav-lab')).toBeVisible({ timeout: 20000 });
+
+  // Disconnecting LAB removes «Лабораторія» item immediately without reload.
+  await page.getByTestId('v3-tab-users').click();
+  await page.getByTestId('v3-tab-general').click();
+  await expect(page.getByTestId('lab-disconnect')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('lab-disconnect').click();
+  await expect(nav.getByTestId('v3-nav-lab')).toHaveCount(0, { timeout: 20000 });
 });

@@ -33,4 +33,28 @@ Web UI показує current → target, changelog, фази, progress і фі�
 
 ## Логування
 
-`/data/config/update/status.json`, `/data/config/update/log/` — кожен запис: час, фаза, статус, повідомлення.
+`/data/config/update/status.json`, `/data/config/update/log/` — кожен запис: час, фаза, статус, повідомлення. Події модульного `UpdateManager` записуються у структурований журнал `logs/update.jsonl` під категорією `UPDATE` з прив'язкою до `operation_id`.
+
+## Незалежні компонентні релізи (#509/#510)
+
+- Реєстр компонентів — `config/components.json`: CORE зберігає спільну послідовність `VERSION` і runtime-реліз (`реліз`), а офіційні модулі версіонуються й випускаються незалежно з тегами `<component>.<version>` (`A.B.C.D`, перенесення після 99).
+- `scripts/component-release.py` і workflow `.github/workflows/component-release.yml` класифікують зміни (`impact`), запускають потрібні тести (модульні, сумісності або повний набір при невідомому впливі чи змінах CORE), планують версії (`plan`), збирають digest-закріплені образи, підписують маніфести (RSA) та модульні пакети `package.json` (Ed25519) і публікують стабільні релізи лише за `COMPONENT_RELEASES_ENABLED=true` із `--latest=false`.
+
+## UpdateManager і джерела модулів (#511/#512)
+
+- `ModuleSources` (`core/module/sources.py`) розв'язує, кешує та закріплює (pin) підписані пакети модулів із офіційного репозиторію або дозволених джерел із перевіркою довіри за `config/module-trust/publishers.json`.
+- `UpdateManager` (`core/module/update_manager.py`) виконує лише затверджені адміністратором плани оновлення з конкретними версіями та вузлами (`PENDING_APPROVAL → APPROVED → RUNNING / WAITING_CORE → DONE / FAILED`):
+  - якщо модуль вимагає новіший CORE, план спершу ініціює крок CORE через Update Agent і продовжується після перезапуску;
+  - модулі оновлюються етапами за графом залежностей, а всередині одного модуля вузли отримують новий пакет послідовно через `RolloutGates` із перевірками `container`, `api`, `database` та `dependencies`;
+  - при збої відкочується проблемний модуль і вже оновлені компоненти, що залежать від його нової версії.
+
+## Snapshots, write fence, rollback і retention (#513/#517)
+
+- `ModuleLifecycle` (`core/module/lifecycle.py`) знімає верифікований snapshot перед оновленням, закриває запис (write fence) на час операції та відкриває його лише після підтвердженої перевірки нової або відновленої версії (`_unlock_if_verified`).
+- Адміністратор може відкотитися до верифікованих точок (`rollback_points`, `rollback_to_point`; відновлення БД вимагає явного підтвердження втрати пізніших записів). Retention `prune(module_id, keep=3)` зберігає активну і дві попередні успішні копії, не зачіпаючи активний запис і незавершений журнал.
+- `scripts/prune-images.py` після успішного встановлення/оновлення фіксує версію й образи в `config/installed-versions.json` (`record`) і видаляє старі локальні образи Vertep поза останніми `keep` версіями (`prune`, типово 3), не чіпаючи активні контейнери та образи інших проєктів.
+
+## Автономне A/B-відновлення Update Agent (#514)
+
+- Update Agent працює з двох локальних верифікованих слотів `<root>/agent/slots/a` і `b` (`scripts/agent-slots.py`, стан у `<root>/agent/active.json`). Нова версія встановлюється в неактивний слот (`install`) і перемикається (`switch`) лише після локальної перевірки готовності.
+- Хостовий watchdog (`scripts/watchdog.py::check_agent_slot`) виконує `scripts/agent-slots.py check`: якщо активний слот не проходить перевірку цілісності чи готовності, watchdog локально повертає попередній верифікований слот без залежності від доступності CORE.

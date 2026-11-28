@@ -130,11 +130,15 @@
       "version_source": "deploy/lab/manifest.yaml",
       "note": "#491 L5 / #523: the isolated LAB (placement isolated_lab). Its signed package pins lab-control and lab-web by digest and carries the runtime compose file; bootstrap-lab.sh installs it without building.",
       "image": {"name": "vertep-lab-control", "context": ".", "file": "deploy/lab/Dockerfile", "service": "lab-control"},
-      "extra_images": [{"name": "vertep-lab-web", "context": ".", "file": "deploy/lab/Dockerfile.web", "service": "lab-web"}],
+      "extra_images": [
+        {"name": "vertep-lab-web", "context": ".", "file": "deploy/lab/Dockerfile.web", "service": "lab-web"},
+        {"name": "vertep-lab-eval", "context": ".", "file": "deploy/lab/Dockerfile.eval", "service": "lab-eval"}
+      ],
       "package_files": {"docker-compose.yml": "deploy/lab/docker-compose.web.yml"},
       "paths": ["lab/**", "deploy/lab/**", "bootstrap-lab.sh", "scripts/lab-orchestrator.py", "installer/vertep-lab.service"],
       "tests": ["tests/test_lab_acceptance_criteria.py", "tests/test_lab_api_auth.py", "tests/test_lab_boundary.py",
                 "tests/test_lab_budget.py", "tests/test_lab_cli.py", "tests/test_lab_deployment.py",
+                "tests/test_lab_eval_546.py",
                 "tests/test_lab_executor.py", "tests/test_lab_github_transport.py", "tests/test_lab_governance.py",
                 "tests/test_lab_gpu_lease.py", "tests/test_lab_ir_acceptance.py", "tests/test_lab_isolation.py",
                 "tests/test_lab_lease_api.py", "tests/test_lab_notifications.py", "tests/test_lab_orchestrator.py",

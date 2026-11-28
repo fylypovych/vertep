@@ -30,14 +30,15 @@ REQUIRED_IMAGES = {
     "proxy", "postgres", "redis", "ollama", "monitoring", "grafana",
     "log-store", "log-collector", "update-agent", "license-manager",
     "dispatcher", "scheduler", "certificate-manager", "moneyprinter",
-    "node-exporter",
+    "node-exporter", "stt", "lora-trainer", "musetalk",
 }
 
 REQUIRED_PLATFORMS = {"linux/amd64", "linux/arm64"}
 # moneyprinter ships linux/amd64 only: its dependency lock is resolved against
 # the pinned upstream commit for that platform and is not qualified for arm64 yet.
-# The service is opt-in, so an arm64-only install simply leaves the profile off.
-ARM64_EXEMPT_SERVICES = {"comfyui", "moneyprinter"}
+# lora-trainer and musetalk are CUDA/nvidia linux/amd64-only opt-in GPU profiles.
+# These services are opt-in, so an arm64-only install simply leaves the profiles off.
+ARM64_EXEMPT_SERVICES = {"comfyui", "moneyprinter", "lora-trainer", "musetalk"}
 
 # Issue #122 P2: the isolated MoneyPrinterTurbo runtime must never become part of
 # a Native install. A role that pulls it in would make the appliance depend on an

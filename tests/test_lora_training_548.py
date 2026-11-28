@@ -182,6 +182,10 @@ def test_lora_dispatcher_capability_and_outbound_only_compose():
 
     dockerfile = (ROOT / "docker" / "lora-trainer" / "Dockerfile").read_text(encoding="utf-8")
     assert "ostris/ai-toolkit" in dockerfile
+    assert '"$AI_TOOLKIT_COMMIT"' in dockerfile
+    assert "git init /opt/ai-toolkit" in dockerfile
+    assert "git -C /opt/ai-toolkit checkout --detach FETCH_HEAD" in dockerfile
+    assert "git clone" not in dockerfile
     assert "services.lora_trainer_service:app" in dockerfile
     assert inbound_port_violations(ROOT / "deploy" / "docker-compose.yml") == []
 
@@ -231,3 +235,34 @@ def test_core_queues_lora_and_imports_model_metadata(monkeypatch):
     loaded = next(item for item in job.artifacts if item.artifact_id == result.json()["artifact_id"])
     assert loaded.metadata == contract
     assert (store.root / job.job_id / loaded.path).read_bytes() == data
+
+
+def test_lora_trainer_service_imports_in_isolated_dockerfile_context(tmp_path):
+    import os
+    import re
+    import shutil
+    import subprocess
+    import sys
+
+    dockerfile = (ROOT / "docker" / "lora-trainer" / "Dockerfile").read_text(encoding="utf-8")
+    copied = re.findall(r"^COPY\s+(\S+)\s+/app/(\S+)\s*$", dockerfile, re.MULTILINE)
+    assert copied, "docker/lora-trainer/Dockerfile must declare COPY instructions"
+    for src, dst in copied:
+        src_path = ROOT / src
+        dst_path = tmp_path / dst
+        if src_path.is_dir():
+            shutil.copytree(src_path, dst_path)
+        else:
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_path, dst_path)
+
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(tmp_path)}
+    result = subprocess.run(
+        [sys.executable, "-c", "import services.lora_trainer_service as m; assert m.app is not None"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

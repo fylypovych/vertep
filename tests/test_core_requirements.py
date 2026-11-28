@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LOCAL = {"adapters", "core", "lab", "scripts", "worker"}
+LOCAL = {"adapters", "core", "lab", "publishers", "scripts", "worker"}  # all copied into the CORE image
 # Imported names that come with a declared package or are optional (guarded imports).
 PROVIDED = {"pydantic": "fastapi", "starlette": "fastapi", "torch": None}
 DISTRIBUTION = {"yaml": "pyyaml"}

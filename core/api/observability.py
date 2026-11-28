@@ -186,18 +186,56 @@ def security_check():
 _CERT_NAMES = {"server_certificate": "Сертифікат сервера", "server_key": "Ключ сервера",
                "node_ca": "CA вузлів"}
 
-_WEAK_VALUE_MARKERS = ("replace", "changeme", "change-me", "example", "<your", "todo", "test")
+
+def _effective_secret_store_passphrase() -> str:
+    from ..first_run import read_secret_store_passphrase
+    try:
+        return read_secret_store_passphrase()
+    except RuntimeError:
+        return ""
+
+
+def _effective_postgres_password() -> str:
+    value = os.getenv("POSTGRES_PASSWORD", "")
+    if value:
+        return value
+    password_file = os.getenv("POSTGRES_PASSWORD_FILE", "")
+    if password_file:
+        try:
+            return Path(password_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+    return ""
 
 
 def _env_weak_values() -> dict[str, str]:
-    fields = ("ADMIN_PASSWORD", "NODE_API_TOKEN", "POSTGRES_PASSWORD",
-              "SECRET_STORE_PASSPHRASE", "SESSION_SECRET")
+    from ..security import (
+        SECRET_MIN_LENGTH,
+        admin_credentials_status,
+        has_weak_value_marker,
+        password_policy_violations,
+    )
+
     weak: dict[str, str] = {}
-    for name in fields:
-        value = os.getenv(name, "")
-        lowered = value.lower()
-        if not value or len(value) < 16 or any(marker in lowered for marker in _WEAK_VALUE_MARKERS):
-            weak[name] = value
+
+    # #553 AC9: enforce the single password policy for ADMIN_PASSWORD and accept
+    # administrators configured via First Run / user store when no env fallback is set.
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if admin_password:
+        if password_policy_violations(admin_password):
+            weak["ADMIN_PASSWORD"] = ""
+    elif admin_credentials_status().get("state") != "configured":
+        weak["ADMIN_PASSWORD"] = ""
+
+    secret_fields = (
+        ("NODE_API_TOKEN", os.getenv("NODE_API_TOKEN", "")),
+        ("POSTGRES_PASSWORD", _effective_postgres_password()),
+        ("SECRET_STORE_PASSPHRASE", _effective_secret_store_passphrase()),
+        ("SESSION_SECRET", os.getenv("SESSION_SECRET", "")),
+    )
+    for name, value in secret_fields:
+        if not value or len(value) < SECRET_MIN_LENGTH or has_weak_value_marker(value):
+            weak[name] = ""
     return weak
 
 
@@ -205,7 +243,7 @@ def _secret_store_status() -> dict:
     from ..first_run import inspect_data_key
     state = inspect_data_key()
     sealed = state.get("sealed")
-    passphrase_configured = bool(os.getenv("SECRET_STORE_PASSPHRASE") or os.getenv("SECRET_STORE_PASSPHRASE_FILE"))
+    passphrase_configured = bool(_effective_secret_store_passphrase())
     sealing_required = os.getenv("REQUIRE_SECRET_KEY_SEALING", "false").lower() == "true"
     if sealed is True and state.get("unsealable") is False:
         # Fail-closed: a sealed key the Core cannot open breaks every secret.
@@ -293,8 +331,8 @@ def _effective_config_summary() -> dict:
         "admin_password_set": admin["state"] == "configured",
         "admin_credentials": admin,
         "node_api_token_set": bool(os.getenv("NODE_API_TOKEN")),
-        "postgres_password_set": bool(os.getenv("POSTGRES_PASSWORD")),
-        "secret_store_passphrase_set": bool(os.getenv("SECRET_STORE_PASSPHRASE") or os.getenv("SECRET_STORE_PASSPHRASE_FILE")),
+        "postgres_password_set": bool(_effective_postgres_password()),
+        "secret_store_passphrase_set": bool(_effective_secret_store_passphrase()),
         "session_secret_set": bool(os.getenv("SESSION_SECRET")),
         "llm_provider": os.getenv("VERTEP_LLM_PROVIDER", ""),
         "tts_provider": os.getenv("TTS_PROVIDER", ""),

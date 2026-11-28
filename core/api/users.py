@@ -125,8 +125,11 @@ def _stored(username: str) -> dict:
 @router.put("/api/settings/users/{username}")
 def update_user(username: str, payload: dict, request: Request):
     from core.first_run import password_hash, save_user
+    from core.security import _normalize_role, revoke_user_sessions
     actor = _require_admin(request)
     record = _stored(username)
+    previous_role = _normalize_role(record.get("role", "moderator")) or "moderator"
+    password_changed = False
     if "role" in payload:
         role = _role(payload["role"])
         if username == actor and role != "admin":
@@ -138,13 +141,18 @@ def update_user(username: str, payload: dict, request: Request):
         record.pop("brands", None)
     if payload.get("password"):
         record["password_hash"] = password_hash(_password(payload["password"]))
+        password_changed = True
     save_user(username, record)
+    new_role = _normalize_role(record.get("role", "moderator")) or "moderator"
+    if new_role != previous_role or password_changed:
+        revoke_user_sessions(username)
     return next(item for item in _listing() if item["user"] == username)
 
 
 @router.delete("/api/settings/users/{username}")
 def delete_user(username: str, request: Request):
     from core.first_run import _write, user_store
+    from core.security import revoke_user_sessions
     actor = _require_admin(request)
     _stored(username)
     if username == actor:
@@ -152,6 +160,7 @@ def delete_user(username: str, request: Request):
     users = user_store()
     users.pop(username, None)
     _write("users.json", users)
+    revoke_user_sessions(username)
     return {"deleted": username}
 
 

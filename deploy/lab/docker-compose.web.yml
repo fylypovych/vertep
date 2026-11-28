@@ -71,7 +71,7 @@ services:
   # volume), publishes nothing and starts only when asked:
   #   docker compose -f docker-compose.web.yml --profile eval run --rm lab-eval eval lm-eval --endpoint http://<ollama>:11434
   lab-eval:
-    image: ${LAB_CONTROL_IMAGE:-ghcr.io/fylypovych/vertep-lab-control:dev}
+    image: ${LAB_EVAL_IMAGE:-ghcr.io/fylypovych/vertep-lab-eval:dev}
     profiles: ["eval"]
     entrypoint: ["python", "-m", "lab.cli"]
     command: ["eval", "list"]

@@ -231,13 +231,24 @@ def check_publisher(url: str | None = None) -> tuple[bool, str]:
     return _http_get(target, timeout=10)
 
 
-def check_backup(root: str | None = None) -> tuple[bool, str]:
+def check_backup(root: str | None = None, service_url: str | None = None) -> tuple[bool, str]:
+    """#553 AC2: the local directory is not enough — the Backup Service must report healthy.
+
+    A configured ``BACKUP_URL`` whose ``/health`` is not 200 (503, timeout, unreachable)
+    makes Backup not ready even when CORE can write to its own ``backups`` directory.
+    """
     target = root or os.getenv("BACKUP_ROOT", str(_PROJECT_ROOT / "backups"))
     try:
         Path(target).mkdir(parents=True, exist_ok=True)
-        return True, f"writable: {target}"
     except Exception as error:
         return False, str(error)[:200]
+    url = (service_url if service_url is not None else os.getenv("BACKUP_URL", "")).strip()
+    if url.startswith(("http://", "https://")):
+        ok, detail = _http_get(url.rstrip("/") + "/health", timeout=5)
+        if not ok:
+            return False, "health_backup_service_unavailable"
+        return True, f"writable: {target}; service: {detail}"
+    return True, f"writable: {target}"
 
 
 def check_monitoring(prometheus_url: str | None = None) -> tuple[bool | None, str]:

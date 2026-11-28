@@ -290,3 +290,34 @@ def test_core_dispatches_and_persists_transcription(monkeypatch):
     artifact_id = response.json()["artifact_id"]
     transcript = client.get(f"/api/jobs/{job.job_id}/artifacts/{artifact_id}/download")
     assert transcript.json()["text"] == "Привіт, Україно! Тест розпізнавання."
+
+
+def test_stt_service_imports_in_isolated_dockerfile_context(tmp_path):
+    import os
+    import re
+    import shutil
+    import subprocess
+    import sys
+
+    dockerfile = (ROOT / "docker" / "stt" / "Dockerfile").read_text(encoding="utf-8")
+    copied = re.findall(r"^COPY\s+(\S+)\s+/app/(\S+)\s*$", dockerfile, re.MULTILINE)
+    assert copied, "docker/stt/Dockerfile must declare COPY instructions"
+    for src, dst in copied:
+        src_path = ROOT / src
+        dst_path = tmp_path / dst
+        if src_path.is_dir():
+            shutil.copytree(src_path, dst_path)
+        else:
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_path, dst_path)
+
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(tmp_path)}
+    result = subprocess.run(
+        [sys.executable, "-c", "import services.stt_service as m; assert m.app is not None"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

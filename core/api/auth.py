@@ -160,9 +160,16 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         if request.method != "GET":
             path = request.url.path
             operating_state = get_system_state()
+            state_name = operating_state.get("state")
+            restore_heartbeat = (
+                state_name == "RECOVERING"
+                and request.method == "POST"
+                and path == "/api/workers/heartbeat"
+            )
             if (str(operating_state.get("operation_id") or "").startswith("restore:")
-                    and operating_state.get("state") in {"MAINTENANCE", "RECOVERING"}
+                    and state_name in {"MAINTENANCE", "RECOVERING"}
                     and path not in {"/api/system/state", "/api/session"}
+                    and not restore_heartbeat
                     and not (path.startswith("/api/system/backups/") and "/restore" in path)):
                 return self._secure(Response("Restore is in progress; writes are blocked", 423))
             operation = None

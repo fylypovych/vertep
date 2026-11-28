@@ -157,6 +157,7 @@ class Impact:
     components: list[str] = field(default_factory=list)
     tests: list[str] = field(default_factory=list)
     reasons: dict[str, list[str]] = field(default_factory=dict)
+    ignored: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"full_suite": self.full_suite, "components": self.components, "tests": self.tests,
@@ -181,6 +182,7 @@ def impact(changed: list[str], registry: dict | None = None) -> Impact:
 
     for path in sorted({p.strip().lstrip("./") for p in changed if p.strip()}):
         if _matches(path, registry.get("no_test_impact", [])):
+            result.ignored.append(path)
             continue
         if _matches(path, registry["shared_contracts"]):
             for component, spec in components.items():

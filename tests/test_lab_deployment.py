@@ -21,7 +21,7 @@ from lab.workspace import (FORBIDDEN_ENVIRONMENT, FORBIDDEN_PATHS,
 REPOSITORY = Path(__file__).parents[1]
 SHIPPED_COMPOSE = ("deploy/lab/docker-compose.yml", "deploy/lab/docker-compose.web.yml")
 SHIPPED_DOCKERFILES = ("deploy/lab/Dockerfile", "deploy/lab/Dockerfile.sandbox",
-                        "deploy/lab/Dockerfile.web")
+                        "deploy/lab/Dockerfile.web", "deploy/lab/Dockerfile.eval")
 
 
 def test_working_copy_isolation_isolated_developer_copy():

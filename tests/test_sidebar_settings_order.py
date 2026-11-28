@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def sidebar_settings_items() -> list[tuple[str, str]]:
     text = (ROOT / "web-v2/src/app/layout/sidebar.component.ts").read_text(encoding="utf-8")
-    body = text[text.index("navGroups: SidebarGroup[] = ["):text.index("moduleItems = signal")]
+    body = text[text.index("navGroups: SidebarGroup[] = ["):text.index("moduleItems = ")]
     items = []
     for block in re.finditer(r"id: 'settings-([a-z-]+)'.*?label: '([^']+)'", body, re.S):
         items.append((block.group(1), block.group(2)))

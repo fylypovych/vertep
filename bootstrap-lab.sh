@@ -89,11 +89,15 @@ assert manifest["placement"]["target"] == "isolated_lab"
 assert manifest["provenance"]["repository"] in trust["repositories"]
 images = json.loads(base64.b64decode(package["files"]["images.json"]))
 pinned = re.compile(r"[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}")
-assert set(images) == {"lab-control", "lab-web"} and all(pinned.fullmatch(v) for v in images.values())
+assert {"lab-control", "lab-web"} <= set(images) <= {"lab-control", "lab-web", "lab-eval"} and all(pinned.fullmatch(v) for v in images.values())
 assert images["lab-control"] == manifest["container"]["image"]
 with open(f"{root}/docker-compose.yml", "wb") as handle:
     handle.write(base64.b64decode(package["files"]["docker-compose.yml"]))
-print(f"LAB_CONTROL_IMAGE={images['lab-control']}\nLAB_WEB_IMAGE={images['lab-web']}\nLAB_VERSION={manifest['version']}")
+lines = [f"LAB_CONTROL_IMAGE={images['lab-control']}", f"LAB_WEB_IMAGE={images['lab-web']}"]
+if "lab-eval" in images:
+    lines.append(f"LAB_EVAL_IMAGE={images['lab-eval']}")
+lines.append(f"LAB_VERSION={manifest['version']}")
+print("\n".join(lines))
 PY
   set_value(){ sed -i "/^$1=/d" "$env_file"; printf '%s=%s\n' "$1" "$2" >> "$env_file"; }
   while IFS='=' read -r name value; do set_value "$name" "$value"; done < "$package/images.env"

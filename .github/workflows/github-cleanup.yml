@@ -1,0 +1,46 @@
+name: GitHub Cleanup
+
+# Owner decision 28.11.2026: every Monday at midnight (Kyiv winter time, 22:00 UTC on
+# Sunday; 01:00 in summer time) delete workflow runs that did not pass, except the newest
+# run of each workflow, and keep only four Vertep releases: the latest and the three newest
+# earlier ones whose commit passed CI, Browser E2E and Vertep Release. Deleted releases keep
+# their Git tags. Logic and safeguards: scripts/github-cleanup.py.
+
+on:
+  schedule:
+    - cron: "0 22 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Лише показати, що буде видалено'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: github-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Delete failed runs and old Vertep releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            python scripts/github-cleanup.py --dry-run
+          else
+            python scripts/github-cleanup.py
+          fi

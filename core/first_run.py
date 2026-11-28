@@ -95,14 +95,23 @@ def _write(name: str, value: dict) -> None:
     temporary.replace(path)
 
 
-def _key_encryption_key(salt: bytes) -> bytes | None:
-    passphrase = os.getenv("SECRET_STORE_PASSPHRASE", "")
+def read_secret_store_passphrase() -> str:
+    """Return the effective secret-store passphrase from file or environment.
+
+    Raises ``RuntimeError`` when ``SECRET_STORE_PASSPHRASE_FILE`` is configured
+    but cannot be read.
+    """
     passphrase_file = os.getenv("SECRET_STORE_PASSPHRASE_FILE", "")
     if passphrase_file:
         try:
-            passphrase = Path(passphrase_file).read_text(encoding="utf-8").strip()
+            return Path(passphrase_file).read_text(encoding="utf-8").strip()
         except OSError as error:
             raise RuntimeError("Secret-store passphrase file is unavailable") from error
+    return os.getenv("SECRET_STORE_PASSPHRASE", "")
+
+
+def _key_encryption_key(salt: bytes) -> bytes | None:
+    passphrase = read_secret_store_passphrase()
     if not passphrase:
         if os.getenv("REQUIRE_SECRET_KEY_SEALING", "false").lower() == "true":
             raise RuntimeError("Secret-store key sealing is required but no passphrase is configured")
@@ -469,8 +478,12 @@ def complete_setup(name: str, username: str, password: str, confirmation: str,
         raise ValueError("Administrator login must contain 3-64 letters, numbers, '_' or '-'")
     if password != confirmation:
         raise ValueError("Password confirmation does not match")
-    if len(password) < 12:
-        raise ValueError("Administrator password must contain at least 12 characters")
+    from .security import PASSWORD_MIN_LENGTH, password_policy_violations
+    if not password or len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Administrator password must contain at least {PASSWORD_MIN_LENGTH} characters")
+    violations = password_policy_violations(password)
+    if violations:
+        raise ValueError(violations[0])
     if backend not in {"ollama", "openai", "external", "skip"}:
         raise ValueError("Unsupported AI backend")
     from .node_registry import node_roles

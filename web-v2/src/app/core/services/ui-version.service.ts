@@ -125,6 +125,7 @@ export class UiVersionService {
       const tab = params['tab'] || 'general';
       if (tab === 'users') return { path: '/settings', queryParams: { tab: 'users' }, fragment };
       if (tab === 'security') return { path: '/settings', queryParams: { tab: 'security' }, fragment };
+      if (tab === 'publishing') return { path: '/settings', queryParams: { tab: 'publishing' }, fragment };
       if (tab === 'integrations') {
         const section = params['section'] || 'telegram';
         return { path: '/settings', queryParams: { tab: section }, fragment };

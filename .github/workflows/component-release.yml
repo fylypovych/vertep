@@ -53,8 +53,13 @@ jobs:
           python scripts/component-release.py impact --base "$base" --head "$GITHUB_SHA" > impact.json
           cat impact.json
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
+          import json, sys
           impact = json.load(open("impact.json"))
+          if not impact["reasons"] and not impact.get("ignored") and not impact.get("changed_count"):
+              # Nothing changed between base and head (e.g. a dispatch with base = the
+              # released commit): nothing was tested or published, so the run must not be green.
+              print("::error::Немає змін між base і head: компоненти не перевірено й не випущено", file=sys.stderr)
+              sys.exit(1)
           print("full_suite=" + ("true" if impact["full_suite"] else "false"))
           print("components=" + ",".join(impact["components"]))
           print("tests=" + " ".join(impact["tests"]))

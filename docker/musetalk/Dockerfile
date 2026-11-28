@@ -19,12 +19,13 @@ RUN set -eux; \
     git -C /opt/musetalk checkout --detach FETCH_HEAD; \
     python3 -m pip install --index-url https://download.pytorch.org/whl/cu118 torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2; \
     grep -viE '^\s*(insightface|antelopev2|buffalo_)' /opt/musetalk/requirements.txt > /tmp/musetalk-requirements.txt; \
-    python3 -m pip install -r /tmp/musetalk-requirements.txt fastapi==0.115.6 uvicorn[standard]==0.34.0 pyyaml; \
+    python3 -m pip install -r /tmp/musetalk-requirements.txt fastapi==0.115.6 uvicorn[standard]==0.34.0 httpx==0.28.1 pyyaml; \
     python3 -m pip install --only-binary=mmcv --find-links https://download.openmmlab.com/mmcv/dist/cu118/torch2.0/index.html mmcv==2.0.1 mmengine==0.10.7 mmdet==3.1.0 mmpose==1.1.0; \
     rm -f /tmp/musetalk-requirements.txt; \
     python3 -c "import importlib.util, sys; sys.exit(1 if importlib.util.find_spec('insightface') else 0)"
 
 COPY adapters /app/adapters
+COPY publishers /app/publishers
 COPY services /app/services
 
 USER 10001:10001

@@ -303,3 +303,54 @@ def test_expired_contract_fails_validity_window(tmp_path):
     assert not report["passed"]
     assert not gates["contract_in_validity_window"]["passed"]
     assert not gates["release_artifact_gates"]["passed"]
+
+
+def test_release_workflow_full_matrix_passes_qualification(tmp_path):
+    """Simulate assemble-image-lock + qualify-release for the exact release.yml matrix."""
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))
+    matrix = workflow["jobs"]["build-images"]["strategy"]["matrix"]["include"]
+    matrix_by_name = {entry["name"]: entry for entry in matrix}
+    assert {"stt", "lora-trainer", "musetalk"} <= matrix_by_name.keys()
+
+    metadata_dir = tmp_path / "image-metadata"
+    metadata_dir.mkdir()
+    for entry in matrix:
+        name = entry["name"]
+        platforms = [p.strip() for p in str(entry["platforms"]).split(",") if p.strip()]
+        (metadata_dir / f"{name}.json").write_text(json.dumps({
+            "name": name,
+            "reference": f"ghcr.io/vertep/vertep-{name}:0.0.1.0",
+            "digest": "sha256:" + hashlib.sha256(name.encode()).hexdigest(),
+            "platforms": platforms,
+        }), encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location("assemble_lock", ROOT / "scripts/assemble-image-lock.py")
+    assembler = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(assembler)
+    assembled = assembler.assemble(metadata_dir)
+
+    assert assembled["stt"]["platforms"] == ["linux/amd64", "linux/arm64"]
+    assert assembled["lora-trainer"]["platforms"] == ["linux/amd64"]
+    assert assembled["musetalk"]["platforms"] == ["linux/amd64"]
+
+    bundle, private, public, version, sequence, _ = artifact_fixture(tmp_path)
+    (bundle / "images.json").write_text(json.dumps(assembled), encoding="utf-8")
+    build_manifest(bundle, private, version, sequence, bundle / "images.json")
+    report, gates = qualify_artifact(bundle, public, expected_source_sha="c" * 40)
+    failures = [check for check in report["checks"] if not check["passed"]]
+    assert not failures, failures
+    assert gates["all_required_images_present"]["passed"]
+    assert gates["all_images_have_required_platforms_and_digests"]["passed"]
+
+    # stt is multi-arch and must fail qualification if arm64 is dropped
+    broken = json.loads(json.dumps(assembled))
+    broken["stt"]["platforms"] = ["linux/amd64"]
+    (bundle / "images.json").write_text(json.dumps(broken), encoding="utf-8")
+    build_manifest(bundle, private, version, sequence, bundle / "images.json")
+    bad_report, bad_gates = qualify_artifact(bundle, public, expected_source_sha="c" * 40)
+    assert not bad_report["passed"]
+    assert not bad_gates["all_images_have_required_platforms_and_digests"]["passed"]
+    assert "stt:" in bad_gates["all_images_have_required_platforms_and_digests"]["detail"]

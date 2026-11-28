@@ -67,5 +67,10 @@ def test_order_and_optional_video_step(tmp_path, params, expected_video):
 
 
 def test_template_is_not_enabled_by_the_install():
+    import yaml
+
     assert "WORKFLOW_DEFINITIONS_ROOT" not in Path("bootstrap.sh").read_text(encoding="utf-8")
-    assert "WORKFLOW_DEFINITIONS_ROOT" not in Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
+    compose = yaml.safe_load(Path("deploy/docker-compose.yml").read_text(encoding="utf-8"))
+    core_env = compose["services"]["core"]["environment"]
+    assert core_env["WORKFLOW_DEFINITIONS_ROOT"] == "/data/workflow-definitions"
+    assert core_env["WORKFLOW_DEFAULT_MODE"] == "static"

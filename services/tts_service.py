@@ -260,6 +260,46 @@ def _validate_espeak_language(language: str | None, installed: list[str]) -> Non
         raise HTTPException(422, f"Мова {language!r} не підтримується цим espeak runtime")
 
 
+def normalize_wav(audio: bytes) -> bytes:
+    """Return a WAV whose RIFF and ``data`` sizes match the real PCM length (#553 AC1).
+
+    ``espeak-ng --stdout`` streams a header with a placeholder size, so decoders see
+    a wrong duration. The chunks are re-walked and both sizes are rewritten from the
+    bytes actually present; a payload that is not a decodable PCM WAV is refused.
+    """
+    import struct
+    import wave
+    from io import BytesIO
+
+    if len(audio) < 12 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+        raise HTTPException(502, "TTS engine повернув некоректний WAV")
+    position, fmt, data_at = 12, None, None
+    while position + 8 <= len(audio):
+        chunk_id, size = audio[position:position + 4], struct.unpack_from("<I", audio, position + 4)[0]
+        body = position + 8
+        if chunk_id == b"fmt ":
+            fmt = (body, min(size, len(audio) - body))
+        elif chunk_id == b"data":
+            data_at = body
+            break
+        position = body + size + (size & 1)
+    if fmt is None or data_at is None or fmt[1] < 16:
+        raise HTTPException(502, "TTS engine повернув некоректний WAV")
+    pcm = audio[data_at:]
+    header = bytearray(audio[:data_at])
+    struct.pack_into("<I", header, data_at - 4, len(pcm))
+    struct.pack_into("<I", header, 4, len(header) - 8 + len(pcm))
+    fixed = bytes(header) + pcm
+    try:
+        with wave.open(BytesIO(fixed)) as handle:
+            frame_bytes = handle.getnchannels() * handle.getsampwidth()
+            if handle.getnframes() == 0 or frame_bytes == 0 or handle.getnframes() * frame_bytes != len(pcm) - len(pcm) % frame_bytes:
+                raise HTTPException(502, "TTS engine повернув некоректний WAV")
+    except (wave.Error, EOFError) as error:
+        raise HTTPException(502, "TTS engine повернув некоректний WAV") from error
+    return fixed
+
+
 def _synthesize_with_piper(request: SynthesisRequest, voice_id: str, model_path: Path) -> dict:
     executable = _piper_executable()
     if not executable:
@@ -280,8 +320,7 @@ def _synthesize_with_piper(request: SynthesisRequest, voice_id: str, model_path:
             audio = output_path.read_bytes()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
         raise HTTPException(502, "Piper TTS engine не зміг синтезувати аудіо") from error
-    if not audio.startswith(b"RIFF"):
-        raise HTTPException(502, "Piper TTS engine повернув некоректний WAV")
+    audio = normalize_wav(audio)
     return {
         "audio_base64": base64.b64encode(audio).decode("ascii"),
         "mime_type": "audio/wav",
@@ -309,10 +348,9 @@ def _synthesize_with_espeak(request: SynthesisRequest, installed: list[str]) -> 
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         raise HTTPException(502, "TTS engine не зміг синтезувати аудіо") from error
-    if not result.stdout.startswith(b"RIFF"):
-        raise HTTPException(502, "TTS engine повернув некоректний WAV")
+    audio = normalize_wav(result.stdout)
     return {
-        "audio_base64": base64.b64encode(result.stdout).decode("ascii"),
+        "audio_base64": base64.b64encode(audio).decode("ascii"),
         "mime_type": "audio/wav",
         "engine": "espeak-ng",
         "voice": request.voice,

@@ -13,6 +13,9 @@ server {
   ssl_verify_client optional;
   ssl_protocols TLSv1.2 TLSv1.3;
   client_max_body_size 256m;
+  # #553 AC8: HSTS on every HTTPS response (inherited by CORE locations that
+  # declare no location-level add_header, and repeated in location / below).
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
   # #504: the panel is a separate web-ui container. Docker DNS is resolved per
   # request, so a stopped or missing web-ui never stops the proxy or CORE.
   resolver 127.0.0.11 valid=10s ipv6=off;
@@ -22,6 +25,17 @@ server {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-Proto https;
+    # #553 AC8: hide upstream copies to prevent duplicates while enforcing
+    # Web UI HTML security headers + HSTS (location add_header overrides server).
+    proxy_hide_header Content-Security-Policy;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header Referrer-Policy;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-MhtPZXr7+LpJUY5qtMutB+qWfQtMaPccfe7QXtCcEYc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss:; frame-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
   }
   location ~ ^/api/(workers/heartbeat|tasks/(claim|renew|cancellations|result)|logs/ingest|node/status|nodes/[a-z0-9-]+/(renew|token)) {
     if ($ssl_client_verify != SUCCESS) { return 401; }

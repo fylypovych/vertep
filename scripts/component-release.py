@@ -48,13 +48,17 @@ def cmd_impact(args) -> dict:
     if args.files is not None:
         changed = args.files
     elif not args.base or set(args.base) == {"0"}:
-        return {"full_suite": True, "components": [], "tests": [], "reasons": {"unknown": ["no base commit"]}}
+        return {"full_suite": True, "components": [], "tests": [], "reasons": {"unknown": ["no base commit"]},
+                "changed_count": 0, "ignored": []}
     else:
         try:
-            changed = _git("diff", "--name-only", args.base, args.head).split()
+            changed = _git("diff", "--name-only", args.base, args.head).splitlines()
         except subprocess.CalledProcessError:
-            return {"full_suite": True, "components": [], "tests": [], "reasons": {"unknown": ["base not available"]}}
-    return c.impact(changed).to_dict()
+            return {"full_suite": True, "components": [], "tests": [], "reasons": {"unknown": ["base not available"]},
+                    "changed_count": 0, "ignored": []}
+    normalized = sorted({p.strip().lstrip("./") for p in changed if p.strip()})
+    result = c.impact(normalized)
+    return {**result.to_dict(), "changed_count": len(normalized), "ignored": result.ignored}
 
 
 def cmd_plan(args) -> dict:

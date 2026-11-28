@@ -50,6 +50,7 @@ FILES = {
     "deploy/docker-compose.amd.yml": "docker-compose.amd.yml",
     "deploy/docker-compose.nvidia.yml": "docker-compose.nvidia.yml",
     "deploy/proxy.conf": "runtime/proxy.conf",
+    "deploy/workflow-definitions/standard.yaml": "workflow-definitions/standard.yaml",
     "config/node_roles.json": "config/node_roles.json",
     "core/deployment_plan.py": "runtime/deployment-plan.py",
     # apply-deployment.py (vertep-deployment.service) runs on the host and imports it;

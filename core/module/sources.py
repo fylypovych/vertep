@@ -18,6 +18,7 @@ import base64
 import hashlib
 import json
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -68,12 +69,20 @@ def parse_source(value) -> Source:
     raise SourceError("Source must be a GitHub repository URL or an https Module Registry index")
 
 
+def _source_timeout() -> float:
+    import os
+    try:
+        return max(1.0, min(30.0, float(os.getenv("VERTEP_MODULE_SOURCE_TIMEOUT_SECONDS", "10"))))
+    except ValueError:
+        return 10.0
+
+
 def _default_fetch(url: str) -> bytes:
     if not url.startswith("https://"):
         raise SourceError("Only https sources are allowed")
     request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json, application/json",
                                                    "User-Agent": "vertep-core"})
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (https enforced)
+    with urllib.request.urlopen(request, timeout=_source_timeout()) as response:  # noqa: S310 (https enforced)
         data = response.read(MAX_DOWNLOAD + 1)
     if len(data) > MAX_DOWNLOAD:
         raise SourceError("Package is too large")
@@ -86,9 +95,17 @@ class SourceResolver:
     def __init__(self, fetch: Callable[[str], bytes] = _default_fetch) -> None:
         self.fetch = fetch
 
-    def releases(self, source: Source, module_id: str) -> list[dict]:
+    def _fetch_cached(self, url: str, url_cache: dict[str, bytes] | None) -> bytes:
+        if url_cache is not None and url in url_cache:
+            return url_cache[url]
+        data = self.fetch(url)
+        if url_cache is not None:
+            url_cache[url] = data
+        return data
+
+    def releases(self, source: Source, module_id: str, *, _url_cache: dict[str, bytes] | None = None) -> list[dict]:
         if source.type == "registry":
-            index = json.loads(self.fetch(source.location))
+            index = json.loads(self._fetch_cached(source.location, _url_cache))
             entries = (index.get("modules") or {}).get(module_id) or []
             result = []
             for entry in entries:
@@ -98,7 +115,9 @@ class SourceResolver:
                                "unsupported": bool(entry.get("unsupported"))})
             return result
         owner_repo = source.location
-        releases = json.loads(self.fetch(f"https://api.github.com/repos/{owner_repo}/releases?per_page=100"))
+        releases = json.loads(
+            self._fetch_cached(f"https://api.github.com/repos/{owner_repo}/releases?per_page=100", _url_cache)
+        )
         pattern = re.compile(TAG_RE.format(module=re.escape(module_id)))
         result = []
         for release in releases:
@@ -111,7 +130,9 @@ class SourceResolver:
                 continue
             digest = None
             if "package.json.sha256" in assets:
-                digest = self.fetch(assets["package.json.sha256"]["browser_download_url"]).decode().split()[0]
+                digest = self._fetch_cached(
+                    assets["package.json.sha256"]["browser_download_url"], _url_cache
+                ).decode().split()[0]
             result.append({"version": match.group(1), "stable": not release.get("prerelease"),
                            "package_url": package["browser_download_url"], "sha256": digest, "unsupported": False})
         return result
@@ -295,6 +316,12 @@ def _log(message: str, operation_id: str | None, **fields) -> None:
     update_log(message, operation_id, **fields)
 
 
+# #553 AC5: the API builds a new ModuleSources per request, so the recommendations snapshot
+# lives here, one per lifecycle root, and survives between requests.
+_SNAPSHOTS: dict[str, dict] = {}
+_SNAPSHOTS_LOCK = threading.Lock()
+
+
 class ModuleSources:
     """Install/update from pinned sources through the platform lifecycle."""
 
@@ -338,6 +365,12 @@ class ModuleSources:
         temporary.write_text(json.dumps({"module_id": module_id, "source": source.to_dict(), "version": version,
                                          "sha256": digest, "pinned_at": time.time()}, indent=2), encoding="utf-8")
         temporary.replace(path)
+        self._snapshot_state()["checked_at"] = None  # a new pin makes the recommendations out of date
+
+    def _snapshot_state(self) -> dict:
+        with _SNAPSHOTS_LOCK:
+            return _SNAPSHOTS.setdefault(str(Path(self.lifecycle.root).resolve()),
+                                         {"recommendations": [], "checked_at": None, "refreshing": False})
 
     def _save_history(self, module_id: str, history: list[str]) -> None:
         path = self.pins / f"{module_id}.json"
@@ -485,3 +518,45 @@ class ModuleSources:
                            "urgent": bool(fixes) and report["ok"], "checks": report["checks"],
                            "warnings": report["warnings"], "reasons": reasons})
         return result
+
+    def recommendations_snapshot(self, *, refresh: bool = False) -> dict:
+        """#553 AC5: an ordinary GET never waits for the pinned sources.
+
+        The last computed recommendations are returned at once (``stale`` once older than
+        ``VERTEP_RECOMMENDATIONS_TTL_SECONDS``, 300 by default). A cold or stale cache starts a
+        background refresh with the bounded source timeout; ``refresh=True`` computes and stores
+        the result synchronously.
+        """
+        import os
+        try:
+            ttl = max(1.0, float(os.getenv("VERTEP_RECOMMENDATIONS_TTL_SECONDS", "300")))
+        except ValueError:
+            ttl = 300.0
+        lock = _SNAPSHOTS_LOCK
+        state = self._snapshot_state()
+
+        def compute() -> None:
+            try:
+                items = self.recommendations()
+                with lock:
+                    state.update({"recommendations": items, "checked_at": time.time()})
+            finally:
+                with lock:
+                    state["refreshing"] = False
+
+        if refresh:
+            with lock:
+                state["refreshing"] = True
+            compute()
+        else:
+            with lock:
+                age = None if state["checked_at"] is None else time.time() - state["checked_at"]
+                start = (age is None or age > ttl) and not state["refreshing"]
+                if start:
+                    state["refreshing"] = True
+            if start:
+                threading.Thread(target=compute, name="module-recommendations", daemon=True).start()
+        with lock:
+            age = None if state["checked_at"] is None else time.time() - state["checked_at"]
+            return {"recommendations": list(state["recommendations"]), "checked_at": state["checked_at"],
+                    "stale": age is None or age > ttl, "refreshing": state["refreshing"]}

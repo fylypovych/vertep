@@ -13,7 +13,9 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-pip; \
     rm -rf /var/lib/apt/lists/*; \
     useradd --system --uid 10001 --home /nonexistent vertep; \
-    git clone --depth 1 https://github.com/ostris/ai-toolkit.git /opt/ai-toolkit; \
+    git init /opt/ai-toolkit; \
+    git -C /opt/ai-toolkit fetch --depth 1 https://github.com/ostris/ai-toolkit.git "$AI_TOOLKIT_COMMIT"; \
+    git -C /opt/ai-toolkit checkout --detach FETCH_HEAD; \
     git -C /opt/ai-toolkit submodule update --init --recursive; \
     python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu124 torch torchvision; \
     python3 -m pip install -r /opt/ai-toolkit/requirements.txt fastapi==0.115.6 uvicorn[standard]==0.34.0

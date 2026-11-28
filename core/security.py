@@ -23,6 +23,8 @@ SESSION_ROLES = ("admin", "moderator")
 # unknown and degrades to a moderator without brands (read-only in effect).
 PROFILE_FIELDS = ("display_name", "email")
 PASSWORD_MIN_LENGTH = 12
+SECRET_MIN_LENGTH = 16
+WEAK_VALUE_MARKERS = ("replace", "changeme", "change-me", "example", "<your", "todo", "test")
 DISPLAY_NAME_MAX_LENGTH = 80
 EMAIL_MAX_LENGTH = 254
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$")
@@ -106,7 +108,10 @@ def _session_token(user: str = "admin", role: str = "admin") -> str:
     # The token travels in a cookie, so the payload must stay ASCII-safe and must
     # not contain the ':' delimiter: a configured username may be non-ASCII.
     # The nonce makes every login its own token, so a logout revokes only that session (#442 D8).
-    payload = f"{expiry}:{quote(user, safe='')}:{quote(role, safe='')}:{secrets.token_hex(8)}"
+    # The trailing session version invalidates all prior sessions of a user after
+    # account deletion, role change, or password change without timestamp races (#556).
+    version = _user_session_version(user)
+    payload = f"{expiry}:{quote(user, safe='')}:{quote(role, safe='')}:{secrets.token_hex(8)}:{version}"
     signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{signature}"
 
@@ -192,12 +197,49 @@ def _revoked_sessions_path():
     return config_root() / "revoked-sessions.json"
 
 
+def _session_versions_path():
+    from .first_run import config_root
+    return config_root() / "session-versions.json"
+
+
 def _revoked_sessions() -> dict[str, int]:
     import json
     try:
         return {str(k): int(v) for k, v in json.loads(_revoked_sessions_path().read_text(encoding="utf-8")).items()}
     except (OSError, ValueError, TypeError, AttributeError):
         return {}
+
+
+def _session_versions() -> dict[str, int]:
+    import json
+    try:
+        return {str(k): int(v) for k, v in json.loads(_session_versions_path().read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _user_session_version(user: str) -> int:
+    return _session_versions().get(user, 0)
+
+
+def revoke_user_sessions(user: str) -> int:
+    """#556: persistently invalidate every active session of ``user``.
+
+    Increments a per-user integer generation in ``session-versions.json`` (mode 0600)
+    so deletion, role changes, and password changes immediately revoke prior tokens,
+    even within the same second, and survive CORE restarts.
+    """
+    from .atomic_write import atomic_write_json
+    with _revoked_lock:
+        versions = _session_versions()
+        next_version = versions.get(user, 0) + 1
+        versions[user] = next_version
+        try:
+            atomic_write_json(_session_versions_path(), versions, mode=0o600)
+        except OSError:
+            import logging
+            logging.getLogger("core").error("User session revocation was not saved")
+        return next_version
 
 
 def revoke_session(token: str) -> None:
@@ -230,11 +272,23 @@ def _valid_session(token: str) -> tuple[str, str] | None:
         if not secret:
             return None
         payload, signature = token.rsplit(".", 1)
-        expiry, encoded_user, encoded_role = payload.split(":")[:3]  # a 4th part is the nonce
+        parts = payload.split(":")
+        if len(parts) < 3:
+            return None
+        expiry, encoded_user, encoded_role = parts[:3]  # 4th is nonce, 5th is session version
+        token_version = int(parts[4]) if len(parts) >= 5 else 0
         expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if int(expiry) > time.time() and _constant_time_equals(signature, expected):
             user = unquote(encoded_user)
-            return user, _account_role(user, unquote(encoded_role))
+            if token_version != _user_session_version(user):
+                return None
+            token_role = _account_role(user, unquote(encoded_role))
+            record = _load_all_users().get(user)
+            if isinstance(record, dict):
+                current_role = _account_role(user, str(record.get("role", "moderator")))
+                if token_role != current_role:
+                    return None
+            return user, token_role
         return None
     except (ValueError, TypeError):
         return None
@@ -275,6 +329,12 @@ def _account_record(user: str) -> tuple[dict, str] | None:
     return (record, "users") if isinstance(record, dict) else None
 
 
+def has_weak_value_marker(value: str) -> bool:
+    """Return True when ``value`` contains a placeholder, default, or test marker."""
+    lowered = value.lower()
+    return any(marker in lowered for marker in WEAK_VALUE_MARKERS)
+
+
 def password_policy() -> dict:
     """Single source of truth for the self-service password policy."""
     return {"min_length": PASSWORD_MIN_LENGTH,
@@ -282,12 +342,19 @@ def password_policy() -> dict:
 
 
 def password_policy_violations(new_password: str, old_password: str | None = None) -> list[str]:
-    """Return every policy violation of a requested new password."""
+    """Return every policy violation of a requested new password.
+
+    Shared across First Run setup, self-service password changes, user
+    management, and ``/api/security/check`` so all gates enforce one policy (#553 AC9).
+    """
     violations: list[str] = []
-    if not new_password:
+    if not new_password or not new_password.strip():
         violations.append("Новий пароль обов'язковий")
-    elif len(new_password) < PASSWORD_MIN_LENGTH:
-        violations.append(f"Пароль має містити щонайменше {PASSWORD_MIN_LENGTH} символів")
+    else:
+        if len(new_password) < PASSWORD_MIN_LENGTH:
+            violations.append(f"Пароль має містити щонайменше {PASSWORD_MIN_LENGTH} символів")
+        if has_weak_value_marker(new_password):
+            violations.append("Пароль не може містити шаблонні або тестові значення")
     if old_password is not None and new_password == old_password:
         violations.append("Новий пароль має відрізнятися від поточного")
     return violations
@@ -375,6 +442,7 @@ def set_account_password(user: str, password: str) -> bool:
     updated = dict(record)
     updated["password_hash"] = password_hash(password)
     _persist_account(user, updated, origin)
+    revoke_user_sessions(user)
     return True
 
 

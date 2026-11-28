@@ -343,6 +343,17 @@ def core_json(path: str, method: str = "GET") -> dict:
         return json.load(response)
 
 
+def _record_lifecycle_operation(state_dir: Path, state: dict) -> None:
+    """Persist non-check host update actions into core/operations.json (best-effort)."""
+    if state.get("action") not in {"update", "restart", "rollback"}:
+        return
+    try:
+        from core.operations import record_update_operation
+        record_update_operation(state, requested_by="system:update-agent", state_dir=state_dir)
+    except Exception as error:  # noqa: BLE001 - never mask the host update outcome
+        state.setdefault("log", []).append(f"{now()} operation record not updated: {error}")
+
+
 def transition(state_dir: Path, state: dict, phase: str, message: str,
                progress: int | None = None) -> None:
     from core.system_state import SystemState, set_system_state
@@ -356,6 +367,7 @@ def transition(state_dir: Path, state: dict, phase: str, message: str,
                              "message": message, "action": state.get("action")})
     if phase in SystemState.__members__:
         set_system_state(SystemState[phase], message, state.get("request_id"), state_dir)
+    _record_lifecycle_operation(state_dir, state)
 
 
 def merge_runtime_progress(state_dir: Path, state: dict) -> None:
@@ -577,8 +589,11 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
     }.get(action, "Checking signed release manifest"))
     state = {"state": "RUNNING", "phase": initial_phase, "action": action,
              "request_id": request_id, "message": initial_message, "progress": 5,
-             "updated_at": now(), "log": []}
+             "created_at": now(), "updated_at": now(), "log": []}
+    if request.get("target_version"):
+        state["target_version"] = request.get("target_version")
     atomic_json(state_dir / "status.json", state)
+    _record_lifecycle_operation(state_dir, state)
     with _wait_for_lease(state_dir, request_id, state) as lease:
         state["fence_epoch"] = lease.fence_epoch
         atomic_json(state_dir / "status.json", state)
@@ -684,7 +699,8 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             state.update({"state": "SUCCEEDED", "phase": "NORMAL", "progress": 100,
                           "message": "Update completed" if action == "update" else "Update check completed",
                           "updated_at": now()})
-            set_system_state(SystemState.NORMAL, state["message"], request_id, state_dir)
+            set_system_state(SystemState.NORMAL, state["message"],
+                             None if action == "check" else request_id, state_dir)
             return True
         except Exception as error:
             state.setdefault("log", []).append(f"{now()} {error}")
@@ -713,20 +729,25 @@ def process_request(root: Path, state_dir: Path, request_path: Path,
             else:
                 state.update({"state": "FAILED", "phase": "NORMAL"})
                 _record_system_state(state, SystemState.NORMAL, "Update stopped before installation",
-                                     request_id, state_dir)
+                                     None if action == "check" else request_id, state_dir)
             state.update({"message": str(error), "updated_at": now()})
             return False
         finally:
             # The terminal outcome joins the tamper-evident journal: status.json is
             # overwritten by the next operation, the journal keeps every result (#401 F2).
             try:
-                append_audit(state_dir, {"operation_id": request_id, "phase": "OUTCOME",
-                                         "state": state.get("state"), "action": action,
-                                         "message": state.get("message")})
+                outcome_event = {"operation_id": request_id, "phase": "OUTCOME",
+                                 "state": state.get("state"), "action": action,
+                                 "message": state.get("message")}
+                for version_field in ("current_version", "available_version", "target_version"):
+                    if state.get(version_field):
+                        outcome_event[version_field] = state[version_field]
+                append_audit(state_dir, outcome_event)
             except Exception as audit_error:  # noqa: BLE001 - never mask the outcome
                 state.setdefault("log", []).append(f"{now()} outcome not journaled: {audit_error}")
             state["log"] = state.get("log", [])[-500:]
             atomic_json(state_dir / "status.json", state)
+            _record_lifecycle_operation(state_dir, state)
             request_path.unlink(missing_ok=True)
             if state.get("state") == "FAILED":
                 marker = state_dir / "worker-update-target"

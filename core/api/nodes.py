@@ -373,10 +373,15 @@ def module_update_plan(request: Request, payload: dict = Body(default_factory=di
 
 
 @router.get("/api/nodes/module-registry/updates/recommendations")
-def module_update_recommendations(request: Request):
-    """#515: newer stable releases found in the pinned sources, with compatibility and risk."""
+def module_update_recommendations(request: Request, refresh: bool = False, probe: bool = False):
+    """#515 / #553 AC5: newer stable releases found in pinned sources, with compatibility and risk.
+
+    Ordinary GET returns cached recommendations immediately without blocking
+    network I/O; pass ``?refresh=true`` (or ``?probe=true``) to query remote
+    sources with a bounded timeout and update the cache.
+    """
     _require_admin(request)
-    return {"recommendations": _module_sources().recommendations()}
+    return _module_sources().recommendations_snapshot(refresh=bool(refresh or probe))
 
 
 @router.get("/api/nodes/module-registry/updates")

@@ -43,6 +43,7 @@ class UnixRelay(socketserver.ThreadingUnixStreamServer):
 
 class TCPRelay(socketserver.ThreadingTCPServer):
     daemon_threads = True
+    allow_reuse_address = True
 
 
 @contextmanager
@@ -52,7 +53,13 @@ def isolated_endpoint(endpoint):
     if not binary:
         raise RuntimeError("LAB eval requires bubblewrap with network namespace support")
     parsed = urlsplit(endpoint)
-    if parsed.scheme != "http" or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("LAB eval requires a plain HTTP model endpoint without a path")
     host, port = parsed.hostname, parsed.port or 80
     # Resolve the allowed service once, outside the isolated namespace.
@@ -109,12 +116,14 @@ def _run_tool(relay_path, command):
 
     with TCPRelay(("127.0.0.1", 11434), Relay) as relay:
         relay.connect = connect
-        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        server = threading.Thread(target=relay.serve_forever, daemon=True)
+        server.start()
         try:
             return subprocess.call([sys.executable, str(Path(__file__).resolve()),
                                     "--restricted-tool", *command])
         finally:
             relay.shutdown()
+            server.join(timeout=2)
 
 
 class SeccompArgument(ctypes.Structure):

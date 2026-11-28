@@ -389,6 +389,8 @@ def test_musetalk_dockerfile_and_compose_outbound_only():
     assert "TMElyralab/MuseTalk" in dockerfile
     assert "USER 10001:10001" in dockerfile
     assert "EXPOSE 8102" in dockerfile
+    assert "httpx==" in dockerfile
+    assert "COPY publishers /app/publishers" in dockerfile
     # Explicitly verify insightface is filtered out and asserted absent, never pip-installed.
     assert "grep -viE" in dockerfile
     assert "find_spec('insightface')" in dockerfile
@@ -453,3 +455,35 @@ def test_core_queues_lipsync_with_verified_audio_and_imports_video(monkeypatch):
     assert result.json()["status"] == "COMPLETED"
     artifact_id = result.json()["artifact_id"]
     assert client.get(f"/api/jobs/{job.job_id}/artifacts/{artifact_id}/download").content == video
+
+
+def test_musetalk_service_imports_in_isolated_dockerfile_context(tmp_path):
+    import os
+    import re
+    import shutil
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "docker" / "musetalk" / "Dockerfile").read_text(encoding="utf-8")
+    copied = re.findall(r"^COPY\s+(\S+)\s+/app/(\S+)\s*$", dockerfile, re.MULTILINE)
+    assert copied, "docker/musetalk/Dockerfile must declare COPY instructions"
+    for src, dst in copied:
+        src_path = root / src
+        dst_path = tmp_path / dst
+        if src_path.is_dir():
+            shutil.copytree(src_path, dst_path)
+        else:
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_path, dst_path)
+
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(tmp_path)}
+    result = subprocess.run(
+        [sys.executable, "-c", "import services.musetalk_service as m; assert m.app is not None"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

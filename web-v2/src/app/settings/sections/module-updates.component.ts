@@ -132,6 +132,7 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
   rollbackLog = signal<LogEntry[]>([]);
   error = signal<string | null>(null);
   private timer?: ReturnType<typeof setInterval>;
+  private recheck?: ReturnType<typeof setTimeout>;
 
   constructor(private http: HttpClient, private base: BaseApiService, private toast: ToastService) {}
 
@@ -149,12 +150,25 @@ export class ModuleUpdatesComponent implements OnInit, OnDestroy {
     this.timer = setInterval(() => this.loadPlans(), 2000);
   }
 
-  ngOnDestroy(): void { if (this.timer) clearInterval(this.timer); }
+  ngOnDestroy(): void {
+    if (this.timer) clearInterval(this.timer);
+    if (this.recheck) clearTimeout(this.recheck);
+  }
 
   refresh(): void {
-    this.http.get<{ recommendations: Recommendation[] }>(`${this.api}/updates/recommendations`, this.background)
-      .pipe(catchError(this.fail)).subscribe((value) => this.recommendations.set((value as { recommendations: Recommendation[] }).recommendations || []));
+    this.loadRecommendations(30);
     this.loadPlans();
+  }
+
+  /** #553 AC5: the GET returns the cached snapshot at once; while CORE refreshes it, ask again. */
+  private loadRecommendations(retries: number): void {
+    if (this.recheck) clearTimeout(this.recheck);
+    this.http.get<{ recommendations: Recommendation[]; refreshing?: boolean }>(`${this.api}/updates/recommendations`, this.background)
+      .pipe(catchError(this.fail)).subscribe((value) => {
+        const snapshot = value as { recommendations: Recommendation[]; refreshing?: boolean };
+        this.recommendations.set(snapshot.recommendations || []);
+        if (snapshot.refreshing && retries > 0) this.recheck = setTimeout(() => this.loadRecommendations(retries - 1), 1000);
+      });
   }
 
   loadPlans(): void {

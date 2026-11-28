@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.get("/api/settings/providers")
-def provider_backends():
+def provider_backends(probe: bool = False, refresh: bool = False):
     """Active backend matrix (Settings → Движки обробки).
 
     Issue #181.3: the matrix is accompanied by the activation evidence of the
@@ -25,36 +25,52 @@ def provider_backends():
     reported as a failed activation instead of a success, so the UI never shows
     a provider as effective while the node executing the tasks still uses the
     previous one.
-    """
-    from ..provider_switch import executor_backend_mismatches, worker_provider_acks, provider_activation
 
-    from ..provider_switch import provider_status_matrix
-    matrix = provider_status_matrix()
-    activation: dict[str, dict] = {}
+    Issue #553 AC5: ordinary GET computes the matrix once from local config and
+    cached state without blocking network probes; ``?probe=true`` / ``?refresh=true``
+    performs a live refresh.
+    """
+    from ..provider_switch import provider_activation, worker_provider_acks
+    from ..read_cache import nonblocking_provider_matrix, slot_mismatches
+
+    raw_matrix = nonblocking_provider_matrix(probe=bool(probe or refresh))
     current = provider_activation()
+    matrix = {slot: dict(entry) for slot, entry in raw_matrix.items()}
+    active_slot = current.get("slot")
+    if active_slot in matrix and current.get("status") in {"APPLYING", "AWAITING_WORKER"}:
+        matrix[active_slot] = {
+            **matrix[active_slot],
+            "selected_backend": matrix[active_slot].get("backend"),
+            "backend": current.get("previous_backend"),
+            "configured": current.get("previous_configured"),
+            "activation_status": current["status"],
+        }
+    acks = worker_provider_acks()
+    activation: dict[str, dict] = {}
     for slot in matrix:
-        mismatches = executor_backend_mismatches(slot)
+        mismatches = slot_mismatches(raw_matrix, slot, acks)
         activation[slot] = {"ok": not mismatches, "mismatches": mismatches}
-        if current.get("slot") == slot and current.get("status") in {"AWAITING_WORKER", "APPLYING"}:
+        if active_slot == slot and current.get("status") in {"AWAITING_WORKER", "APPLYING"}:
             activation[slot].update({"ok": False, "status": current["status"]})
-    return {"matrix": matrix, "worker_acks": worker_provider_acks(),
+    return {"matrix": matrix, "worker_acks": acks,
             "worker_activation": activation, "activation": current}
 
 
 @router.get("/api/settings/video-engine")
-def effective_video_engine(probe: bool = False):
-    """Effective video-engine configuration (Issue #122 P7).
+def effective_video_engine(probe: bool = False, refresh: bool = False):
+    """Effective video-engine configuration (Issue #122 P7, #553 AC5).
 
     ``selected``, ``effective`` and ``config_revision`` are returned together so a
     caller can prove they describe one and the same engine. No secret value is ever
-    exposed: only the reference of the secret the engine uses. ``probe=true``
-    additionally verifies readiness on the actual runtime.
+    exposed: only the reference of the secret the engine uses. ``probe=true`` (or
+    ``refresh=true``) additionally verifies readiness on the actual runtime;
+    ordinary GET never performs blocking network probes.
     """
-    from ..engine_config import effective_engine_config
-
     from ..provider_switch import provider_activation
+    from ..read_cache import nonblocking_video_engine_config
+
     activation = provider_activation()
-    result = effective_engine_config(probe=probe)
+    result = nonblocking_video_engine_config(probe=bool(probe or refresh))
     if activation.get("slot") == "video_engine" and activation.get("status") in {"APPLYING", "AWAITING_WORKER"}:
         result.update({"effective": activation.get("previous_backend"), "agree": False,
             "ready": False, "reason": "worker_activation_pending"})
@@ -176,6 +192,31 @@ def switch_provider_backend(slot: str, payload: dict):
         raise HTTPException(error.status_code, error.message) from error
 
 
+def _comfyui_applicable() -> bool:
+    """#553 AC10: ComfyUI is probed only where it can exist.
+
+    It applies when COMFYUI_URL points at an explicitly configured host, when the applied
+    deployment plan has the ``gpu`` role or a ``comfyui`` service, or when a GPU worker is
+    registered. Without any plan (development/tests) the former behaviour is kept.
+    """
+    explicit = os.getenv("COMFYUI_URL", "").strip().rstrip("/")
+    if explicit and explicit not in {"http://comfyui:8188", "http://127.0.0.1:8188", "http://localhost:8188"}:
+        return True
+    from .system import _read_optional_json
+    plan = _read_optional_json(config_root() / "deployment-plan.json")
+    if not isinstance(plan, dict) or not plan:
+        return True
+    roles = {plan.get("role"), *(plan.get("additional_roles") or [])}
+    services = set(plan.get("services") or [])
+    if "gpu" in roles or "comfyui" in services or "comfyui-amd" in services:
+        return True
+    try:
+        from ..state import store
+        return any(item.get("role") == "gpu" for item in store.load_workers())
+    except Exception:  # noqa: BLE001 - an unreadable registry must not hide a real GPU node
+        return False
+
+
 @router.get("/api/integrations")
 def integrations():
     endpoints = {
@@ -184,6 +225,10 @@ def integrations():
     }
     result = {}
     for name, endpoint in endpoints.items():
+        if name == "comfyui" and not _comfyui_applicable():
+            result[name] = {"status": "NOT_DEPLOYED",
+                            "detail": "ComfyUI не розгорнуто на цьому вузлі (немає ролі gpu)"}
+            continue
         try:
             # These are node-local probes; inherited host proxy settings can
             # both misroute them and require optional SOCKS dependencies.

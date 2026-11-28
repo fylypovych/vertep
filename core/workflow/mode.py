@@ -18,19 +18,41 @@ def _stored_mode() -> str | None:
         return None
 
 
+def _default_mode() -> str:
+    raw = (os.getenv("WORKFLOW_DEFAULT_MODE") or "").strip().lower()
+    if raw in {STATIC, DYNAMIC}:
+        return raw
+    return DYNAMIC if os.getenv("WORKFLOW_DEFINITIONS_ROOT") else STATIC
+
+
 def dynamic_definitions_root() -> str | None:
     """The definitions root, unless dynamic workflows are off.
 
-    An installation without ``WORKFLOW_DEFINITIONS_ROOT`` stays static; an operator's
-    explicit static choice overrides a configured root.
+    An installation without ``WORKFLOW_DEFINITIONS_ROOT`` stays static. When
+    ``WORKFLOW_DEFAULT_MODE=static`` is set (production Compose), a clean
+    installation stays static with ``dynamic_available: true`` until an
+    operator explicitly switches to dynamic mode; an explicit stored choice
+    in ``workflow-mode.json`` always wins across restarts and updates.
     """
     root = os.getenv("WORKFLOW_DEFINITIONS_ROOT")
-    return root if root and _stored_mode() != STATIC else None
+    if not root:
+        return None
+    stored = _stored_mode()
+    if stored == STATIC:
+        return None
+    if stored == DYNAMIC:
+        return root
+    return root if _default_mode() == DYNAMIC else None
 
 
 def _has_definitions() -> bool:
     root = os.getenv("WORKFLOW_DEFINITIONS_ROOT")
-    return bool(root) and any(path.suffix in {".yaml", ".json"} for path in Path(root).glob("*"))
+    if not root:
+        return False
+    path = Path(root)
+    if not path.is_dir():
+        return False
+    return any(item.is_file() and item.suffix in {".yaml", ".json"} for item in path.glob("*"))
 
 
 def active_dynamic_jobs() -> int:

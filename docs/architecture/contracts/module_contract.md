@@ -1,6 +1,6 @@
 Module Contract
 
-> Статус: контракт; реалізація — `core/module/manifest.py`, `core/module/instances.py`, `core/module/registry.py`, `core/module/trust.py`, `core/module/gateway.py`, `core/module/lifecycle.py`, `core/module/data.py`, `core/module/service.py`, `worker/application_container.py`; автоматизовані перевірки — `tests/test_module_contract.py`, `tests/test_module_trust_isolation.py`, `tests/test_module_ui_browser_e2e.py`, `tests/test_module_lifecycle.py`, `tests/test_demo_module_e2e.py`, `tests/test_demo_module_negative.py`, `tests/test_role_module_migration.py`, `tests/test_role_module_routing.py` | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
+> Статус: контракт; реалізація — `core/module/manifest.py`, `core/module/instances.py`, `core/module/registry.py`, `core/module/trust.py`, `core/module/gateway.py`, `core/module/lifecycle.py`, `core/module/data.py`, `core/module/service.py`, `worker/application_container.py`, `worker/application_supervisor.py`, `scripts/apply-deployment.py`; автоматизовані перевірки — `tests/test_module_contract.py`, `tests/test_module_trust_isolation.py`, `tests/test_module_ui_browser_e2e.py`, `tests/test_module_lifecycle.py`, `tests/test_demo_module_e2e.py`, `tests/test_demo_module_negative.py`, `tests/test_role_module_migration.py`, `tests/test_role_module_routing.py` | Аудиторія: розробник, ревізор | Канон: [AGENTS.md](../../../AGENTS.md).
 
 ===============
 
@@ -91,13 +91,11 @@ ui:
 - `application` завжди `single_owner`: placement рівно на один вузол; replication даних не визначена і тому заборонена.
 - Перенесення placement на інший вузол відхиляється, поки екземпляр-власник READY. Спочатку модуль деактивується через lifecycle ([#494](https://github.com/fylypovych/vertep/issues/494)); автоматичного переносу live-сервісу чи даних немає. Перенесення даних/migrations між вузлами цей контракт не виконує.
 
-6. LAB placement
+6. Межа з LAB (рішення 25–26.11.2026)
 ---------------------------------
-- LAB — модуль із `placement.target: isolated_lab`. Його placement дозволений лише на вузол із профілем `nonproduction` + `vm`; production-вузол відхиляється. Автоматичного розміщення немає.
-- Вузол реєструється в наявному CORE звичайним enrollment; другий CORE і deployment-роль `lab` не створюються (значення `lab` для профілю відхиляється).
-- Перекласифікація вузла на `production` робить LAB екземпляр `NOT_READY`.
-- LAB state contract і заборона прямого доступу до production DB/Redis/socket/secrets — окремо в [#491](https://github.com/fylypovych/vertep/issues/491); цей контракт їх не вирішує.
-- Профіль вузла — декларація адміністратора; реальний доказ окремої VM — у реальних перевірках ([#442](https://github.com/fylypovych/vertep/issues/442), [#491](https://github.com/fylypovych/vertep/issues/491)).
+- **LAB — окрема самостійна інсталяція** ([#491](https://github.com/fylypovych/vertep/issues/491), `bootstrap-lab.sh`, власна HTTPS-панель, опційне одноразове підключення до CORE через `/api/lab/connect`), а не Application Module всередині Vertep і не розгортається через `placement.target: isolated_lab` на вузлі Vertep. Vertep працює й проходить приймання повністю без LAB.
+- Значення `placement.target: isolated_lab` збережено на рівні валідації manifest/placement як захисний бар'єр: production-вузол завжди відхиляється (дозволяється лише профіль `nonproduction` + `vm`, без автоматичного розміщення, а перекласифікація вузла на `production` робить екземпляр `NOT_READY`). У `deploy/lab/manifest.yaml` цей маркер гарантує, що підписаний пакет LAB не встановиться на звичайний вузол Vertep.
+- Окремі вимоги до LAB, його state та заборона прямого доступу до production DB/Redis/socket/secrets — у [#491](https://github.com/fylypovych/vertep/issues/491) і [docs/lab.md](../../lab.md).
 
 7. Контракт module API (виконання на Worker)
 ---------------------------------
@@ -115,8 +113,9 @@ ui:
 9. Ізоляція application-коду
 ---------------------------------
 - CORE не імпортує й не виконує код модулів; Worker відмовляє завантажити `application` у свій процес.
-- Worker запускає контейнер (`worker/application_container.py`) з фіксованим набором параметрів: `--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, користувач `65532`, `--pids-limit`, tmpfs `/tmp`, один власний named volume `vertep-mod-<id>-data:/data`, власна мережа `vertep-mod-<id>`, порт лише на `bind_address` вузла. Заборонені: Docker socket, `--privileged`, host namespaces, `--cap-add`, `--device`, bind mounts. У середовище потрапляють лише `VERTEP_MODULE_ID`, `VERTEP_CORE_URL`, `VERTEP_MODULE_TOKEN` — без DB/Redis/секретів платформи.
-- Обмеження Docker: опублікований порт контейнера досяжний з інших bridge-мереж того самого хоста. Мережа не є межею довіри: модуль має приймати лише запити з власним `x-vertep-module-token` (дорівнює `VERTEP_MODULE_TOKEN`), який CORE gateway додає до кожного переданого запиту, а інші модулі його не мають.
+- **Штатний production-режим (`VERTEP_APPLICATION_MODULES=host`, типово в `deploy/docker-compose.yml`):** Worker не має доступу до Docker socket; він передає запит із підписаними пакетами й токенами через `VERTEP_APPLICATION_REQUEST_DIR`, а хостовий виконавець `scripts/apply-deployment.py` (`vertep-deployment.service`) повторно перевіряє кожен пакет за хостовим trust root (`runtime/module-trust`) і запускає контейнер (`worker/application_container.py`) з фіксованим набором параметрів без публікації host port (`host_port=None`): `--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, користувач `65532`, `--pids-limit`, tmpfs `/tmp`, один власний named volume `vertep-mod-<id>-data:/data`, власна bridge-мережа `vertep-mod-<id>`. Заборонені: Docker socket, `--privileged`, host namespaces, `--cap-add`, `--device`, bind mounts. У середовище потрапляють лише `VERTEP_MODULE_ID`, `VERTEP_CORE_URL`, `VERTEP_MODULE_TOKEN` — без DB/Redis/секретів платформи.
+- До власної мережі модуля `vertep-mod-<id>` приєднуються лише CORE (alias `core`) і Worker; інші модулі в цю мережу не входять. Для модуля з власною схемою PostgreSQL (`migrations`) контейнер `postgres` приєднується до `vertep-mod-<id>` **лише після** запису fail-closed правил у `pg_hba.conf` по підмережі модуля (`host all <module_role> <subnet> scram-sha-256`, далі `host all all <subnet> reject`), перевірених через `pg_hba_file_rules` перед `pg_reload_conf()`.
+- Прямий режим Worker (`VERTEP_APPLICATION_MODULES=true`, з публікацією порту на `bind_address`) лишається лише для локальних/тестових стендів. У будь-якому режимі мережа не є єдиною межею довіри: модуль має приймати лише запити з власним `x-vertep-module-token` (дорівнює `VERTEP_MODULE_TOKEN`), який CORE gateway додає до кожного переданого запиту.
 - Worker отримує токен для запуску: `POST /api/modules/token` (автентифікація вузла; лише для розміщеного на цьому вузлі й погодженого модуля).
 
 10. API gateway, extensions і secrets
@@ -134,7 +133,7 @@ ui:
 12. Audit і LAB
 ---------------------------------
 - Кожен виклик gateway (дозволений, відхилений, збій), видача UI-файлів (включно з probe при відкритті сторінки), читання/запис secrets, видача токенів, погодження й placement записуються в `<config_root>/module-audit.jsonl` (`VERTEP_MODULE_AUDIT_FILE`) без значень secrets. Перегляд — `GET /api/nodes/module-registry/audit`, лише адміністратор.
-- LAB (`isolated_lab`) використовує ту саму identity адміністратора Vertep через gateway, отримує лише власні secrets, не отримує DB/Redis/Docker socket/секретів платформи; усі його дії аудіюються. Окремі LAB-панелі, grants і state — [#491](https://github.com/fylypovych/vertep/issues/491).
+- LAB як окрема самостійна інсталяція ([#491](https://github.com/fylypovych/vertep/issues/491)) після опційного підключення використовує ту саму identity адміністратора Vertep через підписане CORE твердження `X-Vertep-Identity`, не отримує production DB/Redis/Docker socket чи секретів платформи й веде власний audit trail ([docs/lab.md](../../lab.md)).
 
 13. Транзакційний lifecycle ([#494](https://github.com/fylypovych/vertep/issues/494))
 ---------------------------------
@@ -149,7 +148,7 @@ ui:
 - Модуль із `migrations` отримує в спільному PostgreSQL (`VERTEP_MODULE_DATABASE_URL` або `DATABASE_URL`; потрібне право CREATEROLE) схему `mod_<id>` і login-роль `mod_<id>` — власника лише цієї схеми, без CREATE у `public` і без доступу до інших схем. Пароль ролі — у зашифрованому сховищі платформи; модуль читає облікові дані `GET /api/modules/self/database` своїм токеном. Схема й роль позначаються ідентифікатором модуля-власника. Module ID, чиї schema/role збігаються з уже встановленим модулем (наприклад, `a-b` і `a_b` або довгі ID зі спільним обрізаним префіксом), відхиляються до provisioning; БД також відмовляє в `ensure`/`restore`/`drop` для чужої позначеної схеми або ролі (#493).
 - Migrations — підписані файли пакета `migrations/<id>.sql`, порядок — `manifest.migrations`; виконуються від ролі модуля з `search_path` = його схема (без жорстко вписаної назви схеми), кожна в окремій транзакції, облік у `<schema>._vertep_migrations`. Помилка migration відкочує її повністю.
 - Config і файли: `<lifecycle_root>/data/<module>/config` і `/files` (`VERTEP_MODULE_LIFECYCLE_ROOT`, типово `<config_root>/module-lifecycle`); їхній власник — модуль, вони входять у знімки й архів.
-- LAB (`isolated_lab`) схеми в production PostgreSQL не отримує: активація модуля LAB з migrations відхиляється; його state визначає [#491](https://github.com/fylypovych/vertep/issues/491).
+- LAB як окрема інсталяція має власний ізольований state і не отримує схеми в production PostgreSQL ([#491](https://github.com/fylypovych/vertep/issues/491)); як захисний бар'єр активація пакета з `isolated_lab` і `migrations` у CORE відхиляється.
 
 15. Журнал, rollback і відновлення після перезапуску
 ---------------------------------
@@ -169,7 +168,7 @@ ui:
 ---------------------------------
 - Модуль виконує задачу на наявній спільній capability лише через CORE: `requires: [{type: capability, name: text_generation, min_version: "1.0"}]`, далі `POST /api/modules/self/tasks` `{"capability", "task_type", "input"}` своїм токеном і `GET /api/modules/self/tasks/{task_id}` (лише власні задачі). CORE створює звичайну workflow-задачу, Dispatcher віддає її готовому сумісному Worker з lease/fencing, результат перевіряється як будь-який workflow-результат.
 - `GET /api/modules/self/database` повертає також адресу БД для контейнерів модулів (`VERTEP_MODULE_DATABASE_HOST`/`VERTEP_MODULE_DATABASE_PORT`, типово з DSN).
-- Worker із `VERTEP_APPLICATION_MODULES=true` (`worker/application_supervisor.py`) на кожному heartbeat отримує `POST /api/modules/node-assignments` (розміщені на вузлі, погоджені, встановлені application-модулі), сам перевіряє підписи пакетів власним trust root, запускає/перезапускає контейнер потрібної версії з токеном від CORE, зупиняє непризначені контейнери й повідомляє екземпляр із `endpoint`; READY лише за відповіддю `/health`. Параметри: `VERTEP_APPLICATION_CORE_URL` (адреса CORE для контейнерів), `VERTEP_APPLICATION_BIND`, `VERTEP_NODE_ADDRESS`, `VERTEP_APPLICATION_PORT_BASE`, `VERTEP_APPLICATION_STATE`.
+- Worker у штатному режимі `VERTEP_APPLICATION_MODULES=host` (`worker/application_supervisor.py` + хостовий виконавець `scripts/apply-deployment.py`) на кожному heartbeat отримує `POST /api/modules/node-assignments` (розміщені на вузлі, погоджені, встановлені application-модулі), сам перевіряє підписи пакетів власним trust root, передає запит у `VERTEP_APPLICATION_REQUEST_DIR` без доступу до Docker socket, читає фактичний стан запущених контейнерів (без host port, у власних мережах `vertep-mod-<id>` із fail-closed `pg_hba.conf` для PostgreSQL) й повідомляє екземпляр із `endpoint`; READY лише за відповіддю `/health`. Локальний/тестовий режим `VERTEP_APPLICATION_MODULES=true` керує контейнерами напряму (параметри: `VERTEP_APPLICATION_CORE_URL`, `VERTEP_APPLICATION_BIND`, `VERTEP_NODE_ADDRESS`, `VERTEP_APPLICATION_PORT_BASE`, `VERTEP_APPLICATION_STATE`).
 
 18. Демонстраційний модуль `demo-notes` ([#495](https://github.com/fylypovych/vertep/issues/495))
 ---------------------------------

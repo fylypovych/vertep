@@ -1002,6 +1002,8 @@ def _execute_restore(snapshot_id: str, token: str | None = None) -> dict:
                     _redis_import(redis_keys)
             
             _set_restore_progress(snapshot_id, 85, "Перевірка після відновлення...")
+            _set_system_state("RECOVERING", f"Post-restore readiness verification for {snapshot_id}",
+                              operation_id=f"restore:{snapshot_id}")
             _post_restore_health_check(destinations)
 
         # Issue #136: NORMAL is restored only after health verification passed.
@@ -1038,11 +1040,60 @@ def _set_restore_progress(snapshot_id: str, progress: int, message: str, status:
         _restore_progress[snapshot_id] = entry
 
 
-def _post_restore_health_check(destinations: dict[str, Path]) -> None:
-    """Issue #60: post-restore check must confirm CORE is HEALTHY, not just check directories.
+_WORKER_HEALTH_CHECKS = frozenset({"local_worker", "gpu_worker"})
 
-    If a CORE URL is configured and CORE does not report HEALTHY/OK, the restore is
-    considered failed and the caller is expected to call _set_emergency().
+
+def _post_restore_health_timeout() -> float:
+    raw = os.getenv("BACKUP_POST_RESTORE_HEALTH_TIMEOUT", "45").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 45.0
+
+
+def _post_restore_health_poll_interval() -> float:
+    raw = os.getenv("BACKUP_POST_RESTORE_HEALTH_POLL_INTERVAL", "1").strip()
+    try:
+        return max(0.01, float(raw))
+    except ValueError:
+        return 1.0
+
+
+def _failing_health_checks(health: dict) -> dict[str, str]:
+    """Return failing required checks from CORE's /api/health payload."""
+    checks = health.get("checks")
+    if not isinstance(checks, dict):
+        return {}
+    required = checks.get("required")
+    if isinstance(required, list):
+        failing: dict[str, str] = {}
+        for name in required:
+            value = checks.get(name)
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                if value[0] is not True:
+                    failing[str(name)] = str(value[1])
+            else:
+                failing[str(name)] = repr(value)
+        return failing
+    return {
+        str(name): str(value[1])
+        for name, value in checks.items()
+        if isinstance(value, (list, tuple)) and len(value) == 2 and value[0] is False
+    }
+
+
+def _only_worker_checks_failing(failing: dict[str, str]) -> bool:
+    return bool(failing) and set(failing.keys()) <= _WORKER_HEALTH_CHECKS
+
+
+def _post_restore_health_check(destinations: dict[str, Path]) -> None:
+    """Issue #60 / #555: post-restore check must confirm actual CORE readiness.
+
+    If a CORE URL is configured and CORE does not report HEALTHY/OK, the restore
+    is considered failed and the caller is expected to call _set_emergency().
+    When all infrastructure checks pass and only Worker readiness checks
+    (local_worker/gpu_worker) are pending after restoring an older snapshot,
+    poll up to BACKUP_POST_RESTORE_HEALTH_TIMEOUT for a fresh Worker heartbeat.
     """
     for label, destination in destinations.items():
         if not destination.exists():
@@ -1050,17 +1101,43 @@ def _post_restore_health_check(destinations: dict[str, Path]) -> None:
         if not os.access(destination, os.W_OK):
             raise RuntimeError(f"Post-restore check failed: {label} not writable")
     core_url = os.getenv("BACKUP_CORE_URL", os.getenv("CORE_ADDRESS", "")).rstrip("/")
-    if core_url:
+    if not core_url:
+        return
+    timeout = _post_restore_health_timeout()
+    poll_interval = _post_restore_health_poll_interval()
+    started = time.monotonic()
+    deadline = started + timeout
+    attempts = 0
+    while True:
+        attempts += 1
         health = _core_health_check()
+        elapsed = time.monotonic() - started
         if health is None:
+            if attempts == 1:
+                raise RuntimeError(
+                    "Post-restore health check failed: CORE is unreachable after restore"
+                )
             raise RuntimeError(
-                "Post-restore health check failed: CORE is unreachable after restore"
+                f"Post-restore health check failed: CORE became unreachable after {elapsed:.1f}s"
             )
         status = health.get("status", "")
-        if status not in ("HEALTHY", "OK"):
+        if status in ("HEALTHY", "OK"):
+            return
+        failing = _failing_health_checks(health)
+        details = ", ".join(f"{name}={reason}" for name, reason in sorted(failing.items()))
+        if not _only_worker_checks_failing(failing):
+            suffix = f" (failed checks: {details})" if details else ""
             raise RuntimeError(
-                f"Post-restore health check failed: CORE reported status={status!r}"
+                f"Post-restore health check failed: CORE reported status={status!r}{suffix}"
             )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"Post-restore health check failed: timed out after {elapsed:.1f}s waiting for "
+                f"worker readiness (status={status!r}; failed checks: {details})"
+            )
+        _refresh_restore_guard()
+        time.sleep(min(poll_interval, remaining))
 
 
 def _core_available() -> bool:

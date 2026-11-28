@@ -1,0 +1,59 @@
+# Dedicated opt-in evaluation image for LAB (#546: Promptfoo + lm-evaluation-harness).
+#
+# Keeps vertep-lab-control lean (~650 MB) while shipping isolated evaluation tools
+# (bubblewrap, libseccomp2, Promptfoo MIT, lm-evaluation-harness MIT) for on-demand
+# `docker compose --profile eval run --rm lab-eval ...` executions.
+# Telemetry is disabled at build and runtime; no production CORE, secrets, or Docker socket.
+
+FROM node:20-bookworm-slim AS promptfoo-stage
+ARG PROMPTFOO_VERSION=0.103.5
+ENV PROMPTFOO_DISABLE_TELEMETRY=1 \
+    DO_NOT_TRACK=1 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false
+
+RUN mkdir -p /opt/promptfoo \
+    && npm install --prefix /opt/promptfoo --no-save "promptfoo@${PROMPTFOO_VERSION}" \
+    && chmod -R a+rX /opt/promptfoo
+
+FROM python:3.10-slim AS eval
+ARG LM_EVAL_VERSION=0.4.7
+ENV VERTEP_LAB_HOME=/srv/vertep-lab \
+    PIP_NO_CACHE_DIR=1 \
+    PROMPTFOO_DISABLE_TELEMETRY=1 \
+    DO_NOT_TRACK=1 \
+    LAB_STATE_DIR=/var/lib/vertep-lab-eval \
+    LAB_WORKSPACE=/var/lib/vertep-lab-eval/workspace
+WORKDIR $VERTEP_LAB_HOME
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bubblewrap libseccomp2 ca-certificates libatomic1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home /nonexistent vertep \
+    && mkdir -p /var/lib/vertep-lab-eval \
+    && chown 10001:10001 /var/lib/vertep-lab-eval
+
+COPY --from=promptfoo-stage /usr/local/bin/node /usr/local/bin/node
+COPY --from=promptfoo-stage /opt/promptfoo /opt/promptfoo
+RUN ln -sf /opt/promptfoo/node_modules/.bin/promptfoo /usr/local/bin/promptfoo
+
+COPY requirements.txt .
+# Install CPU-only PyTorch first so lm-eval does not pull multi-GB CUDA wheels;
+# lm_eval talks to local Ollama/LAB endpoints over HTTP (local-completions).
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install --no-cache-dir "lm-eval==${LM_EVAL_VERSION}"
+
+COPY lab ./lab
+RUN chmod -R a+rX $VERTEP_LAB_HOME /opt/promptfoo
+
+USER 10001:10001
+RUN python -c "import lab.eval_runner, lab.eval_network" \
+    && bwrap --version \
+    && node --version \
+    && promptfoo --version \
+    && lm_eval --help >/dev/null
+
+ENTRYPOINT ["python", "-m", "lab.cli"]
+CMD ["eval", "list"]

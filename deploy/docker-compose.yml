@@ -90,6 +90,8 @@ services:
       CHARACTERS_ROOT: /data/storage/characters
       BRANDS_ROOT: /data/storage/brands
       WORKFLOWS_ROOT: /data/storage/workflows
+      WORKFLOW_DEFINITIONS_ROOT: /data/workflow-definitions
+      WORKFLOW_DEFAULT_MODE: static
       LOG_ROOT: /data/logs
       UPDATE_STATE_DIR: /data/config/update
       CORE_CERTIFICATE_PATH: /data/tls/vertep.crt
@@ -122,6 +124,7 @@ services:
       - ./backups:/data/backups
       - ./tls:/data/tls:ro
       - ./config/host-health:/data/config/host-health:ro
+      - ./workflow-definitions:/data/workflow-definitions:ro
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -151,16 +154,25 @@ services:
   worker:
     image: ${VERTEP_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/worker:${VERTEP_VERSION}}
     command: ["python", "-m", "worker.service"]
-    env_file: .env
+    # Issue #553 AC7 / AGENTS.md §12: no env_file: .env and no REGISTRATION_TOKEN;
+    # the worker receives only explicit non-secret runtime parameters, never CORE secrets.
     environment:
       CORE_ADDRESS: "${CORE_URL:-http://core:8080}"
+      CORE_URL: "${CORE_URL:-}"
+      VERTEP_VERSION: "${VERTEP_VERSION:-}"
+      DEMO_MODE: "${DEMO_MODE:-false}"
+      LOG_ROOT: /data/logs
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      CONFIG_ROOT: /data/config
       NODE_NAME: "${NODE_NAME:-local-worker}"
       NODE_ROLE: "${NODE_ROLE:-gpu}"
       NODE_ADDITIONAL_ROLES: "${NODE_ADDITIONAL_ROLES:-}"
+      NODE_ENGINE_RUNTIMES: "${NODE_ENGINE_RUNTIMES:-}"
       NODE_CAPABILITIES: "${NODE_CAPABILITIES:-}"
       SUPPORTED_TASKS: "${SUPPORTED_TASKS:-}"
+      SUPPORTED_WORKFLOWS: "${SUPPORTED_WORKFLOWS:-*}"
+      SCHEDULER_TAGS: "${SCHEDULER_TAGS:-}"
       WORKER_REQUIRE_GPU: "${WORKER_REQUIRE_GPU:-}"
-      REGISTRATION_TOKEN: "${REGISTRATION_TOKEN:-}"
       CORE_CA_PATH: "${CORE_CA_PATH:-}"
       NODE_CONFIG_PATH: /data/config/node-credentials.json
       WORKFLOWS_ROOT: /data/storage/workflows
@@ -168,6 +180,7 @@ services:
       # storage; CORE delivers Job-relative references, never its own paths, so the
       # same delivery works on another host with a different root.
       JOB_ROOT: /data/storage/jobs
+      CHARACTERS_ROOT: /data/storage/characters
       MODELS_ROOT: /data/models
       STT_URL: ${STT_URL:-http://stt:8099}
       LORA_TRAINER_URL: ${LORA_TRAINER_URL:-http://lora-trainer:8101}
@@ -183,11 +196,18 @@ services:
       COMFYUI_RUNTIME_INVENTORY: /data/config/comfyui-runtime-inventory.json
       COMFYUI_ROOT: /data/config/comfyui-runtime
       OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-}"
       OLLAMA_HEALTH_URL: http://ollama:11434/api/tags
+      TTS_URL: "${TTS_URL:-http://tts:8090}"
       TTS_HEALTH_URL: http://tts:8090/health
       PUBLISHER_HEALTH_URL: http://publisher-worker:8091/health
+      PUBLISHER_MOCK: "${PUBLISHER_MOCK:-false}"
+      PUBLISHER_DEFAULT_CHANNEL: "${PUBLISHER_DEFAULT_CHANNEL:-}"
       PROMETHEUS_URL: http://monitoring:9090/-/healthy
       BACKUP_ROOT: /data/backups
+      BACKUP_URL: "${BACKUP_URL:-http://backup-service:8092}"
+      MONEY_PRINTER_URL: "${MONEY_PRINTER_URL:-http://moneyprinter:8098}"
+      MONEY_PRINTER_HEALTH_URL: "${MONEY_PRINTER_HEALTH_URL:-http://moneyprinter:8098/health}"
       UPDATE_REQUEST_DIR: /data/config/update/requests
       # Application module containers are started by the host executor (no Docker in the Worker).
       VERTEP_APPLICATION_MODULES: ${VERTEP_APPLICATION_MODULES:-host}
@@ -284,7 +304,14 @@ services:
     cap_drop: ["ALL"]
   publisher-worker:
     image: ${VERTEP_PUBLISHER_WORKER_IMAGE:-${VERTEP_IMAGE_REPOSITORY}/publisher-worker:${VERTEP_VERSION}}
-    env_file: .env
+    # Issue #553 AC7 / AGENTS.md §12: no env_file: .env; publisher-worker receives no CORE secrets.
+    environment:
+      LOG_ROOT: /data/logs
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      JOB_ROOT: /data/storage/jobs
+      VERTEP_VERSION: "${VERTEP_VERSION:-}"
+      DEMO_MODE: "${DEMO_MODE:-false}"
+      PUBLISHER_MOCK: "${PUBLISHER_MOCK:-false}"
     volumes: ["./config:/data/config", "./logs:/data/logs", "./storage:/data/storage"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8091/health"]
@@ -469,6 +496,15 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      # Issue #553 AC11: enable WAL mode, serialize SQLite connections and retry
+      # busy queries/transactions so startup and restarts do not lose dashboard
+      # provisioning to `[sqlstore.max-retries-reached] ... database is locked`.
+      GF_DATABASE_TYPE: sqlite3
+      GF_DATABASE_WAL: "true"
+      GF_DATABASE_MAX_OPEN_CONN: "1"
+      GF_DATABASE_MAX_IDLE_CONN: "1"
+      GF_DATABASE_QUERY_RETRIES: "10"
+      GF_DATABASE_TRANSACTION_RETRIES: "10"
     volumes:
       - grafana-data:/var/lib/grafana
     healthcheck:

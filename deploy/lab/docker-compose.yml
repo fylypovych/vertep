@@ -58,7 +58,10 @@ services:
   # container runs without them:
   #   docker compose --profile eval run --rm lab-eval eval lm-eval --endpoint http://<ollama>:11434
   lab-eval:
-    image: ghcr.io/fylypovych/vertep-lab-control:${VERSION:-dev}
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile.eval
+    image: ghcr.io/fylypovych/vertep-lab-eval:${VERSION:-dev}
     profiles: ["eval"]
     entrypoint: ["python", "-m", "lab.cli"]
     command: ["eval", "list"]

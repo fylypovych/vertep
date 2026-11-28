@@ -13,3 +13,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/lab/Dockerfile.web
+  lab-eval:
+    build:
+      context: ../..
+      dockerfile: deploy/lab/Dockerfile.eval

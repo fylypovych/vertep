@@ -356,11 +356,14 @@ def test_plan_names_the_tag_of_a_release_that_only_gets_its_package(tmp_path, mo
 
 LAB_CONTROL = "ghcr.io/fylypovych/vertep-lab-control@sha256:" + "c" * 64
 LAB_WEB = "ghcr.io/fylypovych/vertep-lab-web@sha256:" + "d" * 64
+LAB_EVAL = "ghcr.io/fylypovych/vertep-lab-eval@sha256:" + "e" * 64
 
 
 def _lab_package(private):
-    return c.sign_package(c.build_package("lab", image=LAB_CONTROL, extra_images={"lab-web": LAB_WEB}),
-                          private, "test-key")
+    return c.sign_package(
+        c.build_package("lab", image=LAB_CONTROL, extra_images={"lab-web": LAB_WEB, "lab-eval": LAB_EVAL}),
+        private, "test-key",
+    )
 
 
 def test_the_component_plan_includes_the_lab_with_both_images(monkeypatch):
@@ -374,7 +377,7 @@ def test_the_component_plan_includes_the_lab_with_both_images(monkeypatch):
     entry = cli.cmd_plan(types.SimpleNamespace(components="lab", sha="f" * 40, releases=None))["lab"]
     assert entry["publish"] and entry["tag"] == f"lab.{c.declared_version('lab')}"
     assert entry["image"]["name"] == "vertep-lab-control"
-    assert [item["name"] for item in entry["extra_images"]] == ["vertep-lab-web"]
+    assert [item["name"] for item in entry["extra_images"]] == ["vertep-lab-web", "vertep-lab-eval"]
 
 
 def test_a_signed_lab_package_verifies_and_installs_only_as_isolated_lab(tmp_path):
@@ -386,8 +389,11 @@ def test_a_signed_lab_package_verifies_and_installs_only_as_isolated_lab(tmp_pat
     manifest = verify_package(package, trust)
     assert manifest.name == "lab" and manifest.placement["target"] == "isolated_lab"
     assert manifest.to_dict()["container"]["image"] == LAB_CONTROL
-    assert json.loads(base64.b64decode(package["files"]["images.json"])) == {"lab-control": LAB_CONTROL,
-                                                                            "lab-web": LAB_WEB}
+    assert json.loads(base64.b64decode(package["files"]["images.json"])) == {
+        "lab-control": LAB_CONTROL,
+        "lab-web": LAB_WEB,
+        "lab-eval": LAB_EVAL,
+    }
     compose = base64.b64decode(package["files"]["docker-compose.yml"])
     assert compose == (ROOT / "deploy/lab/docker-compose.web.yml").read_bytes()
     lifecycle = ModuleLifecycle(tmp_path / "lc", lambda p: verify_package(p, trust),
@@ -397,7 +403,7 @@ def test_a_signed_lab_package_verifies_and_installs_only_as_isolated_lab(tmp_pat
     assert record["state"] == "INSTALLED" and record["version"] == c.declared_version("lab")
     # Every image must be pinned by digest.
     with pytest.raises(c.ComponentError):
-        c.build_package("lab", image=LAB_CONTROL, extra_images={"lab-web": "ghcr.io/x/lab-web:latest"})
+        c.build_package("lab", image=LAB_CONTROL, extra_images={"lab-web": "ghcr.io/x/lab-web:latest", "lab-eval": LAB_EVAL})
 
 
 @pytest.mark.parametrize("tamper", ["compose", "images", "signer"])
@@ -463,5 +469,42 @@ def test_bootstrap_lab_verifier_accepts_a_signed_package_and_rejects_a_forged_on
         assert (result.returncode == 0) is expected_ok, result.stderr
         assert (root / "docker-compose.yml").exists() is expected_ok
         if expected_ok:
-            assert f"LAB_CONTROL_IMAGE={LAB_CONTROL}" in result.stdout and f"LAB_WEB_IMAGE={LAB_WEB}" in result.stdout
+            assert f"LAB_CONTROL_IMAGE={LAB_CONTROL}" in result.stdout
+            assert f"LAB_WEB_IMAGE={LAB_WEB}" in result.stdout
+            assert f"LAB_EVAL_IMAGE={LAB_EVAL}" in result.stdout
             assert (root / "docker-compose.yml").read_bytes() == (ROOT / "deploy/lab/docker-compose.web.yml").read_bytes()
+
+
+def test_an_empty_impact_fails_the_component_workflow_instead_of_passing(tmp_path):
+    """Run 46066274255: dispatched with base = head, nothing was compared, tested or
+    published, yet the run was green. An empty comparison now fails the impact job,
+    while docs-only (no_test_impact) commits stay a successful «nothing to release»."""
+    import subprocess
+    import sys
+    import types
+    spec = importlib.util.spec_from_file_location("component_release_impact", ROOT / "scripts" / "component-release.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    workflow = yaml.safe_load((ROOT / ".github/workflows/component-release.yml").read_text())
+    run = next(step["run"] for step in workflow["jobs"]["impact"]["steps"] if step.get("id") == "impact")
+    snippet = run.split("<<'PY' >> \"$GITHUB_OUTPUT\"\n", 1)[1].rsplit("\nPY", 1)[0]
+    script = tmp_path / "classify.py"
+    script.write_text("\n".join(line[10:] if line.startswith(" " * 10) else line for line in snippet.splitlines()))
+
+    def classify(files):
+        # Verify real c.impact() and scripts/component-release.py cmd_impact output end-to-end.
+        real = c.impact(files)
+        payload = cli.cmd_impact(types.SimpleNamespace(files=files, base=None, head="HEAD"))
+        assert payload["reasons"] == real.reasons and payload["ignored"] == real.ignored
+        (tmp_path / "impact.json").write_text(json.dumps(payload))
+        return subprocess.run([sys.executable, str(script)], cwd=tmp_path, capture_output=True, text=True)
+
+    empty = classify([])
+    assert empty.returncode != 0 and "Немає змін" in empty.stderr
+    # Docs-only (no_test_impact) changes have reasons == {} but non-empty ignored/changed_count.
+    docs = classify(["CHANGELOG.md", "docs/update-system.md"])
+    assert docs.returncode == 0 and "full_suite=false\n" in docs.stdout and "components=\n" in docs.stdout
+    lab = classify(["deploy/lab/Dockerfile"])
+    assert lab.returncode == 0 and "full_suite=false\n" in lab.stdout and "components=lab\n" in lab.stdout
+    core = classify(["core/pipeline.py"])
+    assert core.returncode == 0 and "full_suite=true\n" in core.stdout and "components=core\n" in core.stdout

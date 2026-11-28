@@ -28,7 +28,7 @@ from ..first_run import config_root, installation
 from ..models import (JobStatus, RollingUpdateRequest, CoordinatorUpdateRequest,
                       StageStatus, utc_now)
 from ..node_registry import node_roles, registered_nodes
-from ..operations import audit_entry
+from ..operations import audit_entry, record_update_operation
 from ..pull_executor import PlacementError, cancel_pull, start_delete, start_pull
 from ..rolling_update import (cancel_rollout, is_core_node, promote_rollout,
                               reconcile_rollout, rollback_ready_nodes,
@@ -231,7 +231,8 @@ def update_readiness():
     persisted_workers_by_name.update(store.workers)
     persisted_workers = list(persisted_workers_by_name.values())
     system = get_system_state()
-    operation_id = system.get("operation_id")
+    queue_paused = not dispatch_allowed()
+    operation_id = system.get("operation_id") if queue_paused else None
     acknowledged = []
     unacknowledged = []
     known = {worker.get("node_id") or worker.get("node_name"): worker
@@ -242,18 +243,29 @@ def update_readiness():
         required_nodes.update(known)
     busy = [node_id for node_id in sorted(required_nodes) if known.get(node_id)
             and (known[node_id].get("status") == "BUSY" or known[node_id].get("current_task"))]
-    for node_id in sorted(required_nodes):
-        worker = known.get(node_id)
-        if worker is None:
-            unacknowledged.append(node_id)
-            continue
-        drained = (worker.get("status") == "DRAINING" and not worker.get("current_task"))
-        (acknowledged if drained else unacknowledged).append(node_id)
+    if queue_paused:
+        for node_id in sorted(required_nodes):
+            worker = known.get(node_id)
+            if worker is None:
+                unacknowledged.append(node_id)
+                continue
+            worker_drain_op = worker.get("drain_operation_id")
+            operation_matches = (
+                not operation_id
+                or worker_drain_op is None
+                or worker_drain_op == operation_id
+            )
+            drained = (
+                worker.get("status") == "DRAINING"
+                and not worker.get("current_task")
+                and operation_matches
+            )
+            (acknowledged if drained else unacknowledged).append(node_id)
     ready = (not active and not busy and task_queue.inflight_depth() == 0
-             and not unacknowledged and not dispatch_allowed())
+             and not unacknowledged and queue_paused)
     return {"ready": ready,
             "active_jobs": active, "waiting_jobs": waiting, "busy_workers": busy,
-            "queue_paused": not dispatch_allowed(), "inflight": task_queue.inflight_depth(),
+            "queue_paused": queue_paused, "inflight": task_queue.inflight_depth(),
             "drain_operation_id": operation_id, "acknowledged_workers": acknowledged,
             "unacknowledged_workers": unacknowledged}
 
@@ -338,6 +350,10 @@ def update_drain():
     workers.update(store.workers)
     operation_id = get_system_state().get("operation_id")
     for worker in workers.values():
+        previous_op = worker.get("drain_operation_id")
+        if (worker.get("status") == "DRAINING"
+                and operation_id and previous_op and previous_op != operation_id):
+            worker["status"] = "READY"
         worker.update({"desired_state": "DRAINING", "drain_operation_id": operation_id})
         store.save_worker(worker)
     return {"draining": sorted(workers), "drain_operation_id": operation_id}
@@ -356,7 +372,9 @@ def web_update_check():
 @router.post("/api/system/update/run")
 def web_update_run():
     try:
-        return request_update("update")
+        queued = request_update("update")
+        record_update_operation(queued, requested_by="web-ui")
+        return queued
     except (RuntimeError, FileExistsError) as error:
         raise HTTPException(409, str(error)) from error
     except OSError as error:
@@ -366,7 +384,9 @@ def web_update_run():
 @router.post("/api/system/update/restart")
 def web_server_restart():
     try:
-        return request_update("restart")
+        queued = request_update("restart")
+        record_update_operation(queued, requested_by="web-ui")
+        return queued
     except (RuntimeError, FileExistsError) as error:
         raise HTTPException(409, str(error)) from error
     except OSError as error:
@@ -444,7 +464,7 @@ async def system_restart(payload: dict | None = None):
     import re as _re
     import subprocess
     import uuid
-    from ..operations import audit_entry
+    from ..operations import audit_entry, record_update_operation
     body = payload or {}
     target = str(body.get("target", "core"))
     if target == "core":

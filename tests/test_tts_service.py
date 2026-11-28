@@ -16,6 +16,19 @@ import services.tts_service as tts_service
 from services.tts_service import app
 
 
+def _wav() -> bytes:
+    """A real one-frame PCM WAV: synthesis output is validated (#553 AC1)."""
+    import io
+    import wave
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(22050)
+        handle.writeframes(b"\x00\x00")
+    return buffer.getvalue()
+
+
 def _client_with_voices(voices):
     """Return a TestClient whose runtime advertises exactly ``voices``."""
     tts_service.VOICES = list(voices)
@@ -94,7 +107,7 @@ def test_synthesize_accepts_supported_language(monkeypatch):
     monkeypatch.setattr(tts_service.shutil, "which", lambda name: "/usr/bin/espeak-ng")
 
     class _Result:
-        stdout = b"RIFF\x04\x00\x00\x00WAVE"
+        stdout = _wav()
         returncode = 0
 
     monkeypatch.setattr(tts_service.subprocess, "run",
@@ -108,7 +121,7 @@ def test_synthesize_accepts_extra_provider_model_fields(monkeypatch):
     monkeypatch.setattr(tts_service.shutil, "which", lambda name: "/usr/bin/espeak-ng")
 
     class _Result:
-        stdout = b"RIFF\x04\x00\x00\x00WAVE"
+        stdout = _wav()
         returncode = 0
 
     monkeypatch.setattr(tts_service.subprocess, "run",
@@ -179,7 +192,7 @@ def test_default_voice_uses_the_engine_default_without_v(monkeypatch):
 
     def run(args, **kwargs):
         calls.append(args)
-        return SimpleNamespace(stdout=b"RIFF....WAVE", returncode=0)
+        return SimpleNamespace(stdout=_wav(), returncode=0)
 
     monkeypatch.setattr(tts_service.subprocess, "run", run)
     client = _client_with_voices(["uk"])
