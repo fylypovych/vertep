@@ -97,6 +97,9 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
                 "monitoring": os.getenv("PROMETHEUS_URL", "http://monitoring:9090/-/healthy"),
             }
             for selected in additional & health_urls.keys():
+                if selected == "voice" and os.getenv("TTS_PROVIDER", "").strip().lower() in {"none", "disabled", "off"}:
+                    evidence["voice_disabled"] = f"TTS_PROVIDER={os.getenv('TTS_PROVIDER', 'none').strip().lower()}"
+                    continue
                 httpx.get(health_urls[selected], timeout=15).raise_for_status()
             if "gpu" in additional:
                 gpu_test = role_self_test("gpu", metrics, adapter)
@@ -124,6 +127,9 @@ def role_self_test(role: str, metrics: dict, adapter: ComputeProvider | None = N
                 raise RuntimeError("Ollama returned no text")
             evidence = {"text_sha256": hashlib.sha256(response.json()["response"].encode()).hexdigest()}
         elif role == "voice":
+            tts_backend = os.getenv("TTS_PROVIDER", "").strip().lower()
+            if tts_backend in {"none", "disabled", "off"}:
+                raise RuntimeError(f"TTS backend is disabled (TTS_PROVIDER={tts_backend})")
             url = os.getenv("TTS_HEALTH_URL")
             if not url or httpx.get(url, timeout=15).status_code >= 400:
                 raise RuntimeError("TTS runtime health check failed")

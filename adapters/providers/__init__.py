@@ -490,7 +490,7 @@ def provider_matrix() -> dict[str, dict]:
         tts_backend, tts_configured = tts_name, True
     matrix["tts"] = {
         "backend": tts_backend,
-        "options": ["none", "mock", "piper", "kokoro"],
+        "options": ["none", "mock", "piper", "kokoro", "espeak-ng"],
         "env": "TTS_PROVIDER",
         "configured": tts_configured,
     }

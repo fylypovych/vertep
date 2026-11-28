@@ -5,8 +5,8 @@
 # `docker compose --profile eval run --rm lab-eval ...` executions.
 # Telemetry is disabled at build and runtime; no production CORE, secrets, or Docker socket.
 
-FROM node:20-bookworm-slim AS promptfoo-stage
-ARG PROMPTFOO_VERSION=0.103.5
+FROM node:22-bookworm-slim AS promptfoo-stage
+ARG PROMPTFOO_VERSION=0.126.0
 ENV PROMPTFOO_DISABLE_TELEMETRY=1 \
     DO_NOT_TRACK=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
@@ -24,7 +24,9 @@ ENV VERTEP_LAB_HOME=/srv/vertep-lab \
     PROMPTFOO_DISABLE_TELEMETRY=1 \
     DO_NOT_TRACK=1 \
     LAB_STATE_DIR=/var/lib/vertep-lab-eval \
-    LAB_WORKSPACE=/var/lib/vertep-lab-eval/workspace
+    LAB_WORKSPACE=/var/lib/vertep-lab-eval/workspace \
+    PROMPTFOO_CONFIG_DIR=/tmp/promptfoo \
+    HOME=/tmp
 WORKDIR $VERTEP_LAB_HOME
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -41,9 +43,10 @@ RUN ln -sf /opt/promptfoo/node_modules/.bin/promptfoo /usr/local/bin/promptfoo
 COPY requirements.txt .
 # Install CPU-only PyTorch first so lm-eval does not pull multi-GB CUDA wheels;
 # lm_eval talks to local Ollama/LAB endpoints over HTTP (local-completions).
+# lm-eval 0.4.7 imports transformers.AutoModelForVision2Seq, removed in transformers 5.
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
-    && pip install --no-cache-dir "lm-eval==${LM_EVAL_VERSION}"
+    && pip install --no-cache-dir "lm-eval==${LM_EVAL_VERSION}" "transformers<5"
 
 COPY lab ./lab
 RUN chmod -R a+rX $VERTEP_LAB_HOME /opt/promptfoo

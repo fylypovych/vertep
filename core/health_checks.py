@@ -218,6 +218,9 @@ def check_gpu_worker() -> tuple[bool, str]:
 
 
 def check_tts(url: str | None = None) -> tuple[bool, str]:
+    backend = os.getenv("TTS_PROVIDER", "").strip().lower()
+    if backend in {"none", "disabled", "off"}:
+        return False, f"tts_backend_disabled: TTS_PROVIDER={backend}"
     target = url or os.getenv("TTS_HEALTH_URL", "http://localhost:8090/health")
     if not target:
         return True, "skipped"

@@ -101,3 +101,78 @@ def test_health_is_unhealthy_when_only_the_service_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(health_checks, "_http_get", lambda url, timeout=5: (False, "health_endpoint_unavailable"))
     checks = {"role": "backup", "required": ["backup"], "backup": health_checks.check_backup()}
     assert health_checks.health_status(checks) == "UNHEALTHY"
+
+
+def test_tts_backend_none_fails_voice_readiness_and_strips_tested_capability(monkeypatch):
+    from datetime import datetime, timezone
+    from fastapi.testclient import TestClient
+    from core.app import app
+    from core.state import store
+    from worker.service import role_self_test
+
+    monkeypatch.setenv("TTS_PROVIDER", "none")
+    monkeypatch.setenv("NODE_API_TOKEN", "test-worker-token-553")
+    monkeypatch.setenv("NODE_MTLS_REQUIRED", "false")
+    store.workers.clear()
+
+    ok, detail = health_checks.check_tts("http://tts:8090/health")
+    assert ok is False and "none" in detail
+
+    self_test = role_self_test("voice", {})
+    assert self_test["status"] == "FAILED" and "disabled" in self_test["error"]
+
+    core_test = role_self_test("core", {})
+    assert "voice_disabled" not in core_test.get("evidence", {})  # no additional_roles=voice here
+
+    monkeypatch.setenv("NODE_ADDITIONAL_ROLES", "voice")
+    core_voice_test = role_self_test("core", {})
+    assert core_voice_test["status"] == "PASSED"
+    assert "voice_disabled" in core_voice_test["evidence"]
+
+    payload = {
+        "node_name": "voice-node-553",
+        "role": "core",
+        "status": "READY",
+        "capabilities": ["speech_synthesis", "text_generation"],
+        "self_test": {
+            "status": "PASSED",
+            "role": "core",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "evidence": {"voice_disabled": "TTS_PROVIDER=none"},
+        },
+        "executor_config": {"TTS_PROVIDER": "none"},
+    }
+    resp = TestClient(app).post(
+        "/api/workers/heartbeat",
+        json=payload,
+        headers={"x-vertep-token": "test-worker-token-553"},
+    )
+    assert resp.status_code == 200, resp.text
+    saved = next(w for w in store.load_workers() if w["node_name"] == "voice-node-553")
+    assert "speech_synthesis" not in saved["tested_capabilities"]
+
+
+def test_synthesize_endpoint_returns_valid_wav_through_voice_worker(monkeypatch):
+    import base64
+    from fastapi.testclient import TestClient
+    from core.app import app
+    from core.api import models as models_api
+    import services.tts_service as tts
+
+    monkeypatch.setattr(tts.shutil, "which", lambda name: "/usr/bin/espeak-ng")
+    tts.VOICES = ["uk", "en-us"]
+    monkeypatch.setattr(tts.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": _streamed(_wav())})())
+
+    def worker_synth(text, voice="default", speed=150, **kwargs):
+        res = TestClient(tts.app).post("/synthesize", json={"text": text, "voice": voice, "speed": speed, **kwargs})
+        assert res.status_code == 200
+        return base64.b64decode(res.json()["audio_base64"])
+
+    monkeypatch.setattr(models_api, "synthesize_through_worker", worker_synth)
+    response = TestClient(app).post("/api/models/voices/synthesize", json={"text": "Тест", "voice": "uk"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/wav")
+    body = response.content
+    assert struct.unpack_from("<I", body, 4)[0] == len(body) - 8
+    assert struct.unpack_from("<I", body, 40)[0] == len(body) - 44
+    assert _duration(body) == pytest.approx(0.1)

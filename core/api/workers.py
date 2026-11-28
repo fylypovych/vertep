@@ -50,6 +50,14 @@ def heartbeat(payload: WorkerHeartbeat, request: Request):
     evidence = self_test.get("evidence") or {}
     optional_ready = set(evidence.get("media_capabilities") or []) if isinstance(evidence, dict) else set()
     tested = (declared - OPTIONAL_MEDIA_CAPABILITIES) | (declared & optional_ready)
+    tts_backend = str(
+        (data.get("executor_config") or {}).get("TTS_PROVIDER")
+        or os.getenv("TTS_PROVIDER", "")
+    ).strip().lower()
+    if tts_backend in {"none", "disabled", "off"} or (
+        isinstance(evidence, dict) and evidence.get("voice_disabled")
+    ):
+        tested.discard("speech_synthesis")
     data["tested_capabilities"] = (sorted(tested) if self_test.get("status") == "PASSED"
                                     and self_test.get("role") == data["role"] else [])
     data["runtime_status"] = ("ONLINE" if self_test.get("status") == "PASSED"
